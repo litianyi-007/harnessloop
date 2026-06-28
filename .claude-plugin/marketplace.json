@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harnessloop",
-  "description": "Local Harnessloop plugin marketplace.",
+  "description": "Local Harnessloop marketplace for goal-driven harness loops.",
   "owner": {
     "name": "Local developer"
   },
@@ -9,7 +9,7 @@
     {
       "name": "harnessloop",
       "source": "./plugins/harnessloop",
-      "description": "Harnessloop plugin scaffold for Codex and Claude Code.",
+      "description": "Goal-driven harness loops with evidence gates and file-system handoffs.",
       "version": "0.1.0",
       "author": {
         "name": "Local developer"

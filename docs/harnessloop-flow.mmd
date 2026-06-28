@@ -1,0 +1,27 @@
+flowchart TD
+  A["Plugin setup<br/>用户填写数据连接范围"] --> B["Define goal<br/>明确目标与非目标"]
+  B --> C["Thresholds<br/>拆解数据门限与验证门限"]
+  C --> D["Data contract<br/>绑定真实数据、动态数据、源码、源数据"]
+  D --> E["Round scope-lock<br/>最小改动 / 单变量 strict mode"]
+  E --> F{"Task type"}
+
+  F -->|"核心决策"| M["Main session<br/>编排与核心判断"]
+  F -->|"独立调查 / 低上下文执行"| S["Subagent or swarm<br/>基于 handoff 执行"]
+  F -->|"验收"| R["Adversarial review<br/>基于证据对抗性验收"]
+
+  M --> G["Evidence writeback<br/>static / dynamic / source"]
+  S --> G
+  G --> R
+  R --> H{"Verification gates pass?"}
+
+  H -->|"yes"| I["Archive handoffs<br/>round-summary + decision"]
+  I --> J{"Goal achieved?"}
+  J -->|"yes"| K["Done"]
+  J -->|"no"| L["Next smallest scope-lock<br/>继续下一轮"]
+  L --> F
+
+  H -->|"no"| N{"Human decision required?"}
+  N -->|"no"| O["Reject round<br/>收敛 scope-lock 后继续"]
+  O --> F
+  N -->|"yes"| P["Blocked<br/>请求人工输入"]
+

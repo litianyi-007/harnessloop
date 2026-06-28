@@ -18,7 +18,15 @@ function Read-JsonFile {
 function Invoke-ClaudePluginValidate {
   param([Parameter(Mandatory = $true)][string]$Path)
 
-  $Output = & claude plugin validate $Path --strict 2>&1
+  $ClaudeCommand = (Get-Command claude.cmd -ErrorAction SilentlyContinue).Source
+  if (-not $ClaudeCommand -and (Test-Path -LiteralPath "C:\nvm4w\nodejs\claude.cmd")) {
+    $ClaudeCommand = "C:\nvm4w\nodejs\claude.cmd"
+  }
+  if (-not $ClaudeCommand) {
+    throw "claude.cmd not found. Install Claude Code or add it to PATH."
+  }
+
+  $Output = & $ClaudeCommand plugin validate --strict $Path 2>&1
   $ExitCode = $LASTEXITCODE
   $Output | ForEach-Object { Write-Host $_ }
 

@@ -7,6 +7,13 @@ This repository is a local marketplace scaffold for one plugin:
 - `.claude-plugin/marketplace.json` is the Claude Code marketplace manifest.
 - `plugins/harnessloop/skills/` is reserved for skills that will be added later.
 
+Current design files:
+
+- `docs/harnessloop-framework.md` explains the minimal framework.
+- `docs/harnessloop-flow.mmd` contains the Mermaid flow source.
+- `docs/harnessloop-flow.svg` is a directly viewable flow diagram.
+- `plugins/harnessloop/skills/harness-loop/SKILL.md` is the first installable skill draft.
+
 ## Install In Codex
 
 Add the marketplace, then install the plugin:

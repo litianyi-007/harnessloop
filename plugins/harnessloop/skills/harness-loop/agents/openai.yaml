@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harness Loop"
+  short_description: "Goal loops with evidence handoffs"
+  default_prompt: "Use $harness-loop to run a goal-driven harness loop."
+
+policy:
+  allow_implicit_invocation: true

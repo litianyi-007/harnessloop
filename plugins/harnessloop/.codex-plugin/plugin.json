@@ -1,18 +1,18 @@
 {
   "name": "harnessloop",
   "version": "0.1.0",
-  "description": "Harnessloop plugin scaffold for Codex and Claude Code.",
+  "description": "Goal-driven harness loops with evidence gates and file-system handoffs.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Harnessloop",
-    "shortDescription": "Use Harnessloop in Codex.",
-    "longDescription": "Harnessloop provides a local plugin scaffold that can be published through Codex and Claude Code marketplaces.",
+    "shortDescription": "Run evidence-gated harness loops.",
+    "longDescription": "Harnessloop installs a project-local protocol for goal-driven loops, data freshness controls, minimal-change scope locks, file-system handoffs, subagent delegation, and adversarial review.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Help me use Harnessloop."
+    "defaultPrompt": "Use Harnessloop to run a goal-driven loop."
   }
 }
