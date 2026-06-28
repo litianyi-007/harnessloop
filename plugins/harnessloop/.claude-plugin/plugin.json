@@ -1,0 +1,12 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "harnessloop",
+  "version": "0.1.0",
+  "description": "Harnessloop plugin scaffold for Codex and Claude Code.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": [
+    "./skills/"
+  ]
+}

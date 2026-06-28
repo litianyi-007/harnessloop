@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "harnessloop",
+  "description": "Local Harnessloop plugin marketplace.",
+  "owner": {
+    "name": "Local developer"
+  },
+  "plugins": [
+    {
+      "name": "harnessloop",
+      "source": "./plugins/harnessloop",
+      "description": "Harnessloop plugin scaffold for Codex and Claude Code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Local developer"
+      },
+      "category": "productivity"
+    }
+  ]
+}

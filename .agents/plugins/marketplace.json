@@ -1,0 +1,20 @@
+{
+  "name": "harnessloop",
+  "interface": {
+    "displayName": "Harnessloop"
+  },
+  "plugins": [
+    {
+      "name": "harnessloop",
+      "source": {
+        "source": "local",
+        "path": "./plugins/harnessloop"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
