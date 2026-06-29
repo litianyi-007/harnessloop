@@ -1,0 +1,56 @@
+README.md
+  0000019f12e4bd5f 1-253
+docs/harnessloop-flow.mmd
+  0000019f12e4bd5f 1-50
+docs/harnessloop-framework.md
+  0000019f12e4bd5f 1-553
+docs/usage.md
+  0000019f12e4bd5f 1-312
+package.json
+  0000019f12e4bd5f 1-11
+plugins/harnessloop/.claude-plugin/plugin.json
+  0000019f12e4bd5f 1-12
+plugins/harnessloop/.codex-plugin/plugin.json
+  0000019f12e4bd5f 1-18
+plugins/harnessloop/skills/harnessloop-continue/SKILL.md
+  0000019f12e4bd5f 1-68
+plugins/harnessloop/skills/harnessloop-delegation/SKILL.md
+  0000019f12e4bd5f 1-79
+plugins/harnessloop/skills/harnessloop-delegation/agents/openai.yaml
+  0000019f12e4bd5f 1-4
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  0000019f12e4bd5f 1-476
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "0a2d9779e04a309a5fe27112e2632a6c8df4cbc4",
+  "prompts": {
+    "s_14625d9c5b63c0::t_7dd5dfba1f9072": {
+      "agent_id": {
+        "tool": "mock_ai",
+        "id": "ai-thread-1782728407185747500",
+        "model": "unknown"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019f12e4bd5f": {
+      "agent_id": {
+        "tool": "codex",
+        "model": "gpt-5.5",
+        "id": "ai-thread-codex-gpt-5.5-1782728408415"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 1836,
+      "total_deletions": 0,
+      "accepted_lines": 1836,
+      "overriden_lines": 0
+    }
+  }
+}
