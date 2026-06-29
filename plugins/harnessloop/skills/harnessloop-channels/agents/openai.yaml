@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Channels"
+  short_description: "List external systems and tools"
+  default_prompt: "Use $harnessloop-channels when the user says harnessloop:channels to list external systems, channels, and tools."
+
+policy:
+  allow_implicit_invocation: true

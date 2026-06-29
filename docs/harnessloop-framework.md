@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In scope for the first version:
 
-- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -181,6 +181,8 @@ Harnessloop should support these command semantics even before a CLI exists.
 - `revise`: change acceptance criteria; require human confirmation.
 - `reject`: record invalid, stale, unsupported, too-sensitive, or inapplicable evidence.
 - `diff`: summarize the contract change and continuation effect.
+
+`harnessloop:channels` lists declared external systems, tools, and channels without probing. `harnessloop:connectivity` checks only declared connectivity methods and must ask the user when required tools, credentials, permissions, endpoints, parameters, or write-safety details are missing.
 
 `harnessloop contract control` defines continuation authority:
 

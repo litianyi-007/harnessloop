@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Connectivity"
+  short_description: "Check external system connectivity"
+  default_prompt: "Use $harnessloop-connectivity when the user says harnessloop:connectivity to check declared external system and tool connectivity."
+
+policy:
+  allow_implicit_invocation: true

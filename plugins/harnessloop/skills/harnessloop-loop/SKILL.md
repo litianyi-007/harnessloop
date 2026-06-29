@@ -12,7 +12,7 @@ Use this skill as a project-local operating protocol. Do not treat it as a gener
 Accept one of these inputs:
 
 - A user goal for a long-running task, including target project path when it is not the current working directory.
-- A command-like request such as `harnessloop:goal`, `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop contract control`, or `harnessloop issue evolve`.
+- A command-like request such as `harnessloop:goal`, `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop:channels`, `harnessloop:connectivity`, `harnessloop contract control`, or `harnessloop issue evolve`.
 - Existing `.harnessloop/` state files that define the active goal, round, evidence, handoffs, and control state.
 - A takeover request only after `harnessloop-intake` has produced or accepted the intake packet, gate, and intake-review boundary.
 
@@ -183,6 +183,8 @@ Do not continue execution directly after a material evidence contract change. Ro
 If evidence depends on reading from or writing to an external system and any access condition or required parameter is missing, do not infer it or probe blindly. Ask the user for the missing system, operation, endpoint/resource, account role, permission scope, credential reference, parameters, or failure handling before attempting access.
 
 If a task explicitly requires tool calling with a named tool and that tool is missing, not installed, not exposed in the current environment, or possibly the wrong tool, stop and ask the user for confirmation. Do not infer an alternative tool, alias, provider, command, or API from context.
+
+`harnessloop:channels` or `$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `harnessloop:connectivity` or `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred.
 
 `harnessloop:goal` or `$harnessloop-goal` manages goal contracts, subgoals, tasks, lifecycle state, and deletion impact. It must not execute business work or accept rounds. If a goal change affects thresholds, evidence, active scope-lock, or continuation authority, route back through `$harnessloop-evidence` or `$harnessloop-continue`.
 

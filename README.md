@@ -170,6 +170,8 @@ Evidence classes:
 - `$harnessloop-intake`: review transfer packets and run intake gates when you ask for `harnessloop:intake`.
 - `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, or supersede goals when you ask for `harnessloop:goal`.
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts when you ask for `harnessloop:evidence`.
+- `$harnessloop-channels`: list declared external systems, channels, and tools when you ask for `harnessloop:channels`.
+- `$harnessloop-connectivity`: check declared external system/tool connectivity when you ask for `harnessloop:connectivity`.
 - `$harnessloop-status`: read current Harnessloop state when you ask for `harnessloop:status`.
 - `$harnessloop-continue`: run continuation gates when you ask for `harnessloop:continue`.
 - `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
@@ -200,6 +202,8 @@ Validate skills directly:
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-goal
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-channels
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-connectivity
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-intake

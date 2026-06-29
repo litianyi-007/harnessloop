@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-goal` for `harnessloop:goal`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
+The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-goal` for `harnessloop:goal`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-channels` for `harnessloop:channels`, `harnessloop-connectivity` for `harnessloop:connectivity`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
 
 ## Project Setup
 
@@ -252,6 +252,8 @@ Use `harnessloop:goal` to inspect current goals, negotiate scope, update goal co
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 
 Use `harnessloop:evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
+
+Use `harnessloop:channels` to list declared external systems, access channels, and tools. Use `harnessloop:connectivity` to run declared connectivity checks. Missing tools, credentials, permissions, endpoints, parameters, or write-safety details must be confirmed by the user before any access attempt.
 
 ## Validation
 
