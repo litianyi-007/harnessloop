@@ -5,14 +5,17 @@ This repository is a local marketplace scaffold for one plugin:
 - `plugins/harnessloop/` is the plugin source.
 - `.agents/plugins/marketplace.json` is the Codex marketplace manifest.
 - `.claude-plugin/marketplace.json` is the Claude Code marketplace manifest.
-- `plugins/harnessloop/skills/` is reserved for skills that will be added later.
+- `plugins/harnessloop/skills/` contains the installable Harnessloop skills.
 
 Current design files:
 
 - `docs/harnessloop-framework.md` explains the minimal framework.
+- `docs/usage.md` is the product-level usage guide.
 - `docs/harnessloop-flow.mmd` contains the Mermaid flow source.
 - `docs/harnessloop-flow.svg` is a directly viewable flow diagram.
 - `plugins/harnessloop/skills/harness-loop/SKILL.md` is the first installable skill draft.
+- `plugins/harnessloop/skills/harness-loop-issue/SKILL.md` analyzes Harnessloop evolution issues.
+- `examples/mock-project/` is a small project-local Harnessloop sample.
 
 ## Install In Codex
 
@@ -72,9 +75,9 @@ claude plugin install harnessloop@harnessloop --scope user
 The validation script checks both marketplace manifests and runs Claude Code strict validation
 against the marketplace root and plugin root.
 
-## Add Skills Later
+## Plugin Skill Layout
 
-Add future skills under:
+Skills live under:
 
 ```text
 plugins/harnessloop/skills/

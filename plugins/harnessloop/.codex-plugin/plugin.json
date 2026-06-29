@@ -1,15 +1,15 @@
 {
   "name": "harnessloop",
   "version": "0.1.0",
-  "description": "Goal-driven harness loops with evidence gates and file-system handoffs.",
+  "description": "Goal-driven harness loops with evidence gates, self-audit, and file-system handoffs.",
   "author": {
     "name": "Local developer"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Harnessloop",
-    "shortDescription": "Run evidence-gated harness loops.",
-    "longDescription": "Harnessloop installs a project-local protocol for goal-driven loops, data freshness controls, minimal-change scope locks, file-system handoffs, subagent delegation, and adversarial review.",
+    "shortDescription": "Run self-audited evidence loops.",
+    "longDescription": "Harnessloop installs a project-local protocol for long-term goal loops, data freshness controls, runtime validation, minimal-change scope locks, file-system handoffs, subagent delegation, adversarial review, self-audit, and upstream evolution issue handling.",
     "developerName": "Local developer",
     "category": "Productivity",
     "capabilities": [],
