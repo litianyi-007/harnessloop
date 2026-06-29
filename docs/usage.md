@@ -286,6 +286,8 @@ Use `$harnessloop-delegation` before relying on subagent or swarm work when expe
 
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 
+Blocked feedback must be classified before the agent stops. `runtime-recoverable` blockers continue into a bounded read-only investigation or recovery-planning round when the evidence targets and scope are explicit. `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, and `unknown` blockers stop only when the next safe action needs user input, missing access facts, write-safety details, contract repair, or human judgment.
+
 Use `$harnessloop-evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
 
 Use `$harnessloop-channels` to list declared external systems, access channels, and tools. Use `$harnessloop-connectivity` to run declared connectivity checks. Missing tools, credentials, permissions, endpoints, parameters, or write-safety details must be confirmed by the user before any access attempt. If a connectivity self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, ask the user for the exact missing facts before continuing.

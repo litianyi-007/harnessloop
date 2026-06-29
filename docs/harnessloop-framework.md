@@ -47,7 +47,7 @@ Out of current scope:
 15. Status reads must be safe and read-only.
 16. Continuation must pass a control gate before execution.
 17. Expected model/effort and observed model/effort must be recorded when delegation is used.
-18. The loop should continue toward the goal unless a human decision is required.
+18. The loop should continue toward the goal unless required user input, missing access facts, unsafe writes, or an unclassifiable blocker prevents safe progress.
 19. The loop must audit itself for dead loops, self-contradiction, drift, stale evidence, and cost/context runaway.
 20. Harnessloop defects should be captured as redacted evolution issues with enough context for upstream improvement.
 
@@ -173,7 +173,8 @@ Harnessloop supports these protocol semantics through explicit skills. Codex ski
 
 - Positive feedback may advance to the next subgoal or task.
 - Negative or neutral feedback may advance only to investigation, minimal fix, rollback, or human-confirmed contract revision.
-- Blocked feedback may not continue without a human unblock record.
+- Blocked feedback must be classified before the loop stops. `runtime-recoverable` blockers advance to a bounded read-only investigation or recovery-planning round when evidence targets and scope are explicit.
+- `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, and `unknown` blockers stop only when the next safe action needs user input, missing access facts, write-safety details, contract repair, or human judgment.
 - Evidence or control contract failure prevents execution and moves to contract repair or missing-evidence work.
 - Self-audit failure prevents execution unless the next action is a local repair, an explicit human-confirmed contract revision, or an evolution issue write-up.
 - Imported work from `.harnessloop/intake/` cannot continue business execution until `intake-gate.md` passes and an `intake-review` round is accepted.
@@ -213,11 +214,15 @@ State files are control-plane indexes. They summarize and route the loop, but do
 - Active goal.
 - Active round.
 - Current feedback.
+- Blocker type.
+- Recovery eligibility.
 - Open handoffs.
 - Last accepted round.
 - Next proposed action.
+- Next action safety.
 - Human decision requirement.
 - Blocking reason.
+- Recovery round.
 - State source paths.
 
 `state/environment.md` records:
@@ -430,6 +435,16 @@ Negative or neutral feedback may lead to:
 - Human-confirmed contract revision.
 - A blocked state when a required decision is missing.
 
+Blocked feedback must be classified:
+
+- `runtime-recoverable`: continue into read-only investigation, observation, evidence refresh, or recovery-plan drafting.
+- `access-missing`: ask for missing tool, endpoint, credential reference, local parameter, permission, or account role.
+- `write-safety-required`: ask for dry-run/test-resource/rollback details and human confirmation before cleanup, trigger, rollback, or other mutation.
+- `human-decision-required`: ask for product, business, risk, policy, acceptance, or cleanup decision.
+- `contract-insufficient`: repair goal, threshold, evidence, or control contract before execution.
+- `external-system-unsafe`: allow only bounded observation until safety is established.
+- `unknown`: ask for facts needed to classify.
+
 If negative or neutral feedback repeats without new evidence, scope narrowing, rollback, or contract repair, classify it as a loop-health issue in `meta/self-audit.md` before starting another execution round.
 
 ## Harnessloop Issue Handling
@@ -486,7 +501,8 @@ Recommended dimensions:
 - Data state: complete, partially missing, stale, schema drift, semantic drift, source conflict, inaccessible.
 - External dependency: none, single, multiple, cascading, unstable, behavior changed.
 - Reproducibility: fully reproducible, partially reproducible, remote observation only, human validation only, unreproducible.
-- Feedback class: positive, negative-execution, negative-assumption, neutral-insufficient-evidence, blocked-human-decision.
+- Feedback class: positive, negative-execution, negative-assumption, neutral-insufficient-evidence, blocked-runtime-recoverable, blocked-human-decision.
+- Blocker type: runtime-recoverable, access-missing, write-safety-required, human-decision-required, contract-insufficient, external-system-unsafe, unknown.
 - Rollback ability: no state change, directly reversible, compensating rollback, irreversible but isolatable, human-approved rollback.
 - Time span: single round, short multi-round, long multi-round, cross-session resume, periodic re-baseline needed.
 - Change boundary: single file, single variable, same module, cross-module, cross-system, contract change.
@@ -518,7 +534,10 @@ flowchart TD
   H --> HA["Self-audit<br/>pre-continue"]
   HA --> I{"Continue gate"}
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
-  I -->|"blocked"| X["Status only / human input"]
+  I -->|"blocked"| BC{"Classify blocker"}
+  BC -->|"runtime-recoverable"| RW["Read-only recovery<br/>investigate / plan"]
+  RW --> J
+  BC -->|"needs user / access / write safety"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
   EI --> ES["$harnessloop-issue<br/>record / analyze / propose-fix"]
   J --> K{"Task type"}

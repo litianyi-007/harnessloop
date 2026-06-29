@@ -17,3 +17,9 @@
 - Evidence cannot be refreshed or cited.
 - Self-audit finds contradiction that needs a product decision.
 
+## Blocker Classification
+
+- runtime-recoverable: continue into read-only investigation or recovery planning.
+- access-missing: ask for missing access facts.
+- write-safety-required: ask for dry-run, rollback, and human confirmation before mutation.
+- human-decision-required: ask for the required decision.

@@ -119,6 +119,8 @@ The first setup creates or fills:
 
 Then use `$harnessloop-loop` to define a goal, create decomposable thresholds, lock the first round scope, write evidence, run adversarial review, classify feedback, and continue only through the control gate.
 
+If a runtime blocker appears, Harnessloop classifies it before stopping. Recoverable blockers move into a bounded read-only investigation round; missing access, unsafe writes, external triggers, cleanup decisions, or business decisions pause and ask the user for the exact missing input.
+
 ## Take Over An Existing Agent Session
 
 The source session does not need Harnessloop installed. Ask it to generate a `Harnessloop Transfer Packet`, then save the result:
@@ -177,6 +179,7 @@ If a channel self-check fails, is blocked, is skipped, or needs user confirmatio
 - `channel inventory`: declared external systems and tools, listed without probing.
 - `connectivity check`: declared access verification that stops and asks when required access facts are missing.
 - `local channel parameters`: ignored local values or provider references used by external channels.
+- `blocker type`: classification that decides whether a blocked round can continue into read-only recovery or must ask the user.
 - `self-audit`: loop health check for dead loops, contradictions, drift, and runaway context.
 - `evolution issue`: a redacted issue that helps improve Harnessloop itself.
 

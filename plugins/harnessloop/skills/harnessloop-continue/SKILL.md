@@ -17,6 +17,7 @@ Useful input includes:
 - Optional requested next action.
 - Optional human decision or unblock record.
 - Optional evidence, tool, or external-system confirmation needed by the current control gate.
+- Optional blocker classification, recovery eligibility, and safe read-only investigation target.
 
 If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If imported intake work is pending, route to `$harnessloop-intake`.
 
@@ -26,11 +27,25 @@ If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If imported
 2. Confirm the requested next action matches the control contract and latest feedback.
 3. If feedback is `positive`, continue only to the next subgoal/task or goal completion path.
 4. If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, missing evidence repair, or human-confirmed contract revision.
-5. If feedback is `blocked`, stop unless a clear human unblock record is present.
-6. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
-7. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
-8. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
-9. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
+5. If feedback is `blocked`, classify the blocker before stopping. Use `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
+6. If the blocker is `runtime-recoverable` and the next action is read-only investigation with declared evidence targets, create or enter the next investigation/recovery round instead of pausing for the user.
+7. If the blocker requires write cleanup, external mutation, missing access facts, missing local channel parameters, a named tool that is unavailable, or business judgment, stop and ask the user through `askuserquestion` when available.
+8. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
+9. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
+10. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
+11. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
+
+## Blocker Classification
+
+- `runtime-recoverable`: runtime state blocks the original action, but a safe read-only investigation or evidence refresh can proceed.
+- `access-missing`: required endpoint, credential reference, local parameter, permission, account role, or named tool is missing or invalid.
+- `write-safety-required`: progress requires cleanup, mutation, trigger, rollback, or any write operation without declared dry-run/test-resource/rollback/human confirmation.
+- `human-decision-required`: progress requires product, business, risk, policy, acceptance, or cleanup authorization from the user.
+- `contract-insufficient`: the evidence, goal, threshold, or control contract lacks required fields for safe continuation.
+- `external-system-unsafe`: an external system is in a state where probing or mutation could duplicate work, corrupt state, or hide evidence.
+- `unknown`: the blocker cannot be classified from current evidence.
+
+For a recoverable runtime blocker, the next round must be bounded to observation, diagnosis, evidence refresh, or drafting a cleanup plan. It must not perform the blocked trigger or cleanup write.
 
 ## Output Contract
 
@@ -50,6 +65,10 @@ Harnessloop continuation:
 - environment gate:
 - self-audit gate:
 - delegation gate:
+- blocker type:
+- recovery eligible: yes | no
+- recovery round:
+- recovery scope:
 - human decision:
 - files read:
 - files changed:
@@ -62,7 +81,9 @@ If execution is allowed and performed, write/update only the protocol files requ
 
 - Do not continue without reading current state and latest decision.
 - Do not turn neutral feedback into success.
-- Do not bypass human-confirm states, missing evidence, failed intake, failed self-audit, unavailable named tools, or ambiguous external-system parameters.
+- Do not treat every blocked state as a user pause; classify the blocker first.
+- Do not bypass human-confirm states, missing evidence, failed intake, failed self-audit, unavailable named tools, ambiguous external-system parameters, or unsafe writes.
+- Do not perform cleanup, trigger, rollback, or other external writes from a runtime-recovery round without explicit write-safety details and human confirmation when required.
 - Do not rely on subagent or swarm model/effort claims that have not passed `$harnessloop-delegation` or equivalent file-backed environment self-check.
 - Do not infer named-tool substitutions or external-system access details; ask the user first.
 - Do not accept a round after failed adversarial review unless the control contract and human decision explicitly allow it.

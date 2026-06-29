@@ -24,6 +24,8 @@ Useful input includes:
 - `required-tool`: required when evidence collection or validation depends on a specified tool call; include tool name, intended operation, required parameters, target resource, expected read/write scope, and fallback policy.
 - `external-system`: required when evidence depends on reading from or writing to an external system; include system name, operation, endpoint or resource identifier, required account/role, permission scope, credential reference without secret value, required parameters, and access verification method.
 - `channel-parameters`: required when an external channel needs reusable local parameters; include parameter keys, sensitivity, storage method, and whether values should be user-set or locally stored through `$harnessloop-secrets`.
+- `blocker-type`: optional classification for blocked evidence: runtime-recoverable, access-missing, write-safety-required, human-decision-required, contract-insufficient, external-system-unsafe, or unknown.
+- `recovery-eligibility`: whether a blocked evidence state allows read-only investigation or recovery-planning before asking the user.
 - `citation-requirement`: how future reviews must cite this evidence.
 - `sensitivity`: public, internal, confidential, secret-reference-only, or unknown.
 - `human-confirmation`: required for any acceptance criteria revision, lower validation bar, or broader evidence scope.
@@ -48,6 +50,8 @@ Use `$harnessloop-channels` to list declared external systems/tools/channels bef
 6. For `reject`, record why evidence is invalid, stale, unsupported, too sensitive, or not applicable.
 7. For `diff`, summarize the contract change and its continuation effect.
 8. Update self-audit or recommend `$harnessloop-loop` self-audit when the evidence change reveals drift, contradiction, stale data, or validation drift.
+
+If evidence shows a runtime blocker that prevents the original trigger/action but leaves a safe read-only investigation path, classify it as `runtime-recoverable` and return `recovery-eligible: yes`. If the next step would mutate external state, clean up rows, trigger a job, roll back, or make a business decision, classify it as `write-safety-required` or `human-decision-required` and ask for the missing confirmation instead.
 
 When an external system read or write is involved, first verify that the request states the system, operation, required parameters, permission scope, credential reference, and failure handling. If any of these are missing or ambiguous, stop before tool use and ask the user a focused question for the missing condition.
 
@@ -82,6 +86,9 @@ Evidence contract action:
 - artifact health: valid | invalid | stale | unreachable | unknown
 - claim support: supports | refutes | inconclusive | not-evaluated
 - acceptance effect: allow | block | needs-review | no-change
+- blocker type:
+- recovery eligible: yes | no | unknown
+- safe recovery action:
 - human confirmation: required | provided | not-required
 - files changed:
 - next allowed action:

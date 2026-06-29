@@ -18,7 +18,10 @@ flowchart TD
   H --> HA["Self-audit<br/>pre-continue"]
   HA --> I{"Continue gate"}
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
-  I -->|"blocked"| X["Status only / human input"]
+  I -->|"blocked"| BC{"Classify blocker"}
+  BC -->|"runtime-recoverable"| RW["Read-only recovery<br/>investigate / plan"]
+  RW --> J
+  BC -->|"needs user / access / write safety"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
   EI --> ES["$harnessloop-issue<br/>record / analyze / propose-fix"]
   J --> K{"Task type"}

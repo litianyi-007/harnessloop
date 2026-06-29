@@ -24,7 +24,7 @@ If `.harnessloop/` is missing, report `not-initialized` and suggest `$harnessloo
 1. Read `.harnessloop/state/current.md` first when present.
 2. Follow only the source paths referenced by current state, active goal, active round, open handoffs, latest decision, evidence index, control contract, environment self-check, and self-audit.
 3. Summarize evidence health without revalidating external systems unless the user explicitly asks for evidence checking; route that to `$harnessloop-evidence`.
-4. Report contradictions, missing state files, stale pointers, unresolved human decisions, or intake blockers.
+4. Report contradictions, missing state files, stale pointers, unresolved human decisions, intake blockers, blocker type, recovery eligibility, and next action safety.
 5. Do not mutate any file, run continuation gates, execute tests as business work, or change feedback classification.
 
 ## Output Contract
@@ -38,6 +38,8 @@ Harnessloop status:
 - active goal:
 - active round:
 - current feedback:
+- blocker type:
+- recovery eligible:
 - open handoffs:
 - evidence health:
 - control state:
@@ -45,8 +47,10 @@ Harnessloop status:
 - self-audit state:
 - intake state:
 - next proposed action:
+- next action safety:
 - blocking reason:
 - human decision required:
+- recovery round:
 - source paths read:
 ```
 

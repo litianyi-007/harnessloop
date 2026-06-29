@@ -58,10 +58,11 @@ Every loop must have:
 - A verification phase that assigns adversarial review before accepting the round.
 - Positive, negative, and neutral feedback classification after validation.
 - A control plane for status, continuation, evidence contract changes, and human intervention.
+- Blocker classification that separates recoverable runtime blockers from missing access, unsafe writes, contract gaps, and required human decisions.
 - Environment and delegation self-checks that record expected versus observed model and effort.
 - Self-audit for dead loops, contradiction, drift, handoff stagnation, and cost/context runaway.
 
-Only stop the loop when the goal is achieved or a required human decision blocks progress.
+Only stop the loop when the goal is achieved, required human input is missing, required access/tool facts are missing, write safety is not declared, or the blocker cannot be safely investigated.
 
 ## Project Setup
 
@@ -170,7 +171,9 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 - Continue only through an allowed next action.
 - If feedback is `positive`, continue to the next subgoal or task when the goal is not complete.
 - If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, or human-confirmed contract revision.
-- If feedback is `blocked`, do not continue without a clear human unblock record.
+- If feedback is `blocked`, classify the blocker as `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
+- If the blocker is `runtime-recoverable` and the next safe action is read-only investigation, evidence refresh, or cleanup-plan drafting, start the next recovery round instead of pausing for the user.
+- If the blocker requires missing access facts, write cleanup, external mutation, trigger execution, business judgment, or contract revision, stop and ask the user for the missing information or decision.
 - If evidence or control contract health fails, do not execute; request contract repair or missing evidence.
 - If self-audit fails, do not execute unless the next action repairs the audit failure, creates an explicit human-confirmed contract revision, or writes an evolution issue.
 - If the active work came from `.harnessloop/intake/`, do not execute business work until `intake-gate.md` passes and an `intake-review` round is accepted.
@@ -275,6 +278,7 @@ Keep state files as control-plane indexes. They are not the sole source of truth
 - Auto-continue states.
 - Human-confirm states.
 - Blocked states.
+- Blocker taxonomy and recovery eligibility.
 - Scope-lock mutation policy.
 - Evidence contract mutation policy.
 - Round acceptance authority.
@@ -455,6 +459,16 @@ Negative or neutral feedback may lead to:
 - Human-confirmed contract revision.
 - A blocked state when a required decision is missing.
 
+Blocked feedback must be classified before the loop stops:
+
+- `runtime-recoverable`: open the next read-only investigation or recovery-planning round when evidence targets and scope boundaries are explicit.
+- `access-missing`: ask for missing tool, endpoint, credential reference, local parameter, permission, or account role.
+- `write-safety-required`: ask for dry-run/test-resource/rollback details and human confirmation before cleanup, trigger, rollback, or other external mutation.
+- `human-decision-required`: ask for the business, product, risk, policy, acceptance, or cleanup decision.
+- `contract-insufficient`: repair the goal, evidence, threshold, or control contract before execution.
+- `external-system-unsafe`: stop write actions and allow only bounded observation until safety is established.
+- `unknown`: ask for the missing facts needed to classify the blocker.
+
 If negative or neutral feedback repeats without new evidence, scope narrowing, rollback, or contract repair, update `meta/self-audit.md` before starting another execution round.
 
 ## Evals
@@ -472,11 +486,14 @@ After each completed round:
 3. Archive closed handoffs.
 4. Update `meta/self-audit.md` when the round exposes loop-health risk.
 5. If feedback is positive and the goal is not achieved, continue to the next subgoal or task.
-6. If feedback is negative or neutral and no human decision is required, propose the next smallest investigation, fix, or rollback scope-lock.
+6. If feedback is negative or neutral and no human decision is required, propose or enter the next smallest investigation, fix, or rollback scope-lock.
+7. If feedback is blocked, classify the blocker. Enter the next read-only recovery round when `runtime-recoverable`; otherwise ask for the exact missing user input, access fact, or write-safety decision.
 
 Stop only when:
 
 - The goal is achieved.
 - Required human input is missing.
+- Required access/tool facts are missing.
+- A write action is needed but write safety or human confirmation is missing.
 - The data contract cannot be satisfied.
 - Verification thresholds cannot be evaluated.

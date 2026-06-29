@@ -40,6 +40,8 @@ If the missing condition is a reusable channel parameter or secret reference, ro
 7. If any check result is `fail`, `blocked`, `skipped`, or `needs-user-confirmation`, include focused user questions for the missing or invalid conditions before recommending continuation.
 8. Record results as evidence artifacts or recommend `$harnessloop-evidence` updates when the check changes evidence health.
 
+When a connectivity or runtime preflight blocks the original action because external state is unsafe, classify whether the next step is read-only. If safe read-only investigation can proceed, report `blocker type: runtime-recoverable` and `continuation effect: recovery-round`; if cleanup, trigger, rollback, or mutation is required, report `write-safety-required` or `human-decision-required` and ask for confirmation.
+
 ## Output Contract
 
 Return a connectivity report:
@@ -63,10 +65,12 @@ Harnessloop connectivity:
   - credential reference status:
   - local parameter status:
   - write safety:
+  - blocker type:
+  - recovery eligible:
   - next action:
 - overall result: pass | fail | partial | blocked
 - evidence update needed:
-- continuation effect: allow | block | needs-review | no-change
+- continuation effect: allow | block | recovery-round | needs-review | no-change
 ```
 
 ## Safety Rules

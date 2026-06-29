@@ -12,7 +12,8 @@ Use this matrix to test whether the local harness loop policy is robust enough f
 | Data state | complete, partially missing, stale, schema drift, semantic drift, source conflict, inaccessible | | | |
 | External dependency | none, single, multiple, cascading, unstable, behavior changed | | | |
 | Reproducibility | fully reproducible, partially reproducible, remote observation only, human validation only, unreproducible | | | |
-| Feedback class | positive, negative-execution, negative-assumption, neutral-insufficient-evidence, blocked-human-decision | | | |
+| Feedback class | positive, negative-execution, negative-assumption, neutral-insufficient-evidence, blocked-runtime-recoverable, blocked-human-decision | | | |
+| Blocker type | runtime-recoverable, access-missing, write-safety-required, human-decision-required, contract-insufficient, external-system-unsafe, unknown | | | |
 | Rollback ability | no state change, directly reversible, compensating rollback, irreversible but isolatable, human-approved rollback | | | |
 | Time span | single round, short multi-round, long multi-round, cross-session resume, periodic re-baseline needed | | | |
 | Change boundary | single file, single variable, same module, cross-module, cross-system, contract change | | | |
@@ -20,4 +21,3 @@ Use this matrix to test whether the local harness loop policy is robust enough f
 | Evidence quality | path exists, trusted source, valid timestamp, sufficient summary, raw evidence traceable, review reproducible | | | |
 | Cost/context pressure | small context, long logs, large data, parallel agents, summary compression, raw evidence kept out of main session | | | |
 ```
-

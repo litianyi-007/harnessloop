@@ -23,6 +23,7 @@
 | Validation drift | pass |  |  |
 | Handoff stagnation | pass |  |  |
 | Cost/context runaway | pass |  |  |
+| Recoverable blocker stalled | pass |  |  |
 
 Status values: `pass`, `warn`, `fail`, `unknown`.
 
@@ -41,11 +42,14 @@ Status values: `pass`, `warn`, `fail`, `unknown`.
 | Open handoff age |  |  | project-defined | unknown |
 | Main-session raw context risk |  |  | raw logs stay in evidence files | unknown |
 | Delegation model/effort verified |  |  | required for high-risk delegation | unknown |
+| Recoverable blocker next action |  |  | read-only investigation before user pause | unknown |
 
 ## Local Repair Decision
 
 - Required repair:
 - Smallest safe next action:
+- Blocker type:
+- Recovery eligible:
 - Human confirmation required:
 - Block execution until repaired:
 
