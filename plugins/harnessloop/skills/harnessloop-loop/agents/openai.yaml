@@ -1,7 +1,7 @@
 interface:
-  display_name: "Harnessloop"
-  short_description: "Evidence-backed long-task loops"
-  default_prompt: "Use $harnessloop-loop to set up or take over an evidence-backed long-running task."
+  display_name: "Harnessloop Loop"
+  short_description: "Run evidence-backed goal loops"
+  default_prompt: "Use $harnessloop-loop to run or continue an evidence-backed Harnessloop goal."
 
 policy:
   allow_implicit_invocation: true
