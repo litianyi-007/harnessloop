@@ -75,12 +75,12 @@ claude plugin install harnessloop@harnessloop --scope user
 
 ## Start Your First Loop
 
-Harnessloop is currently a skill/protocol, not a standalone shell CLI. Commands such as `harnessloop:status` and `harnessloop:continue` describe protocol modes that an agent should execute through skills.
+Harnessloop is currently a skill/protocol, not a standalone shell CLI. Explicit Codex skill invocation uses kebab-case names such as `$harnessloop-init`; colon forms such as `harnessloop:init` are natural-language aliases only. `$harnessloop:init` is not a valid skill mention.
 
 After installing, ask the agent:
 
 ```text
-harnessloop:init
+$harnessloop-init
 ```
 
 For deterministic initialization from this repository:
@@ -131,7 +131,7 @@ The source session does not need Harnessloop installed. Ask it to generate a `Ha
 Harnessloop runs an intake gate before creating a formal goal:
 
 ```text
-harnessloop:intake
+$harnessloop-intake
 ```
 
 ![Harnessloop takeover intake flow](docs/assets/takeover-intake-flow.svg)
@@ -153,6 +153,15 @@ Evidence classes:
 - `runtime`: tests, CI, remote automation, probes, canaries, monitoring.
 - `source`: repository source, schema files, source-data files.
 
+## External Channels
+
+Harnessloop separates channel inventory from connectivity checks:
+
+- `$harnessloop-channels`: lists declared external systems, tools, MCP servers, CLIs, APIs, CI systems, databases, brokers, and credential references without probing.
+- `$harnessloop-connectivity`: runs only declared connectivity methods after the required tool, endpoint/resource, credential reference, permission scope, parameters, and write-safety rules are explicit.
+
+If a channel self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, Harnessloop must ask for the exact missing facts before trying alternatives or continuing.
+
 ## Key Concepts
 
 - `goal`: what the loop is trying to achieve.
@@ -161,21 +170,37 @@ Evidence classes:
 - `scope-lock`: the exact boundary of what one round may change.
 - `evidence gate`: proof required before a round can pass.
 - `handoff`: a file-based task transfer for subagents or reviewers.
+- `channel inventory`: declared external systems and tools, listed without probing.
+- `connectivity check`: declared access verification that stops and asks when required access facts are missing.
 - `self-audit`: loop health check for dead loops, contradictions, drift, and runaway context.
 - `evolution issue`: a redacted issue that helps improve Harnessloop itself.
 
+## Execution Delegation
+
+Harnessloop keeps the main session responsible for orchestration and control decisions. It delegates bounded work through file handoffs when doing so protects context and improves review quality:
+
+| Task type | Decision |
+| --- | --- |
+| Read-only discovery | Should delegate when paths and questions are bounded. |
+| Evidence collection | Delegate only when read-only, sensitivity is understood, and outputs cite paths. |
+| External connectivity | Use `$harnessloop-connectivity`; do not delegate blind probing. |
+| Low-risk local implementation | May delegate with scope-lock, rollback, and verification commands. |
+| High-risk implementation | Main session owns integration; delegate only narrow subtasks. |
+| Adversarial review and acceptance testing | Delegate when the mechanism and evidence citations are verifiable. |
+| Round acceptance and control decisions | Never delegate. |
+
 ## Skills
 
-- `$harnessloop-init`: initialize `.harnessloop/` project files when you ask for `harnessloop:init`.
-- `$harnessloop-intake`: review transfer packets and run intake gates when you ask for `harnessloop:intake`.
-- `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, or supersede goals when you ask for `harnessloop:goal`.
-- `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts when you ask for `harnessloop:evidence`.
-- `$harnessloop-channels`: list declared external systems, channels, and tools when you ask for `harnessloop:channels`.
-- `$harnessloop-connectivity`: check declared external system/tool connectivity when you ask for `harnessloop:connectivity`.
-- `$harnessloop-status`: read current Harnessloop state when you ask for `harnessloop:status`.
-- `$harnessloop-continue`: run continuation gates when you ask for `harnessloop:continue`.
+- `$harnessloop-init`: initialize `.harnessloop/` project files.
+- `$harnessloop-intake`: review transfer packets and run intake gates.
+- `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, supersede, or assess deletion impact for goals.
+- `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.
+- `$harnessloop-channels`: list declared external systems, channels, and tools without probing.
+- `$harnessloop-connectivity`: check declared external system/tool connectivity and ask for missing access facts.
+- `$harnessloop-status`: read current Harnessloop state.
+- `$harnessloop-continue`: run continuation gates before execution.
 - `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
-- `$harnessloop-issue`: analyze a Harnessloop evolution issue when you ask for `harnessloop:issue`.
+- `$harnessloop-issue`: record, analyze, or propose fixes for Harnessloop evolution issues.
 
 ## Repository Map
 
@@ -199,6 +224,7 @@ The validation script checks marketplace manifests and runs Claude Code strict v
 Validate skills directly:
 
 ```powershell
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-init
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-goal
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence

@@ -18,7 +18,9 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-goal` for `harnessloop:goal`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-channels` for `harnessloop:channels`, `harnessloop-connectivity` for `harnessloop:connectivity`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
+The plugin exposes explicit skills named `$harnessloop-init`, `$harnessloop-intake`, `$harnessloop-goal`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-loop`, and `$harnessloop-issue`.
+
+Colon phrases such as `harnessloop:init` and `harnessloop:continue` are natural-language aliases only. Codex skill mentions use the skill `name`, so `$harnessloop:init` will not match.
 
 ## Project Setup
 
@@ -39,7 +41,7 @@ macOS/Linux:
 When the plugin is installed, ask the agent:
 
 ```text
-harnessloop:init
+$harnessloop-init
 ```
 
 The initializer creates:
@@ -72,7 +74,7 @@ Recommended flow:
 .harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md
 ```
 
-4. In the Harnessloop session, ask for `harnessloop:intake` to run an intake gate before creating a formal goal.
+4. In the Harnessloop session, ask for `$harnessloop-intake` to run an intake gate before creating a formal goal.
 5. If the packet is incomplete, write `gap-review.md` in the same intake directory and request only the missing information.
 6. If the packet passes, create a normal goal under `.harnessloop/goals/`.
 
@@ -241,19 +243,34 @@ Treat goals as long-term unless the user explicitly says the task is single-roun
 
 Each round must have one `scope-lock.md`. Default to the smallest useful change. For autoresearch or drift-prone work, change one variable only.
 
-Use `harnessloop:goal` to inspect current goals, negotiate scope, update goal contracts, split subgoals/tasks, reprioritize work, archive/cancel/supersede goals, or produce a deletion impact report. Goal changes that affect active scope, evidence, or continuation must return to the continuation gate.
+Use `$harnessloop-goal` to inspect current goals, negotiate scope, update goal contracts, split subgoals/tasks, reprioritize work, archive/cancel/supersede goals, or produce a deletion impact report. Goal changes that affect active scope, evidence, or continuation must return to the continuation gate.
+
+## Execution Delegation
+
+Harnessloop delegates work only when the task is bounded by a handoff, evidence path, scope boundary, and verification condition. The main session keeps goal interpretation, ordering, scope-lock changes, human-required decisions, and round acceptance.
+
+| Task type | Delegation decision | Goal and value |
+| --- | --- | --- |
+| Read-only discovery | Should delegate | Map current state, constraints, dependencies, and risks while saving main-session context. |
+| Evidence collection | Delegate when bounded and read-only | Gather cited logs, reports, source excerpts, or command outputs without copying raw context into chat. |
+| External connectivity check | Use `$harnessloop-connectivity` | Keep access validation centralized and ask the user for missing tool, endpoint, credential, permission, parameter, or write-safety details. |
+| Low-risk local implementation | May delegate | Apply a narrow patch or generate a bounded artifact when scope-lock, rollback, and verification are clear. |
+| High-risk or cross-cutting implementation | Main session owns; delegate narrow subtasks only | Preserve architecture and mutation control. |
+| Adversarial review | Must delegate when verifiable | Avoid self-review bias and test the round against scope-lock, evidence contract, thresholds, and source truth. |
+| Acceptance testing | Should delegate when independent | Reproduce validation from a fresh context and produce evidence paths. |
+| Round acceptance and control decisions | Never delegate | Keep protocol authority in the main session and control contract. |
 
 ## Status And Continue
 
-`harnessloop:status` is read-only. It reports active goal, active round, feedback, open handoffs, evidence health, control state, environment state, self-audit state, next proposed action, and blocking reason.
+`$harnessloop-status` is read-only. It reports active goal, active round, feedback, open handoffs, evidence health, control state, environment state, self-audit state, next proposed action, and blocking reason.
 
-`harnessloop:continue` runs a gate before execution. It may continue only when control, evidence, environment, and self-audit checks allow the next action.
+`$harnessloop-continue` runs a gate before execution. It may continue only when control, evidence, environment, and self-audit checks allow the next action.
 
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 
-Use `harnessloop:evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
+Use `$harnessloop-evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
 
-Use `harnessloop:channels` to list declared external systems, access channels, and tools. Use `harnessloop:connectivity` to run declared connectivity checks. Missing tools, credentials, permissions, endpoints, parameters, or write-safety details must be confirmed by the user before any access attempt.
+Use `$harnessloop-channels` to list declared external systems, access channels, and tools. Use `$harnessloop-connectivity` to run declared connectivity checks. Missing tools, credentials, permissions, endpoints, parameters, or write-safety details must be confirmed by the user before any access attempt. If a connectivity self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, ask the user for the exact missing facts before continuing.
 
 ## Validation
 
@@ -286,7 +303,7 @@ Harnessloop records its own protocol failures in `.harnessloop/meta/self-audit.m
 
 Try local repair first: refresh evidence, narrow scope, add missing runtime validation, repair a handoff, roll back a wrong action, or revise a contract with human confirmation.
 
-When the failure appears to be a Harnessloop framework gap, write an evolution issue under `.harnessloop/meta/evolution-issues/` and analyze it with `harnessloop:issue`.
+When the failure appears to be a Harnessloop framework gap, use `$harnessloop-issue record` to write an evolution issue under `.harnessloop/meta/evolution-issues/`. Use `$harnessloop-issue analyze` to classify an existing issue and `$harnessloop-issue propose-fix` to produce the smallest upstream patch proposal.
 
 ## Example
 

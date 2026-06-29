@@ -1,12 +1,12 @@
-# Harnessloop Framework Draft
+# Harnessloop Framework
 
-This document captures the first minimal design for the Harnessloop plugin and skill.
+This document describes the current Harnessloop plugin protocol and product model.
 
-Harnessloop is a project-local protocol for running goal-driven harness loops around real static data, dynamic generated data, source code, and source-data files. It is not a broad automation platform yet. The first version should make the workflow visible, enforceable, and file-system based.
+Harnessloop is a project-local protocol for running goal-driven harness loops around real static data, dynamic generated data, source code, source-data files, runtime validation, external systems, and agent handoffs. It is not a broad automation platform yet; its job is to make long-running agent work visible, enforceable, and file-system based.
 
 ## Design Boundary
 
-In scope for the first version:
+In current scope:
 
 - Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
@@ -21,7 +21,7 @@ In scope for the first version:
 - An eval matrix for robustness across common project scenarios.
 - A visual flow diagram.
 
-Out of scope for the first version:
+Out of current scope:
 
 - Concrete data connector implementations.
 - Fixed data-source schemas.
@@ -161,11 +161,11 @@ The first accepted round after takeover should normally be `intake-review`. It m
 
 ## Control Plane
 
-Harnessloop should support these command semantics even before a CLI exists.
+Harnessloop supports these protocol semantics through explicit skills. Codex skill mentions use kebab-case skill names such as `$harnessloop-status`; colon phrases such as `harnessloop:status` are natural-language aliases only, and `$harnessloop:status` is not valid.
 
-`harnessloop:status` is read-only. It reports active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason. It must not create files, continue execution, or mutate state.
+`$harnessloop-status` is read-only. It reports active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason. It must not create files, continue execution, or mutate state.
 
-`harnessloop:continue` reads current state and runs a continuation gate. It may continue only through allowed next actions:
+`$harnessloop-continue` reads current state and runs a continuation gate. It may continue only through allowed next actions:
 
 - Positive feedback may advance to the next subgoal or task.
 - Negative or neutral feedback may advance only to investigation, minimal fix, rollback, or human-confirmed contract revision.
@@ -174,7 +174,7 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Self-audit failure prevents execution unless the next action is a local repair, an explicit human-confirmed contract revision, or an evolution issue write-up.
 - Imported work from `.harnessloop/intake/` cannot continue business execution until `intake-gate.md` passes and an `intake-review` round is accepted.
 
-`harnessloop:evidence` manages acceptable evidence through the `harnessloop-evidence` skill:
+`$harnessloop-evidence` manages acceptable evidence through the `harnessloop-evidence` skill:
 
 - `add`: register evidence type, path, freshness, validation method, and applicable goal or round.
 - `check`: verify evidence exists, is fresh enough, and can be cited.
@@ -182,7 +182,7 @@ Harnessloop should support these command semantics even before a CLI exists.
 - `reject`: record invalid, stale, unsupported, too-sensitive, or inapplicable evidence.
 - `diff`: summarize the contract change and continuation effect.
 
-`harnessloop:channels` lists declared external systems, tools, and channels without probing. `harnessloop:connectivity` checks only declared connectivity methods and must ask the user when required tools, credentials, permissions, endpoints, parameters, or write-safety details are missing.
+`$harnessloop-channels` lists declared external systems, tools, and channels without probing. `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user when required tools, credentials, permissions, endpoints, parameters, or write-safety details are missing. Failed, blocked, skipped, or confirmation-needed self-checks must ask for the exact missing facts before the loop continues.
 
 `harnessloop contract control` defines continuation authority:
 
@@ -192,7 +192,7 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Delegation boundaries.
 - Acceptance authority after failed review.
 
-`harnessloop issue evolve` is a protocol action for creating a Harnessloop evolution issue when self-audit finds a framework-level failure. It writes to `.harnessloop/meta/evolution-issues/` and should be handled upstream with the `harnessloop-issue` skill.
+`$harnessloop-issue record` creates a Harnessloop evolution issue when self-audit, a user, or an external reviewer finds a framework-level question or failure. It writes to `.harnessloop/meta/evolution-issues/`. `$harnessloop-issue analyze` classifies an existing issue, and `$harnessloop-issue propose-fix` produces the smallest upstream patch proposal.
 
 `harnessloop intake review` is a protocol action for reviewing a transfer packet. It writes `intake-gate.md`, writes `gap-review.md` when needed, maps accepted evidence into the state index, and blocks business execution until the packet is evidence-backed.
 
@@ -292,7 +292,7 @@ Environment self-check findings should feed self-audit. If Harnessloop expects C
 
 ## Goal Files
 
-Use `harnessloop:goal` for goal contract management: status, proposal, negotiation, update, split, reprioritization, archive, cancel, supersede, and deletion impact review. It must preserve auditability and must not hard-delete goals by default.
+Use `$harnessloop-goal` for goal contract management: status, proposal, negotiation, update, split, reprioritization, archive, cancel, supersede, and deletion impact review. It must preserve auditability and must not hard-delete goals by default.
 
 `goal.md` states:
 
@@ -424,10 +424,11 @@ If negative or neutral feedback repeats without new evidence, scope narrowing, r
 
 ## Harnessloop Issue Handling
 
-The plugin includes a second skill, `harnessloop-issue`, for upstream improvement work. Use it when the input is a Harnessloop evolution issue produced by an installed project.
+The plugin includes `$harnessloop-issue` for upstream improvement work. Use it to record user questions and framework concerns, analyze installed-project evolution issues, or propose the smallest Harnessloop fix.
 
 The issue-handling skill should:
 
+- Record questions, self-audit concerns, protocol defects, skill gaps, template gaps, and packaging problems as redacted evolution issues.
 - Classify whether the issue is a local project problem, a documentation gap, a template gap, a workflow gap, a skill instruction gap, or a marketplace/plugin packaging gap.
 - Extract reusable failure patterns without copying domain-specific details.
 - Identify the smallest framework change that would prevent recurrence.
@@ -441,11 +442,26 @@ The main session is the orchestrator and core decision maker. It should avoid ab
 Use subagent or swarm for:
 
 - Read-only discovery.
+- Evidence collection when bounded and read-only.
 - Independent investigation.
 - Low-context execution.
 - Adversarial review.
+- Independent acceptance testing.
 
 Every delegated handoff should include bounded inputs, required output paths, output length expectations, and evidence paths. The handoff result should summarize the decision-relevant points instead of copying raw context back into the main session.
+
+Execution-stage delegation follows this matrix:
+
+| Task type | Delegation decision | Goal and value |
+| --- | --- | --- |
+| Read-only discovery | Should delegate | Map current state, constraints, dependencies, prior failures, and validation options while saving context. |
+| Evidence collection | Delegate when bounded and read-only | Gather cited artifacts without moving raw sensitive context into the main session. |
+| External connectivity check | Main gate or `$harnessloop-connectivity` | Centralize access validation and prevent blind probing. |
+| Low-risk local implementation | May delegate | Execute narrow work when scope-lock, rollback, and validation are explicit. |
+| High-risk or cross-cutting implementation | Main session owns; delegate only narrow subtasks | Preserve architecture, contracts, and mutation control. |
+| Adversarial review | Must delegate when verifiable | Reduce self-review bias before round acceptance. |
+| Acceptance testing | Should delegate when independent | Reproduce validation from a fresh context and return evidence paths. |
+| Round acceptance and control decisions | Never delegate | Keep protocol authority with the main session and human-confirmed control contract. |
 
 ## Eval Matrix
 
@@ -491,7 +507,7 @@ flowchart TD
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
   I -->|"blocked"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
-  EI --> ES["harnessloop-issue<br/>upstream analysis"]
+  EI --> ES["$harnessloop-issue<br/>record / analyze / propose-fix"]
   J --> K{"Task type"}
 
   K -->|"core decision"| M["Main session"]

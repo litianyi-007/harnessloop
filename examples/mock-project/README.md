@@ -4,6 +4,6 @@ This artificial sample shows the intended file protocol without depending on a r
 
 Scenario: improve a small runtime quality goal using one round, cited evidence, adversarial review, self-audit, and an evolution issue.
 
-Start at `.harnessloop/state/current.md`.
+Start at `.harnessloop/state/current.md` or use `$harnessloop-status` in an installed Harnessloop session.
 
-For takeover from another agent session, start at `.harnessloop/intake/20260629-1015-runtime-quality/transfer-packet.md`, then read `intake-gate.md`.
+For takeover from another agent session, start at `.harnessloop/intake/20260629-1015-runtime-quality/transfer-packet.md`, then use `$harnessloop-intake` or read `intake-gate.md`.
