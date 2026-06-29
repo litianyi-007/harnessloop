@@ -1,0 +1,29 @@
+plugins/harnessloop/skills/harnessloop-loop/agents/openai.yaml
+  s_cb1f5eceeed9c6::t_214b4f088ccf6e 2-4
+package.json
+  s_cb1f5eceeed9c6::t_214b4f088ccf6e 3-3
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_214b4f088ccf6e 3-3
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_214b4f088ccf6e 4-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "efc6ca82f532ca8dd8da64e1641d98e294ab822b",
+  "prompts": {
+    "s_cb1f5eceeed9c6::t_214b4f088ccf6e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f11e9-aeba-7b53-800b-92e997ec5ee9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 6,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
