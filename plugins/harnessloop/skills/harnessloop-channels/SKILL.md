@@ -26,6 +26,7 @@ If `.harnessloop/` is missing, report `not-initialized` and suggest `harnessloop
 3. Mark missing or ambiguous fields explicitly instead of inferring them.
 4. Classify each channel as `declared-complete`, `declared-incomplete`, `unused`, `unknown-owner`, `missing-verification`, or `needs-user-confirmation`.
 5. Do not call tools, probe endpoints, check credentials, run CLIs, or access external systems.
+6. When missing fields would block `$harnessloop-connectivity`, include the focused questions the user must answer before any connectivity self-check can run.
 
 ## Output Contract
 
@@ -54,6 +55,7 @@ Harnessloop channel inventory:
   - declaration status:
   - source paths:
 - missing fields:
+- questions for user:
 - recommended next action:
 ```
 
@@ -64,4 +66,5 @@ When the user asks to test connectivity, route to `$harnessloop-connectivity`.
 - Inventory is read-only by default; do not mutate contracts unless the user explicitly asks to repair documentation.
 - Do not infer tool identity, endpoint, credential location, permission scope, or required parameters.
 - Do not test connectivity from this skill.
+- If inventory is incomplete, ask for the exact missing fields before recommending a connectivity check.
 - Do not include secret values; report only credential names or references.

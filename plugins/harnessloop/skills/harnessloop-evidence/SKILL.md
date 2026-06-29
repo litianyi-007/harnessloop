@@ -33,7 +33,7 @@ For external-system evidence, missing connection conditions or parameters are a 
 
 For required tool calling, missing or invalid tool availability is also a hard stop. If the specified tool is not installed, not exposed, misspelled, ambiguous, or lacks the required capability, ask the user to confirm the correct tool or installation path before attempting an alternative.
 
-Use `$harnessloop-channels` to list declared external systems/tools/channels before connectivity work. Use `$harnessloop-connectivity` to run declared connectivity checks. Do not fold inventory or connectivity probing into evidence mutation unless the user explicitly asks and all required conditions are declared.
+Use `$harnessloop-channels` to list declared external systems/tools/channels before connectivity work. Use `$harnessloop-connectivity` to run declared connectivity checks. Do not fold inventory or connectivity probing into evidence mutation unless the user explicitly asks and all required conditions are declared. If connectivity is failed, blocked, skipped, or needs user confirmation, ask the user for the missing access facts before changing evidence health or recommending continuation.
 
 ## Processing Contract
 
@@ -51,6 +51,8 @@ When an external system read or write is involved, first verify that the request
 When the evidence action requires a named tool, verify that the tool exists and supports the requested operation before use. If it does not, stop and ask; do not infer aliases, swap providers, rewrite the operation for another tool, or test random commands to discover intent.
 
 If the user asks for a channel/tool inventory, route to `$harnessloop-channels`. If the user asks for connectivity validation, route to `$harnessloop-connectivity`; then update evidence health only after the connectivity report exists.
+
+If a connectivity report blocks evidence because information is missing, preserve the report's `questions for user` and ask those questions directly instead of guessing or silently marking the evidence unknown.
 
 ## Output Contract
 

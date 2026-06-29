@@ -184,7 +184,7 @@ If evidence depends on reading from or writing to an external system and any acc
 
 If a task explicitly requires tool calling with a named tool and that tool is missing, not installed, not exposed in the current environment, or possibly the wrong tool, stop and ask the user for confirmation. Do not infer an alternative tool, alias, provider, command, or API from context.
 
-`harnessloop:channels` or `$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `harnessloop:connectivity` or `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred.
+`harnessloop:channels` or `$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `harnessloop:connectivity` or `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred. If connectivity self-check returns `fail`, `blocked`, `skipped`, or `needs-user-confirmation` because required information is missing or invalid, ask the user for the exact missing information before continuing the loop.
 
 `harnessloop:goal` or `$harnessloop-goal` manages goal contracts, subgoals, tasks, lifecycle state, and deletion impact. It must not execute business work or accept rounds. If a goal change affects thresholds, evidence, active scope-lock, or continuation authority, route back through `$harnessloop-evidence` or `$harnessloop-continue`.
 

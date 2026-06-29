@@ -24,6 +24,8 @@ Useful input includes:
 
 If the channel inventory is missing, run or request `$harnessloop-channels` first. If any required field is missing, ask the user a focused question before any tool call.
 
+If a self-check cannot pass because a required tool, endpoint/resource, credential reference, permission, account role, required parameter, write-safety condition, or failure-handling rule is missing or invalid, actively ask the user for the exact missing information. Do not only report the failed check.
+
 ## Processing Contract
 
 1. Read channel declarations from `.harnessloop/setup/data-sources.md`, `.harnessloop/state/evidence-index.md`, active goal `data-contract.md`, active round evidence/review files, intake packets, and open handoffs.
@@ -32,7 +34,8 @@ If the channel inventory is missing, run or request `$harnessloop-channels` firs
 4. If a named tool is unavailable, uninstalled, ambiguous, or possibly wrong, stop and ask the user to confirm the correct tool or installation path.
 5. For write checks, require explicit human confirmation plus dry-run/test-resource/rollback details.
 6. Run only the declared checks that are complete and safe.
-7. Record results as evidence artifacts or recommend `$harnessloop-evidence` updates when the check changes evidence health.
+7. If any check result is `fail`, `blocked`, `skipped`, or `needs-user-confirmation`, include focused user questions for the missing or invalid conditions before recommending continuation.
+8. Record results as evidence artifacts or recommend `$harnessloop-evidence` updates when the check changes evidence health.
 
 ## Output Contract
 
@@ -52,6 +55,7 @@ Harnessloop connectivity:
   - artifact path:
   - error summary:
   - missing fields:
+  - questions for user:
   - permission status:
   - credential reference status:
   - write safety:
@@ -68,7 +72,7 @@ Harnessloop connectivity:
 - Do not perform write connectivity checks without explicit human confirmation and rollback/dry-run/test-resource details.
 - Do not store secrets or raw sensitive outputs.
 - If connectivity changes evidence acceptance, route to `$harnessloop-evidence`.
-- If a blocked connectivity check prevents continuation, route to `$harnessloop-continue` after the user resolves the missing condition.
+- If a blocked connectivity check prevents continuation, ask the user for the exact missing condition first, then route to `$harnessloop-continue` after the user resolves it.
 
 ## Examples
 
