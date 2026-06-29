@@ -1,0 +1,48 @@
+scripts/install-codex.ps1
+  s_59509b328fdbf5::t_606150c6387f0e 1-13
+README.md
+  s_59509b328fdbf5::t_606150c6387f0e 1-80
+scripts/install-claude.ps1
+  s_59509b328fdbf5::t_606150c6387f0e 1-16
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_59509b328fdbf5::t_606150c6387f0e 4,11-12
+  s_59509b328fdbf5::t_f17dc20af5ffaa 1-3,5-10,13-18
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_59509b328fdbf5::t_606150c6387f0e 1-12
+scripts/install-claude.sh
+  s_59509b328fdbf5::t_606150c6387f0e 1-41
+plugins/harnessloop/skills/.gitkeep
+  s_59509b328fdbf5::t_606150c6387f0e 1
+.claude-plugin/marketplace.json
+  s_59509b328fdbf5::t_606150c6387f0e 1-3,5-20
+  s_59509b328fdbf5::t_70baa6f9492d15 4
+scripts/install-codex.sh
+  s_59509b328fdbf5::t_606150c6387f0e 1-23
+.agents/plugins/marketplace.json
+  s_59509b328fdbf5::t_f17dc20af5ffaa 1-20
+plugins/harnessloop/assets/.gitkeep
+  s_59509b328fdbf5::t_606150c6387f0e 1
+scripts/validate.ps1
+  s_59509b328fdbf5::t_606150c6387f0e 1-17,30-66,69-70
+  s_59509b328fdbf5::t_70baa6f9492d15 18-29,67-68
+package.json
+  s_59509b328fdbf5::t_606150c6387f0e 1-10
+.gitignore
+  s_59509b328fdbf5::t_606150c6387f0e 1-3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "b14b5f6220bdf8579bef5da80255de13cab29e2d",
+  "prompts": {},
+  "sessions": {
+    "s_59509b328fdbf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f0c2b-8efa-7aa0-bb1b-a5ab8eacd98e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
