@@ -1,4 +1,11 @@
 flowchart TD
+  T["Existing agent session"] --> TP["Transfer packet<br/>docs + artifacts + evidence"]
+  TP --> IG{"Intake gate"}
+  IG -->|"incomplete"| GR["Gap review<br/>ask only missing facts"]
+  GR --> TP
+  IG -->|"pass"| IR["Intake-review round<br/>map evidence + draft goal"]
+  IR --> C
+
   A["Setup<br/>data + runtime + cost/context"] --> B["Environment self-check"]
   B --> BA["Self-audit<br/>setup health"]
   BA --> C["Define long-term goal"]

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="360" viewBox="0 0 900 360" role="img" aria-labelledby="title desc">
+  <title id="title">Harnessloop evidence stack</title>
+  <desc id="desc">Four evidence classes: static, dynamic, runtime, and source evidence.</desc>
+  <style>
+    .card { fill: #f8fafc; stroke-width: 3; rx: 8; }
+    .title { font: 700 24px Arial, sans-serif; fill: #0f172a; }
+    .body { font: 16px Arial, sans-serif; fill: #475569; }
+  </style>
+  <rect width="900" height="360" fill="#ffffff"/>
+  <rect x="50" y="74" width="180" height="190" class="card" stroke="#0f766e"/>
+  <text x="140" y="122" text-anchor="middle" class="title">Static</text>
+  <text x="140" y="154" text-anchor="middle" class="body">real datasets</text>
+  <text x="140" y="180" text-anchor="middle" class="body">docs, reports</text>
+  <text x="140" y="206" text-anchor="middle" class="body">freshness rules</text>
+  <rect x="270" y="74" width="180" height="190" class="card" stroke="#b45309"/>
+  <text x="360" y="122" text-anchor="middle" class="title">Dynamic</text>
+  <text x="360" y="154" text-anchor="middle" class="body">generated data</text>
+  <text x="360" y="180" text-anchor="middle" class="body">sampling</text>
+  <text x="360" y="206" text-anchor="middle" class="body">drift checks</text>
+  <rect x="490" y="74" width="180" height="190" class="card" stroke="#991b1b"/>
+  <text x="580" y="122" text-anchor="middle" class="title">Runtime</text>
+  <text x="580" y="154" text-anchor="middle" class="body">tests, CI</text>
+  <text x="580" y="180" text-anchor="middle" class="body">probes</text>
+  <text x="580" y="206" text-anchor="middle" class="body">monitoring</text>
+  <rect x="710" y="74" width="140" height="190" class="card" stroke="#1d4ed8"/>
+  <text x="780" y="122" text-anchor="middle" class="title">Source</text>
+  <text x="780" y="154" text-anchor="middle" class="body">code</text>
+  <text x="780" y="180" text-anchor="middle" class="body">schemas</text>
+  <text x="780" y="206" text-anchor="middle" class="body">source data</text>
+  <text x="450" y="310" text-anchor="middle" class="body">Evidence can be valid as an artifact while still proving that a round failed.</text>
+</svg>
+

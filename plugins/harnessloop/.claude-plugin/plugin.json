@@ -2,9 +2,9 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "harnessloop",
   "version": "0.1.0",
-  "description": "Goal-driven harness loops with evidence gates, self-audit, and file-system handoffs.",
+  "description": "Evidence-backed long-task takeover and execution for AI agents.",
   "author": {
-    "name": "Local developer"
+    "name": "Harnessloop"
   },
   "skills": [
     "./skills/"

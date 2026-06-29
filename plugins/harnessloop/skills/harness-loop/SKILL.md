@@ -1,9 +1,9 @@
 ---
 name: harness-loop
-description: "Use when running a goal-driven harness loop in an installed project: decompose long-term goals, run read-only discovery, define data and validation thresholds, manage file-system handoffs, enforce minimal-change scope locks, classify positive/negative/neutral feedback, expose status/continue/contract control semantics, verify agent environment and model effort, govern cost/context with subagent or swarm delegation, and verify with adversarial review based on real static data, dynamic generated data, source code, source-data evidence, and runtime validation."
+description: "Use when running or taking over a long-running goal-driven task in an installed project: create or import Harnessloop state, run intake gates for existing agent sessions, decompose goals, define evidence and validation contracts, enforce scope-locks, manage file-system handoffs, verify with real static/dynamic/runtime/source evidence, classify feedback, self-audit for drift or dead loops, and continue only through evidence-backed control gates."
 ---
 
-# Harness Loop
+# Harnessloop
 
 Use this skill as a project-local operating protocol. Do not treat it as a generic engineering checklist.
 
@@ -11,6 +11,8 @@ For handoff formatting, use `references/handoff-template.md`.
 For goal decomposition, feedback, and cost/context policy, use the matching templates in `references/`.
 For control-plane state, evidence indexing, environment self-check, and evals, use the matching templates in `references/`.
 For loop self-audit and upstream evolution issues, use `references/self-audit-template.md` and `references/evolution-issue-template.md`.
+For existing-session takeover, use `references/transfer-packet-template.md`, `references/intake-gate-template.md`, `references/gap-review-template.md`, and `references/intake-review-round-template.md`.
+For goal and round files, use the matching `*-template.md` files in `references/`.
 
 ## Core Contract
 
@@ -20,6 +22,7 @@ Every loop must have:
 - Data freshness and drift controls for real static data and dynamic generated data.
 - Data thresholds and verification thresholds that can be decomposed and checked.
 - A goal breakdown before the first execution round.
+- An intake gate before continuing work imported from another agent session.
 - A per-round `scope-lock` that minimizes change; strict mode changes one variable only.
 - File-system handoffs for task transfer, review, and archival.
 - Evidence from real data, dynamic data, repository source, or source-data files.
@@ -40,6 +43,11 @@ If `.harnessloop/` does not exist in the target project, propose creating:
   setup/
     data-sources.md
     cost-context-policy.md
+  intake/
+    YYYYMMDD-HHMM-<task-slug>/
+      transfer-packet.md
+      intake-gate.md
+      gap-review.md
   state/
     current.md
     environment.md
@@ -72,6 +80,33 @@ During setup, ask the user to fill in data-source connection requirements. Do no
 - Cases that must not be delegated.
 - Budget and context-preservation rules.
 
+## Existing Session Takeover
+
+If the user wants Harnessloop to take over a long-running task from another agent session, do not require the source session to install Harnessloop. Ask the source session to produce a `Harnessloop Transfer Packet` using `references/transfer-packet-template.md`.
+
+Store the packet under:
+
+```text
+.harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md
+```
+
+Before creating a formal goal or continuing business execution, run an intake gate with `references/intake-gate-template.md`.
+
+The intake gate must verify:
+
+- Goal, non-goals, success condition, acceptance criteria, and required human decisions are explicit.
+- Completed work is backed by file paths, commands, test output, logs, URLs, or other evidence.
+- Existing and generated documents are listed with source-of-truth status, freshness, trust level, relevance, and sensitivity.
+- Process artifacts are traceable.
+- External tools, accounts, permissions, failure handling, and credential requirements are described.
+- No secret values are stored in Harnessloop files.
+- Current changes, rollback risks, next action, and open blockers are clear.
+- Drift, contradiction, dead-loop, and validation gaps are called out.
+
+If the gate fails, write `gap-review.md` using `references/gap-review-template.md` and ask only for missing information. Do not continue business execution.
+
+If the gate passes, the first round should normally be an `intake-review` round using `references/intake-review-round-template.md`. This round maps imported evidence into `state/evidence-index.md`, confirms the source-of-truth documents, and creates the formal goal directory. Only after this round passes may Harnessloop continue the business task.
+
 ## Control Commands
 
 Treat these as protocol semantics. Do not assume a CLI exists unless the project provides one.
@@ -91,6 +126,7 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 - If feedback is `blocked`, do not continue without a clear human unblock record.
 - If evidence or control contract health fails, do not execute; request contract repair or missing evidence.
 - If self-audit fails, do not execute unless the next action repairs the audit failure, creates an explicit human-confirmed contract revision, or writes an evolution issue.
+- If the active work came from `.harnessloop/intake/`, do not execute business work until `intake-gate.md` passes and an `intake-review` round is accepted.
 
 `harnessloop contract evidence add/check/revise` manages acceptable evidence:
 
@@ -107,6 +143,8 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 - Define round acceptance authority after failed review.
 
 `harnessloop issue evolve` writes a Harnessloop evolution issue when local self-audit finds a framework-level failure. Write the issue under `.harnessloop/meta/evolution-issues/` using the evolution issue template. Do not include secrets, credentials, raw private data, or unnecessary source dumps.
+
+`harnessloop intake review` is a protocol action for reviewing `.harnessloop/intake/.../transfer-packet.md`. It writes `intake-gate.md`, writes `gap-review.md` when needed, and blocks business execution until the packet is evidence-backed.
 
 ## Goal Structure
 
@@ -180,7 +218,7 @@ Keep state files as control-plane indexes. They are not the sole source of truth
 
 `state/evidence-index.md` indexes evidence without replacing the evidence itself:
 
-- Evidence ID, type, path, applies-to, freshness requirement, observed timestamp, validation method, citation requirement, and health status.
+- Evidence ID, type, path, applies-to, freshness requirement, observed timestamp, validation method, citation requirement, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
 
 `state/self-check.md` records setup and continuation gate checks.
 
@@ -212,6 +250,8 @@ If self-audit finds a problem, choose the smallest local repair first:
 - Request human-confirmed contract revision.
 
 Create a Harnessloop evolution issue only when the failure points to the framework itself: missing template fields, unclear skill rules, insufficient documentation, weak sample coverage, or marketplace/package behavior that prevents correct use.
+
+Use deterministic self-audit signals where possible: repeated feedback sequence, repeated next action count, scope-lock version, goal/threshold/data-contract version or hash, verification command changes, stale evidence count, open handoff age, context risk, and delegation model/effort verification.
 
 ## Round Structure
 

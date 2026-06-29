@@ -3,7 +3,7 @@ name: harness-loop-issue
 description: "Use when analyzing a Harnessloop evolution issue produced by an installed project: classify dead loops, self-contradictions, goal drift, evidence drift, validation drift, handoff stagnation, cost/context runaway, documentation gaps, template gaps, skill gaps, or plugin packaging gaps; extract reusable protocol improvements; and propose the smallest upstream change without copying project-private context."
 ---
 
-# Harness Loop Issue
+# Harnessloop Issue
 
 Use this skill when the input is an issue report from `.harnessloop/meta/evolution-issues/` or an equivalent Harnessloop self-audit report.
 
@@ -53,6 +53,7 @@ If the report contains secrets, credentials, raw private data, customer data, or
    - Smallest patch outline.
    - Overfitting risk.
    - Residual project-local action, if any.
+   - Resolution or backport action when the issue has already been fixed upstream.
 
 ## Decision Rules
 
@@ -63,6 +64,8 @@ Treat repeated neutral feedback as a loop failure when no new evidence, narrower
 Treat contradictions as framework issues only when Harnessloop templates or instructions made the contradiction easy to create or hard to detect.
 
 Treat model/effort mismatch as packaging or environment-policy evidence only when the installed environment was expected to verify delegation and could not.
+
+When an upstream change is accepted, state whether the installed project should backport it into local `.harnessloop/` policy, templates, or examples. Do not mark an issue closed until the expected resolution and local follow-up are explicit.
 
 ## Output Format
 
@@ -82,5 +85,6 @@ Treat model/effort mismatch as packaging or environment-policy evidence only whe
 ## Overfitting Risk
 
 ## Residual Project Action
-```
 
+## Resolution And Backport
+```

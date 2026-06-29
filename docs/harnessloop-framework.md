@@ -10,6 +10,7 @@ In scope for the first version:
 
 - A minimal installable skill named `harness-loop`.
 - A project-local `.harnessloop/` file protocol.
+- Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
 - Goal, threshold, data-contract, feedback-policy, round, handoff, evidence, review, and archive conventions.
 - Runtime validation evidence alongside static, dynamic, and source evidence.
@@ -31,23 +32,24 @@ Out of scope for the first version:
 
 1. Every loop has a clear goal.
 2. Treat goals as long-term unless explicitly defined as single-round.
-3. Use read-only delegated discovery before approving a goal breakdown.
-4. Data must not become stale or drift silently.
-5. Thresholds must be decomposable and verifiable.
-6. Every round has a strict adjustment boundary.
-7. The default adjustment is minimal change.
-8. Autoresearch or drift-prone work should use one-variable strict mode.
-9. Handoffs happen through files with traceable names.
-10. Closed handoffs are archived promptly.
-11. Main sessions orchestrate and decide; subagents or swarms handle isolated work and adversarial review.
-12. Verification must cite real evidence, runtime evidence, or source evidence, not generic engineering judgment.
-13. Feedback is positive, negative, or neutral; neutral feedback follows the negative path until resolved.
-14. Status reads must be safe and read-only.
-15. Continuation must pass a control gate before execution.
-16. Expected model/effort and observed model/effort must be recorded when delegation is used.
-17. The loop should continue toward the goal unless a human decision is required.
-18. The loop must audit itself for dead loops, self-contradiction, drift, stale evidence, and cost/context runaway.
-19. Harnessloop defects should be captured as redacted evolution issues with enough context for upstream improvement.
+3. Imported work from another agent session must pass intake before business execution.
+4. Use read-only delegated discovery before approving a goal breakdown.
+5. Data must not become stale or drift silently.
+6. Thresholds must be decomposable and verifiable.
+7. Every round has a strict adjustment boundary.
+8. The default adjustment is minimal change.
+9. Autoresearch or drift-prone work should use one-variable strict mode.
+10. Handoffs happen through files with traceable names.
+11. Closed handoffs are archived promptly.
+12. Main sessions orchestrate and decide; subagents or swarms handle isolated work and adversarial review.
+13. Verification must cite real evidence, runtime evidence, or source evidence, not generic engineering judgment.
+14. Feedback is positive, negative, or neutral; neutral feedback follows the negative path until resolved.
+15. Status reads must be safe and read-only.
+16. Continuation must pass a control gate before execution.
+17. Expected model/effort and observed model/effort must be recorded when delegation is used.
+18. The loop should continue toward the goal unless a human decision is required.
+19. The loop must audit itself for dead loops, self-contradiction, drift, stale evidence, and cost/context runaway.
+20. Harnessloop defects should be captured as redacted evolution issues with enough context for upstream improvement.
 
 ## Project File Protocol
 
@@ -56,6 +58,11 @@ Out of scope for the first version:
   setup/
     data-sources.md
     cost-context-policy.md
+  intake/
+    YYYYMMDD-HHMM-<task-slug>/
+      transfer-packet.md
+      intake-gate.md
+      gap-review.md
   state/
     current.md
     environment.md
@@ -111,6 +118,33 @@ It should record:
 - Handoff input and output limits.
 - Context that should stay out of the main session.
 
+## Existing Session Takeover
+
+Harnessloop can take over a long-running task that started in another agent session. The source session does not need Harnessloop installed. It only needs to produce a `Harnessloop Transfer Packet`.
+
+Save takeover packets under:
+
+```text
+.harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md
+```
+
+The packet must include:
+
+- Task identity, current agent environment, repository path, and branch.
+- Goal contract: goal, non-goals, success condition, acceptance criteria, required human decisions, and ambiguities.
+- Progress state: completed, in progress, not started, current smallest next step, and whether continuation is safe.
+- Change state: modified/added/deleted files, diff summary, unverified changes, rollback risk.
+- Documentation inventory: existing and generated documents with source-of-truth status, trust level, freshness, relevance, and sensitivity.
+- Process artifact inventory: notes, scratch files, temporary reports, test outputs, CI links, runtime observations, failed attempts, and generated-but-unverified artifacts.
+- Evidence state: commands run, results, data sources, external systems, evidence paths, and unsupported claims.
+- External tool and access contract: MCP, plugins, skills, CLIs, Jenkins, GitHub/GitLab, cloud platforms, databases, internal platforms, broker APIs, permissions, failure handling.
+- Credential requirements: secret names, storage locations, required scopes, verification commands, status, and human action requirement. Secret values must not be stored.
+- Decision log, risks, blockers, next handoff recommendation, and human questions.
+
+Run an intake gate before formal goal creation. The gate writes `intake-gate.md` and checks whether the packet is complete, evidence-backed, safe to continue, and free of secret values. If the packet is incomplete, write `gap-review.md` and request only the missing information.
+
+The first accepted round after takeover should normally be `intake-review`. It maps imported evidence into `state/evidence-index.md`, confirms source-of-truth documents, and drafts the formal goal. Business execution remains blocked until intake review passes.
+
 ## Control Plane
 
 Harnessloop should support these command semantics even before a CLI exists.
@@ -124,6 +158,7 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Blocked feedback may not continue without a human unblock record.
 - Evidence or control contract failure prevents execution and moves to contract repair or missing-evidence work.
 - Self-audit failure prevents execution unless the next action is a local repair, an explicit human-confirmed contract revision, or an evolution issue write-up.
+- Imported work from `.harnessloop/intake/` cannot continue business execution until `intake-gate.md` passes and an `intake-review` round is accepted.
 
 `harnessloop contract evidence add/check/revise` manages acceptable evidence:
 
@@ -140,6 +175,8 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Acceptance authority after failed review.
 
 `harnessloop issue evolve` is a protocol action for creating a Harnessloop evolution issue when self-audit finds a framework-level failure. It writes to `.harnessloop/meta/evolution-issues/` and should be handled upstream with the `harness-loop-issue` skill.
+
+`harnessloop intake review` is a protocol action for reviewing a transfer packet. It writes `intake-gate.md`, writes `gap-review.md` when needed, maps accepted evidence into the state index, and blocks business execution until the packet is evidence-backed.
 
 ## State Files
 
@@ -169,7 +206,7 @@ State files are control-plane indexes. They summarize and route the loop, but do
 
 `state/control-contract.md` records human intervention and continuation rules.
 
-`state/evidence-index.md` indexes evidence by ID, type, path, applicability, freshness requirement, observed timestamp, validation method, citation requirement, and health status.
+`state/evidence-index.md` indexes evidence by ID, type, path, applicability, freshness requirement, observed timestamp, validation method, citation requirement, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
 
 `state/self-check.md` records setup and continuation gate checks.
 
@@ -196,6 +233,8 @@ Run self-audit:
 - Before declaring a goal blocked due to framework or process limitation.
 
 Self-audit first tries local repair: refresh evidence, narrow the scope-lock, revise a contract with human confirmation, create a missing handoff, or roll back an incorrect prior action. It should generate an upstream evolution issue only when the observed failure suggests a Harnessloop framework, template, skill, or documentation gap.
+
+Self-audit should record deterministic signals where possible: recent feedback sequence, repeated next action count, scope-lock version, goal/threshold/data-contract version or hash, verification command changes, stale evidence count, open handoff age, main-session raw context risk, and delegation model/effort verification.
 
 `meta/evolution-issues/` stores upstream issue reports. These files are not chat transcripts. Each issue should include:
 
@@ -412,6 +451,13 @@ The directly viewable SVG is in [`docs/harnessloop-flow.svg`](./harnessloop-flow
 
 ```mermaid
 flowchart TD
+  T["Existing agent session"] --> TP["Transfer packet<br/>docs + artifacts + evidence"]
+  TP --> IG{"Intake gate"}
+  IG -->|"incomplete"| GR["Gap review<br/>ask only missing facts"]
+  GR --> TP
+  IG -->|"pass"| IR["Intake-review round<br/>map evidence + draft goal"]
+  IR --> C
+
   A["Setup<br/>data + runtime + cost/context"] --> B["Environment self-check"]
   B --> BA["Self-audit<br/>setup health"]
   BA --> C["Define long-term goal"]

@@ -6,4 +6,4 @@ Scenario: improve a small runtime quality goal using one round, cited evidence, 
 
 Start at `.harnessloop/state/current.md`.
 
-For takeover from another agent session, start at `.harnessloop/intake/20260629-1015-runtime-quality/transfer-packet.md`.
+For takeover from another agent session, start at `.harnessloop/intake/20260629-1015-runtime-quality/transfer-packet.md`, then read `intake-gate.md`.

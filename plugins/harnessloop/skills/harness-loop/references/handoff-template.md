@@ -1,4 +1,4 @@
-# Harness Loop Handoff Template
+# Harnessloop Handoff Template
 
 ```markdown
 # <round>-<seq>-<role>-<task-slug>-<status>
@@ -10,12 +10,29 @@
 - Goal:
 - Scope lock:
 - Evidence paths:
+- External tools:
+- Credential names only:
+- Expected model/effort:
 
 ## Scope Boundaries
 
 Allowed:
 
 Disallowed:
+
+## Tool And Access Contract
+
+| Tool/system | Purpose | Read/write scope | Account role | Credential name | Verification method | Failure handling |
+| --- | --- | --- | --- | --- | --- | --- |
+
+Do not include secret values.
+
+## Budget And Context Limits
+
+- Max input scope:
+- Max output length:
+- Raw logs allowed in output: yes | no
+- Evidence paths required: yes | no
 
 ## Required Work
 
@@ -29,5 +46,5 @@ Status:
 Evidence produced:
 Open risks:
 Next handoff:
+Observed model/effort:
 ```
-

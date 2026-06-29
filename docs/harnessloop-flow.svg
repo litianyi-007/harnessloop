@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="980" viewBox="0 0 1500 980" role="img" aria-labelledby="title desc">
-  <title id="title">Harnessloop control, self-audit, and evolution flow</title>
-  <desc id="desc">Harnessloop setup, environment self-check, self-audit gates, goal decomposition, scoped execution, evidence writeback, adversarial review, feedback handling, and upstream evolution issue processing.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1520" height="1060" viewBox="0 0 1520 1060" role="img" aria-labelledby="title desc">
+  <title id="title">Harnessloop detailed protocol flow</title>
+  <desc id="desc">Detailed Harnessloop flow including existing session takeover, intake gate, setup, goal breakdown, evidence contracts, scoped rounds, adversarial review, self-audit, feedback, and evolution issues.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
@@ -26,169 +26,165 @@
     </style>
   </defs>
 
-  <text x="44" y="42" class="title">Harnessloop: control plane, self-audit, evidence, and evolution flow</text>
-  <text x="44" y="68" class="small">Status is read-only. Continue must pass control, evidence, environment, and self-audit gates before scoped execution.</text>
+  <rect width="1520" height="1060" fill="#ffffff"/>
+  <text x="44" y="42" class="title">Harnessloop detailed protocol flow</text>
+  <text x="44" y="68" class="small">Canonical source: docs/harnessloop-flow.mmd. This SVG is a rendered preview for readers.</text>
 
-  <rect x="44" y="110" width="170" height="66" class="box"/>
-  <text x="129" y="137" text-anchor="middle" class="text">Setup</text>
-  <text x="129" y="158" text-anchor="middle" class="small">data/runtime/policy</text>
+  <rect x="44" y="105" width="190" height="64" class="agent"/>
+  <text x="139" y="132" text-anchor="middle" class="text">Existing session</text>
+  <text x="139" y="153" text-anchor="middle" class="small">no install required</text>
 
-  <rect x="254" y="110" width="190" height="66" class="control"/>
-  <text x="349" y="137" text-anchor="middle" class="text">Environment self-check</text>
-  <text x="349" y="158" text-anchor="middle" class="small">expected vs observed</text>
+  <rect x="286" y="105" width="210" height="64" class="box"/>
+  <text x="391" y="132" text-anchor="middle" class="text">Transfer packet</text>
+  <text x="391" y="153" text-anchor="middle" class="small">docs + artifacts + evidence</text>
 
-  <rect x="484" y="110" width="170" height="66" class="audit"/>
-  <text x="569" y="137" text-anchor="middle" class="text">Self-audit</text>
-  <text x="569" y="158" text-anchor="middle" class="small">setup health</text>
+  <polygon points="630,84 748,137 630,190 512,137" class="decision"/>
+  <text x="630" y="133" text-anchor="middle" class="text">Intake gate</text>
+  <text x="630" y="153" text-anchor="middle" class="small">complete?</text>
 
-  <rect x="694" y="110" width="170" height="66" class="box"/>
-  <text x="779" y="137" text-anchor="middle" class="text">Long-term goal</text>
-  <text x="779" y="158" text-anchor="middle" class="small">goal / success</text>
+  <rect x="835" y="78" width="200" height="64" class="blocked"/>
+  <text x="935" y="105" text-anchor="middle" class="text">Gap review</text>
+  <text x="935" y="126" text-anchor="middle" class="small">missing facts only</text>
 
-  <rect x="904" y="110" width="190" height="66" class="agent"/>
-  <text x="999" y="137" text-anchor="middle" class="text">Read-only discovery</text>
-  <text x="999" y="158" text-anchor="middle" class="small">subagent / swarm</text>
+  <rect x="835" y="170" width="220" height="64" class="audit"/>
+  <text x="945" y="197" text-anchor="middle" class="text">Intake-review round</text>
+  <text x="945" y="218" text-anchor="middle" class="small">map evidence + draft goal</text>
 
-  <rect x="1134" y="110" width="230" height="66" class="main"/>
-  <text x="1249" y="137" text-anchor="middle" class="text">Main session approves</text>
-  <text x="1249" y="158" text-anchor="middle" class="small">breakdown / order</text>
+  <rect x="44" y="285" width="190" height="64" class="box"/>
+  <text x="139" y="312" text-anchor="middle" class="text">Setup</text>
+  <text x="139" y="333" text-anchor="middle" class="small">data/runtime/policy</text>
 
-  <rect x="44" y="245" width="170" height="66" class="box"/>
-  <text x="129" y="272" text-anchor="middle" class="text">Subgoal or task</text>
-  <text x="129" y="293" text-anchor="middle" class="small">next target</text>
+  <rect x="286" y="285" width="190" height="64" class="control"/>
+  <text x="381" y="312" text-anchor="middle" class="text">Environment check</text>
+  <text x="381" y="333" text-anchor="middle" class="small">model + delegation</text>
 
-  <rect x="254" y="245" width="190" height="66" class="box"/>
-  <text x="349" y="272" text-anchor="middle" class="text">Evidence contract</text>
-  <text x="349" y="293" text-anchor="middle" class="small">data + validation</text>
+  <rect x="528" y="285" width="170" height="64" class="audit"/>
+  <text x="613" y="312" text-anchor="middle" class="text">Self-audit</text>
+  <text x="613" y="333" text-anchor="middle" class="small">setup health</text>
 
-  <rect x="484" y="245" width="190" height="66" class="control"/>
-  <text x="579" y="272" text-anchor="middle" class="text">State + control</text>
-  <text x="579" y="293" text-anchor="middle" class="small">status / authority</text>
+  <rect x="750" y="285" width="190" height="64" class="box"/>
+  <text x="845" y="312" text-anchor="middle" class="text">Long-term goal</text>
+  <text x="845" y="333" text-anchor="middle" class="small">goal / success</text>
 
-  <rect x="714" y="245" width="180" height="66" class="audit"/>
-  <text x="804" y="272" text-anchor="middle" class="text">Self-audit</text>
-  <text x="804" y="293" text-anchor="middle" class="small">pre-continue</text>
+  <rect x="992" y="285" width="190" height="64" class="agent"/>
+  <text x="1087" y="312" text-anchor="middle" class="text">Read-only discovery</text>
+  <text x="1087" y="333" text-anchor="middle" class="small">subagent / swarm</text>
 
-  <polygon points="1010,226 1122,278 1010,330 898,278" class="decision"/>
-  <text x="1010" y="274" text-anchor="middle" class="text">Continue</text>
-  <text x="1010" y="294" text-anchor="middle" class="small">gate</text>
+  <rect x="1234" y="285" width="220" height="64" class="main"/>
+  <text x="1344" y="312" text-anchor="middle" class="text">Main approval</text>
+  <text x="1344" y="333" text-anchor="middle" class="small">breakdown / order</text>
 
-  <rect x="1190" y="245" width="210" height="66" class="blocked"/>
-  <text x="1295" y="272" text-anchor="middle" class="text">Status / human input</text>
-  <text x="1295" y="293" text-anchor="middle" class="small">blocked path</text>
+  <rect x="44" y="465" width="170" height="64" class="box"/>
+  <text x="129" y="492" text-anchor="middle" class="text">Subgoal/task</text>
+  <text x="129" y="513" text-anchor="middle" class="small">next target</text>
 
-  <rect x="740" y="370" width="210" height="66" class="issue"/>
-  <text x="845" y="397" text-anchor="middle" class="text">Evolution issue</text>
-  <text x="845" y="418" text-anchor="middle" class="small">redacted context</text>
+  <rect x="260" y="465" width="190" height="64" class="box"/>
+  <text x="355" y="492" text-anchor="middle" class="text">Evidence contract</text>
+  <text x="355" y="513" text-anchor="middle" class="small">data + validation</text>
 
-  <rect x="1010" y="370" width="220" height="66" class="issue"/>
-  <text x="1120" y="397" text-anchor="middle" class="text">harness-loop-issue</text>
-  <text x="1120" y="418" text-anchor="middle" class="small">upstream analysis</text>
+  <rect x="496" y="465" width="180" height="64" class="control"/>
+  <text x="586" y="492" text-anchor="middle" class="text">State + control</text>
+  <text x="586" y="513" text-anchor="middle" class="small">authority</text>
 
-  <rect x="44" y="505" width="210" height="66" class="control"/>
-  <text x="149" y="532" text-anchor="middle" class="text">Round scope-lock</text>
-  <text x="149" y="553" text-anchor="middle" class="small">minimal / one variable</text>
+  <rect x="722" y="465" width="170" height="64" class="audit"/>
+  <text x="807" y="492" text-anchor="middle" class="text">Self-audit</text>
+  <text x="807" y="513" text-anchor="middle" class="small">pre-continue</text>
 
-  <polygon points="390,487 506,538 390,589 274,538" class="decision"/>
-  <text x="390" y="534" text-anchor="middle" class="text">Task type</text>
-  <text x="390" y="554" text-anchor="middle" class="small">route</text>
+  <polygon points="1016,444 1130,497 1016,550 902,497" class="decision"/>
+  <text x="1016" y="493" text-anchor="middle" class="text">Continue gate</text>
+  <text x="1016" y="513" text-anchor="middle" class="small">allowed?</text>
 
-  <rect x="580" y="452" width="180" height="66" class="main"/>
-  <text x="670" y="479" text-anchor="middle" class="text">Main session</text>
-  <text x="670" y="500" text-anchor="middle" class="small">core decision</text>
+  <rect x="1200" y="465" width="210" height="64" class="blocked"/>
+  <text x="1305" y="492" text-anchor="middle" class="text">Status / human input</text>
+  <text x="1305" y="513" text-anchor="middle" class="small">blocked</text>
 
-  <rect x="580" y="562" width="180" height="66" class="agent"/>
-  <text x="670" y="589" text-anchor="middle" class="text">Subagent handoff</text>
-  <text x="670" y="610" text-anchor="middle" class="small">investigate / execute</text>
+  <rect x="44" y="650" width="190" height="64" class="control"/>
+  <text x="139" y="677" text-anchor="middle" class="text">Scope-lock</text>
+  <text x="139" y="698" text-anchor="middle" class="small">minimal / one variable</text>
 
-  <rect x="840" y="505" width="220" height="66" class="box"/>
-  <text x="950" y="532" text-anchor="middle" class="text">Evidence writeback</text>
-  <text x="950" y="553" text-anchor="middle" class="small">static / dynamic / runtime / source</text>
+  <polygon points="374,628 488,682 374,736 260,682" class="decision"/>
+  <text x="374" y="678" text-anchor="middle" class="text">Task type</text>
+  <text x="374" y="698" text-anchor="middle" class="small">route</text>
 
-  <rect x="1120" y="505" width="190" height="66" class="review"/>
-  <text x="1215" y="532" text-anchor="middle" class="text">Adversarial review</text>
-  <text x="1215" y="553" text-anchor="middle" class="small">evidence-cited</text>
+  <rect x="550" y="600" width="180" height="64" class="main"/>
+  <text x="640" y="627" text-anchor="middle" class="text">Main session</text>
+  <text x="640" y="648" text-anchor="middle" class="small">core decision</text>
 
-  <rect x="1120" y="650" width="190" height="66" class="audit"/>
-  <text x="1215" y="677" text-anchor="middle" class="text">Self-audit</text>
-  <text x="1215" y="698" text-anchor="middle" class="small">validation health</text>
+  <rect x="550" y="710" width="180" height="64" class="agent"/>
+  <text x="640" y="737" text-anchor="middle" class="text">Subagent handoff</text>
+  <text x="640" y="758" text-anchor="middle" class="small">investigate / execute</text>
 
-  <polygon points="950,640 1066,690 950,740 834,690" class="decision"/>
-  <text x="950" y="686" text-anchor="middle" class="text">Feedback</text>
-  <text x="950" y="706" text-anchor="middle" class="small">classify</text>
+  <rect x="805" y="650" width="230" height="64" class="box"/>
+  <text x="920" y="677" text-anchor="middle" class="text">Evidence writeback</text>
+  <text x="920" y="698" text-anchor="middle" class="small">static / dynamic / runtime / source</text>
 
-  <rect x="610" y="660" width="180" height="66" class="done"/>
-  <text x="700" y="687" text-anchor="middle" class="text">Archive round</text>
-  <text x="700" y="708" text-anchor="middle" class="small">next subgoal/task</text>
+  <rect x="1090" y="650" width="190" height="64" class="review"/>
+  <text x="1185" y="677" text-anchor="middle" class="text">Adversarial review</text>
+  <text x="1185" y="698" text-anchor="middle" class="small">evidence-cited</text>
 
-  <polygon points="390,642 506,693 390,744 274,693" class="decision"/>
-  <text x="390" y="689" text-anchor="middle" class="text">Goal achieved?</text>
+  <rect x="1090" y="805" width="190" height="64" class="audit"/>
+  <text x="1185" y="832" text-anchor="middle" class="text">Self-audit</text>
+  <text x="1185" y="853" text-anchor="middle" class="small">validation health</text>
 
-  <rect x="80" y="660" width="150" height="66" class="done"/>
-  <text x="155" y="698" text-anchor="middle" class="text">Done</text>
+  <polygon points="920,787 1034,837 920,887 806,837" class="decision"/>
+  <text x="920" y="833" text-anchor="middle" class="text">Feedback</text>
+  <text x="920" y="853" text-anchor="middle" class="small">classify</text>
 
-  <rect x="610" y="815" width="230" height="66" class="review"/>
-  <text x="725" y="842" text-anchor="middle" class="text">Fault analysis</text>
-  <text x="725" y="863" text-anchor="middle" class="small">execution first, goal second</text>
+  <rect x="575" y="805" width="170" height="64" class="done"/>
+  <text x="660" y="832" text-anchor="middle" class="text">Archive round</text>
+  <text x="660" y="853" text-anchor="middle" class="small">next task</text>
 
-  <rect x="900" y="815" width="220" height="66" class="audit"/>
-  <text x="1010" y="842" text-anchor="middle" class="text">Self-audit</text>
-  <text x="1010" y="863" text-anchor="middle" class="small">repeat failure / drift</text>
+  <rect x="575" y="945" width="230" height="64" class="review"/>
+  <text x="690" y="972" text-anchor="middle" class="text">Fault analysis</text>
+  <text x="690" y="993" text-anchor="middle" class="small">execution first, goal second</text>
 
-  <polygon points="1240,797 1360,848 1240,899 1120,848" class="decision"/>
-  <text x="1240" y="844" text-anchor="middle" class="text">Human decision?</text>
+  <rect x="870" y="945" width="210" height="64" class="audit"/>
+  <text x="975" y="972" text-anchor="middle" class="text">Self-audit</text>
+  <text x="975" y="993" text-anchor="middle" class="small">repeat failure / drift</text>
 
-  <rect x="900" y="905" width="230" height="66" class="control"/>
-  <text x="1015" y="932" text-anchor="middle" class="text">Next scope-lock</text>
-  <text x="1015" y="953" text-anchor="middle" class="small">investigate / fix / rollback</text>
+  <rect x="1190" y="945" width="220" height="64" class="issue"/>
+  <text x="1300" y="972" text-anchor="middle" class="text">Evolution issue</text>
+  <text x="1300" y="993" text-anchor="middle" class="small">harness-loop-issue</text>
 
-  <path d="M214 143 L254 143" class="line"/>
-  <path d="M444 143 L484 143" class="line"/>
-  <path d="M654 143 L694 143" class="line"/>
-  <path d="M864 143 L904 143" class="line"/>
-  <path d="M1094 143 L1134 143" class="line"/>
-  <path d="M1249 176 L1249 205 L129 205 L129 245" class="line"/>
+  <path d="M234 137 L286 137" class="line"/>
+  <path d="M496 137 L512 137" class="line"/>
+  <path d="M748 137 L835 110" class="line"/>
+  <text x="775" y="113" class="label">incomplete</text>
+  <path d="M935 78 C935 45 391 45 391 105" class="line"/>
+  <path d="M715 174 L835 202" class="line"/>
+  <text x="755" y="195" class="label">pass</text>
+  <path d="M945 234 L945 258 L845 258 L845 285" class="line"/>
 
-  <path d="M214 278 L254 278" class="line"/>
-  <path d="M444 278 L484 278" class="line"/>
-  <path d="M674 278 L714 278" class="line"/>
-  <path d="M894 278 L898 278" class="line"/>
-  <path d="M1122 278 L1190 278" class="line"/>
-  <text x="1146" y="268" class="label">blocked</text>
-  <path d="M804 311 L804 370" class="dash"/>
-  <text x="812" y="350" class="issueLabel">loop / drift</text>
-  <path d="M950 403 L1010 403" class="dash"/>
+  <path d="M234 317 L286 317" class="line"/>
+  <path d="M476 317 L528 317" class="line"/>
+  <path d="M698 317 L750 317" class="line"/>
+  <path d="M940 317 L992 317" class="line"/>
+  <path d="M1182 317 L1234 317" class="line"/>
+  <path d="M1344 349 L1344 405 L129 405 L129 465" class="line"/>
 
-  <path d="M1010 330 L1010 350 L149 350 L149 505" class="line"/>
-  <text x="1022" y="347" class="label">allowed</text>
-  <path d="M254 538 L274 538" class="line"/>
-  <path d="M506 538 L540 538 L540 485 L580 485" class="line"/>
-  <path d="M506 538 L540 538 L540 595 L580 595" class="line"/>
-  <path d="M760 485 L800 485 L800 538 L840 538" class="line"/>
-  <path d="M760 595 L800 595 L800 538 L840 538" class="line"/>
-  <path d="M1060 538 L1120 538" class="line"/>
-  <path d="M1215 571 L1215 650" class="line"/>
-  <path d="M1120 690 L1066 690" class="line"/>
-  <path d="M1215 716 L1215 760 L845 760 L845 436" class="dash"/>
-  <text x="1224" y="750" class="issueLabel">framework gap</text>
+  <path d="M214 497 L260 497" class="line"/>
+  <path d="M450 497 L496 497" class="line"/>
+  <path d="M676 497 L722 497" class="line"/>
+  <path d="M892 497 L902 497" class="line"/>
+  <path d="M1130 497 L1200 497" class="line"/>
+  <path d="M807 529 L807 570 L1300 570 L1300 945" class="dash"/>
+  <text x="822" y="560" class="issueLabel">loop / drift</text>
+  <path d="M1016 550 L1016 575 L139 575 L139 650" class="line"/>
 
-  <path d="M834 690 L790 690" class="line"/>
-  <text x="804" y="678" class="label">positive</text>
-  <path d="M610 693 L506 693" class="line"/>
-  <path d="M274 693 L230 693" class="line"/>
-  <text x="246" y="682" class="label">yes</text>
-  <path d="M390 744 L390 775 L129 775 L129 311" class="line"/>
-  <text x="402" y="770" class="label">no</text>
-
-  <path d="M950 740 L950 780 L725 780 L725 815" class="line"/>
-  <text x="960" y="770" class="label">negative / neutral</text>
-  <path d="M840 848 L900 848" class="line"/>
-  <path d="M1120 848 L1120 848 L1240 797" class="line"/>
-  <path d="M1010 815 L1010 436 L845 436" class="dash"/>
-  <text x="1020" y="790" class="issueLabel">framework gap</text>
-  <path d="M1240 899 L1240 925 L1130 925" class="line"/>
-  <text x="1254" y="920" class="label">no</text>
-  <path d="M1360 848 L1430 848 L1430 278 L1400 278" class="line"/>
-  <text x="1370" y="837" class="label">yes</text>
-  <path d="M1015 905 L1015 890 L149 890 L149 571" class="line"/>
+  <path d="M234 682 L260 682" class="line"/>
+  <path d="M488 682 L515 682 L515 632 L550 632" class="line"/>
+  <path d="M488 682 L515 682 L515 742 L550 742" class="line"/>
+  <path d="M730 632 L765 632 L765 682 L805 682" class="line"/>
+  <path d="M730 742 L765 742 L765 682 L805 682" class="line"/>
+  <path d="M1035 682 L1090 682" class="line"/>
+  <path d="M1185 714 L1185 805" class="line"/>
+  <path d="M1090 837 L1034 837" class="line"/>
+  <path d="M1185 869 L1185 920 L1300 920 L1300 945" class="dash"/>
+  <path d="M806 837 L745 837" class="line"/>
+  <text x="765" y="827" class="label">positive</text>
+  <path d="M920 887 L920 910 L690 910 L690 945" class="line"/>
+  <text x="932" y="910" class="label">negative / neutral</text>
+  <path d="M805 977 L870 977" class="line"/>
+  <path d="M1080 977 L1190 977" class="dash"/>
+  <path d="M975 945 C975 910 139 910 139 714" class="line"/>
 </svg>

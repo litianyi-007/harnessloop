@@ -21,6 +21,22 @@
 | Handoff stagnation | pass | `.harnessloop/goals/20260629-001-runtime-quality/rounds/0001/archive/0001-01-review-adversarial-closed.md` | Handoff closed. |
 | Cost/context runaway | pass | `.harnessloop/goals/20260629-001-runtime-quality/rounds/0001/evidence/runtime/test-output.md` | Raw output stayed in evidence file. |
 
+## Deterministic Signals
+
+| Signal | Current value | Previous value | Threshold | Status |
+| --- | --- | --- | --- | --- |
+| Recent feedback sequence | negative | none | no repeated neutral/negative without new evidence | pass |
+| Repeated next action count | 1 | 0 | max 2 identical actions | pass |
+| Scope-lock version | round 0001 | none | must change after failed action unless rollback | pass |
+| Goal contract version/hash | sample-v1 | sample-v1 | no silent change | pass |
+| Threshold version/hash | sample-v1 | sample-v1 | no silent change | warn |
+| Data contract version/hash | sample-v1 | sample-v1 | no silent change | pass |
+| Verification command set | `npm test -- --runInBand` | none | no silent change | pass |
+| Stale evidence count | 0 | 0 | 0 for acceptance | pass |
+| Open handoff age | 0 | n/a | project-defined | pass |
+| Main-session raw context risk | low | low | raw logs stay in evidence files | pass |
+| Delegation model/effort verified | unknown | unknown | required for high-risk delegation | warn |
+
 ## Local Repair Decision
 
 - Required repair: clarify runtime threshold wording before a second execution.
@@ -34,4 +50,3 @@
 - Reason: sample exposes that templates should make validation-drift checks explicit.
 - Issue path: `.harnessloop/meta/evolution-issues/0001-validation-drift-template-gap.md`
 - Redaction notes: artificial sample only.
-

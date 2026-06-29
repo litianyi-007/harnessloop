@@ -1,5 +1,5 @@
 interface:
-  display_name: "Harness Loop Issue"
+  display_name: "Harnessloop Issue"
   short_description: "Analyze Harnessloop evolution issues"
   default_prompt: "Use $harness-loop-issue to analyze a Harnessloop evolution issue."
 

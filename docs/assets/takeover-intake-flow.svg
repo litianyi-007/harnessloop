@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="420" viewBox="0 0 1100 420" role="img" aria-labelledby="title desc">
+  <title id="title">Harnessloop session takeover flow</title>
+  <desc id="desc">Existing session creates a transfer packet; Harnessloop runs intake gate; incomplete packets go to gap review; accepted packets create formal goals.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 2; rx: 8; }
+      .gate { fill: #fff7ed; stroke: #9a3412; stroke-width: 2; }
+      .ok { fill: #ecfdf5; stroke: #047857; stroke-width: 2; rx: 8; }
+      .warn { fill: #fefce8; stroke: #a16207; stroke-width: 2; rx: 8; }
+      .line { fill: none; stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .text { font: 18px Arial, sans-serif; fill: #0f172a; }
+      .small { font: 14px Arial, sans-serif; fill: #475569; }
+      .label { font: 14px Arial, sans-serif; fill: #334155; }
+    </style>
+  </defs>
+  <rect width="1100" height="420" fill="#ffffff"/>
+  <rect x="50" y="85" width="190" height="82" class="box"/>
+  <text x="145" y="118" text-anchor="middle" class="text">Existing session</text>
+  <text x="145" y="143" text-anchor="middle" class="small">no install required</text>
+  <rect x="310" y="85" width="210" height="82" class="box"/>
+  <text x="415" y="118" text-anchor="middle" class="text">Transfer packet</text>
+  <text x="415" y="143" text-anchor="middle" class="small">docs, artifacts, evidence</text>
+  <polygon points="650,65 770,126 650,187 530,126" class="gate"/>
+  <text x="650" y="121" text-anchor="middle" class="text">Intake gate</text>
+  <text x="650" y="146" text-anchor="middle" class="small">evidence-backed?</text>
+  <rect x="850" y="45" width="200" height="82" class="ok"/>
+  <text x="950" y="78" text-anchor="middle" class="text">Formal goal</text>
+  <text x="950" y="103" text-anchor="middle" class="small">create .harnessloop/goals</text>
+  <rect x="850" y="190" width="200" height="82" class="warn"/>
+  <text x="950" y="223" text-anchor="middle" class="text">Gap review</text>
+  <text x="950" y="248" text-anchor="middle" class="small">request missing facts</text>
+  <rect x="530" y="295" width="240" height="82" class="box"/>
+  <text x="650" y="328" text-anchor="middle" class="text">Intake-review round</text>
+  <text x="650" y="353" text-anchor="middle" class="small">verify before business execution</text>
+  <path d="M240 126 L310 126" class="line"/>
+  <path d="M520 126 L530 126" class="line"/>
+  <path d="M770 126 L850 86" class="line"/>
+  <text x="798" y="94" class="label">pass</text>
+  <path d="M728 166 L850 220" class="line"/>
+  <text x="790" y="203" class="label">fail</text>
+  <path d="M950 272 C950 348 790 336 770 336" class="line"/>
+  <path d="M650 187 L650 295" class="line"/>
+</svg>
+

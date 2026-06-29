@@ -1,18 +1,18 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harnessloop",
-  "description": "Local Harnessloop marketplace for goal-driven harness loops.",
+  "description": "Harnessloop marketplace for evidence-backed long-task takeover and execution.",
   "owner": {
-    "name": "Local developer"
+    "name": "Harnessloop"
   },
   "plugins": [
     {
       "name": "harnessloop",
       "source": "./plugins/harnessloop",
-      "description": "Goal-driven harness loops with evidence gates and file-system handoffs.",
+      "description": "Evidence-backed long-task takeover and execution for AI agents.",
       "version": "0.1.0",
       "author": {
-        "name": "Local developer"
+        "name": "Harnessloop"
       },
       "category": "productivity"
     }

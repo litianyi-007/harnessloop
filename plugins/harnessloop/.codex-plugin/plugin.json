@@ -1,18 +1,18 @@
 {
   "name": "harnessloop",
   "version": "0.1.0",
-  "description": "Goal-driven harness loops with evidence gates, self-audit, and file-system handoffs.",
+  "description": "Evidence-backed long-task takeover and execution for AI agents.",
   "author": {
-    "name": "Local developer"
+    "name": "Harnessloop"
   },
   "skills": "./skills/",
   "interface": {
     "displayName": "Harnessloop",
-    "shortDescription": "Run self-audited evidence loops.",
-    "longDescription": "Harnessloop installs a project-local protocol for long-term goal loops, data freshness controls, runtime validation, minimal-change scope locks, file-system handoffs, subagent delegation, adversarial review, self-audit, and upstream evolution issue handling.",
-    "developerName": "Local developer",
+    "shortDescription": "Evidence-backed long-task loops.",
+    "longDescription": "Harnessloop helps AI agents take over and continue long-running project tasks with transfer packets, file-based evidence, scope locks, validation gates, handoffs, and self-audit before continuation.",
+    "developerName": "Harnessloop",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use Harnessloop to run a goal-driven loop."
+    "defaultPrompt": "Use $harness-loop to set up or take over an evidence-backed long-running task."
   }
 }

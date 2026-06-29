@@ -4,6 +4,7 @@
 
 - Issue ID: HLI-0001
 - Issue class: validation-drift
+- Status: open
 - Source project: mock-project
 - Created by: main session
 - Created at: 2026-06-29
@@ -55,3 +56,10 @@ The review relied on a runtime threshold that was implied by the goal but not wr
 - Why this generalizes beyond this project: runtime validation drift can happen in any project using local tests, remote automation, CI, probes, canaries, or monitoring.
 - Risks of overfitting: avoid adding mock-project-specific runtime commands to the default template.
 
+## Resolution
+
+- Resolution status: not resolved
+- Upstream change: none yet
+- Backported to local policy: no
+- Backport path:
+- Follow-up required: analyze with `harness-loop-issue`

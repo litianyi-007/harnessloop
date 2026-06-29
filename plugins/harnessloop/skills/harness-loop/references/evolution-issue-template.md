@@ -7,6 +7,7 @@
 
 - Issue ID:
 - Issue class: dead-loop | contradiction | goal-drift | evidence-drift | validation-drift | handoff-stagnation | cost-context-runaway | documentation-gap | template-gap | skill-gap | packaging-gap
+- Status: open | analyzing | accepted | rejected | fixed | backported
 - Source project:
 - Created by:
 - Created at:
@@ -53,5 +54,12 @@
 - Proposed smallest change:
 - Why this generalizes beyond this project:
 - Risks of overfitting:
-```
 
+## Resolution
+
+- Resolution status:
+- Upstream change:
+- Backported to local policy: yes | no
+- Backport path:
+- Follow-up required:
+```

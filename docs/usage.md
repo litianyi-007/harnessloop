@@ -28,7 +28,7 @@ Create `.harnessloop/` in the target project and fill in:
 - `setup/cost-context-policy.md`: main-session role, subagent/swarm role, model/effort expectations, budget limits, and non-delegable decisions.
 - `state/environment.md`: detected environment and observed delegation behavior.
 - `state/control-contract.md`: when the loop can continue automatically, when it needs human confirmation, and when it must stop.
-- `state/evidence-index.md`: valid evidence paths, freshness, validation method, and citation requirements.
+- `state/evidence-index.md`: valid evidence paths, freshness, validation method, citation requirements, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
 - `meta/self-audit.md`: loop-health checks for dead loops, contradictions, drift, and runaway context.
 
 Do not invent missing data sources or credentials. If the loop needs Jenkins, GitHub, GitLab, an MCP server, a broker API, a research report skill, or an internal platform, describe it explicitly and verify access before relying on it.
@@ -49,6 +49,8 @@ Recommended flow:
 3. In the Harnessloop session, run an intake gate before creating a formal goal.
 4. If the packet is incomplete, write `gap-review.md` in the same intake directory and request only the missing information.
 5. If the packet passes, create a normal goal under `.harnessloop/goals/`.
+
+![Harnessloop takeover intake flow](assets/takeover-intake-flow.svg)
 
 Use this prompt in the source session:
 
@@ -233,6 +235,10 @@ A round cannot pass because it looks reasonable. Acceptance requires adversarial
 - Repository source and source-data evidence.
 
 Reviews must cite evidence paths. Missing, stale, drifting, or inconclusive evidence prevents acceptance.
+
+![Harnessloop evidence stack](assets/evidence-stack.svg)
+
+Evidence artifacts and acceptance are tracked separately. A runtime test failure can be a valid evidence artifact while still refuting the acceptance claim and producing negative feedback.
 
 ## Self Evolution
 
