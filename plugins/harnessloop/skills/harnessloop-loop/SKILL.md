@@ -18,6 +18,8 @@ Accept one of these inputs:
 
 The useful input should include goal/non-goal context, acceptance criteria, relevant file paths, available validation commands, external tool requirements, and any required human decisions. If these are missing, create the smallest setup, status, or gap request instead of inventing facts.
 
+If the user or contract requires a specific tool call, the input must identify the tool name, intended operation, required parameters, target resource, expected read/write scope, and fallback policy. If the named tool is unavailable, uninstalled, misspelled, ambiguous, or lacks the required capability, ask the user to confirm before substituting another tool or changing the operation.
+
 ## Processing Contract
 
 Process information through the Harnessloop control plane:
@@ -179,6 +181,8 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 Do not continue execution directly after a material evidence contract change. Route back through the continuation gate and self-audit when the change affects acceptance, freshness, validation method, or continuation authority.
 
 If evidence depends on reading from or writing to an external system and any access condition or required parameter is missing, do not infer it or probe blindly. Ask the user for the missing system, operation, endpoint/resource, account role, permission scope, credential reference, parameters, or failure handling before attempting access.
+
+If a task explicitly requires tool calling with a named tool and that tool is missing, not installed, not exposed in the current environment, or possibly the wrong tool, stop and ask the user for confirmation. Do not infer an alternative tool, alias, provider, command, or API from context.
 
 `harnessloop contract control` manages human intervention and continuation rules:
 
