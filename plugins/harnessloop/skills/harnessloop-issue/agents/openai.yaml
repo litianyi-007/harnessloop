@@ -1,7 +1,7 @@
 interface:
   display_name: "Harnessloop Issue"
-  short_description: "Analyze Harnessloop evolution issues"
-  default_prompt: "Use $harnessloop-issue to analyze a Harnessloop evolution issue."
+  short_description: "Record and analyze Harnessloop evolution issues"
+  default_prompt: "Use $harnessloop-issue record to capture a Harnessloop question or concern, analyze existing evolution issues, or propose the smallest framework fix."
 
 policy:
   allow_implicit_invocation: true

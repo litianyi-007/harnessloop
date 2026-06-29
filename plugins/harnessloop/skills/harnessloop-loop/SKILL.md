@@ -197,7 +197,7 @@ If a task explicitly requires tool calling with a named tool and that tool is mi
 - Define delegation boundaries.
 - Define round acceptance authority after failed review.
 
-`harnessloop issue evolve` writes a Harnessloop evolution issue when local self-audit finds a framework-level failure. Write the issue under `.harnessloop/meta/evolution-issues/` using the evolution issue template. Do not include secrets, credentials, raw private data, or unnecessary source dumps.
+`$harnessloop-issue record` writes a Harnessloop evolution issue when local self-audit, the user, or an external reviewer finds a framework-level question or failure. Write the issue under `.harnessloop/meta/evolution-issues/` using the evolution issue template. Do not include secrets, credentials, raw private data, or unnecessary source dumps. Treat `harnessloop issue evolve` as a natural-language alias for this record action.
 
 `harnessloop intake review` is a protocol action for reviewing `.harnessloop/intake/.../transfer-packet.md`. It writes `intake-gate.md`, writes `gap-review.md` when needed, and blocks business execution until the packet is evidence-backed.
 
