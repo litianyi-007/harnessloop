@@ -100,6 +100,20 @@ Out of scope for the first version:
 
 `setup/data-sources.md` is intentionally open-ended for now. During plugin setup, the user fills in the data-source range and content. The framework should not assume a specific data domain.
 
+Use the bundled initializer to create `.harnessloop/` skeleton files before filling project-specific facts:
+
+```bash
+python <skill-dir>/scripts/init_project.py --project <target-project>
+```
+
+For takeover:
+
+```bash
+python <skill-dir>/scripts/init_project.py --project <target-project> --intake <task-slug>
+```
+
+The initializer creates missing protocol files and skips existing files unless `--force` is explicitly used. It must not invent data sources, accounts, credentials, goals, validation results, or evidence.
+
 It should record:
 
 - Real static data sources.

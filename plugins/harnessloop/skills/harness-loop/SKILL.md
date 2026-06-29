@@ -13,6 +13,7 @@ For control-plane state, evidence indexing, environment self-check, and evals, u
 For loop self-audit and upstream evolution issues, use `references/self-audit-template.md` and `references/evolution-issue-template.md`.
 For existing-session takeover, use `references/transfer-packet-template.md`, `references/intake-gate-template.md`, `references/gap-review-template.md`, and `references/intake-review-round-template.md`.
 For goal and round files, use the matching `*-template.md` files in `references/`.
+For deterministic project initialization, run `scripts/init_project.py`.
 
 ## Core Contract
 
@@ -61,6 +62,20 @@ If `.harnessloop/` does not exist in the target project, propose creating:
     matrix.md
   goals/
 ```
+
+Prefer the bundled initializer instead of hand-creating files:
+
+```bash
+python <skill-dir>/scripts/init_project.py --project <target-project>
+```
+
+For an existing-session takeover, create the intake packet directory at initialization time:
+
+```bash
+python <skill-dir>/scripts/init_project.py --project <target-project> --intake <task-slug>
+```
+
+The initializer must not overwrite existing files unless explicitly run with `--force`. It creates protocol skeleton files only; it must not invent project data sources, accounts, credentials, goals, or validation results.
 
 During setup, ask the user to fill in data-source connection requirements. Do not invent the data-source scope or content.
 

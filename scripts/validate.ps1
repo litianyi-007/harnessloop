@@ -35,6 +35,47 @@ function Invoke-ClaudePluginValidate {
   }
 }
 
+function Invoke-HarnessloopInitSmoke {
+  $InitScript = Join-Path $PluginRoot "skills/harness-loop/scripts/init_project.py"
+  if (-not (Test-Path -LiteralPath $InitScript)) {
+    throw "Missing Harnessloop init script: $InitScript"
+  }
+
+  $SmokeRoot = Join-Path $RepoRoot (Join-Path ".tmp" ("init-smoke-" + [guid]::NewGuid().ToString("N")))
+  New-Item -ItemType Directory -Path $SmokeRoot -Force | Out-Null
+
+  $Output = & python $InitScript --project $SmokeRoot --intake smoke-task --json 2>&1
+  $ExitCode = $LASTEXITCODE
+  if ($ExitCode -ne 0) {
+    $Output | ForEach-Object { Write-Host $_ }
+    throw "Harnessloop init smoke test failed."
+  }
+
+  $ExpectedFiles = @(
+    ".harnessloop/setup/data-sources.md",
+    ".harnessloop/setup/cost-context-policy.md",
+    ".harnessloop/state/current.md",
+    ".harnessloop/state/environment.md",
+    ".harnessloop/state/control-contract.md",
+    ".harnessloop/state/evidence-index.md",
+    ".harnessloop/state/self-check.md",
+    ".harnessloop/meta/self-audit.md",
+    ".harnessloop/evals/matrix.md"
+  )
+
+  foreach ($RelativePath in $ExpectedFiles) {
+    $Path = Join-Path $SmokeRoot $RelativePath
+    if (-not (Test-Path -LiteralPath $Path)) {
+      throw "Harnessloop init smoke test missing file: $Path"
+    }
+  }
+
+  $TransferPackets = Get-ChildItem -LiteralPath (Join-Path $SmokeRoot ".harnessloop/intake") -Recurse -Filter "transfer-packet.md"
+  if (@($TransferPackets).Count -ne 1) {
+    throw "Harnessloop init smoke test expected one transfer-packet.md, found $(@($TransferPackets).Count)."
+  }
+}
+
 $CodexManifestPath = Join-Path $PluginRoot ".codex-plugin/plugin.json"
 $CodexMarketplacePath = Join-Path $RepoRoot ".agents/plugins/marketplace.json"
 $ClaudeManifestPath = Join-Path $PluginRoot ".claude-plugin/plugin.json"
@@ -72,6 +113,7 @@ if ($ClaudeEntry.source -ne "./plugins/harnessloop") {
   throw "Claude marketplace entry must point to ./plugins/harnessloop."
 }
 
+Invoke-HarnessloopInitSmoke
 Invoke-ClaudePluginValidate $RepoRoot
 Invoke-ClaudePluginValidate $PluginRoot
 

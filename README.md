@@ -83,6 +83,18 @@ After installing, ask the agent:
 Use $harness-loop to set up Harnessloop for this project and start a goal-driven loop.
 ```
 
+For deterministic initialization from this repository:
+
+```powershell
+.\scripts\init-project.ps1 -Project C:\path\to\target-project
+```
+
+macOS/Linux:
+
+```bash
+./scripts/init-project.sh --project /path/to/target-project
+```
+
 The first setup creates or fills:
 
 ```text
@@ -107,6 +119,10 @@ Then define a goal, create decomposable thresholds, lock the first round scope, 
 ## Take Over An Existing Agent Session
 
 The source session does not need Harnessloop installed. Ask it to generate a `Harnessloop Transfer Packet`, then save the result:
+
+```powershell
+.\scripts\init-project.ps1 -Project C:\path\to\target-project -Intake task-slug
+```
 
 ```text
 .harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md

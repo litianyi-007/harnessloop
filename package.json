@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "validate": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/validate.ps1",
+    "init:project": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/init-project.ps1",
     "install:codex": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/install-codex.ps1",
     "install:claude": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/install-claude.ps1"
   }

@@ -22,7 +22,27 @@ The plugin exposes the `harness-loop` skill for running project loops and the `h
 
 ## Project Setup
 
-Create `.harnessloop/` in the target project and fill in:
+Initialize `.harnessloop/` in the target project, then fill in project-specific details.
+
+From this repository during development:
+
+```powershell
+.\scripts\init-project.ps1 -Project C:\path\to\target-project
+```
+
+macOS/Linux:
+
+```bash
+./scripts/init-project.sh --project /path/to/target-project
+```
+
+When the plugin is installed, ask the agent:
+
+```text
+Use $harness-loop to initialize Harnessloop in this project.
+```
+
+The initializer creates:
 
 - `setup/data-sources.md`: real static data, dynamic/generated data, external tools, access requirements, freshness rules, drift risks, and validation methods.
 - `setup/cost-context-policy.md`: main-session role, subagent/swarm role, model/effort expectations, budget limits, and non-delegable decisions.
@@ -31,7 +51,7 @@ Create `.harnessloop/` in the target project and fill in:
 - `state/evidence-index.md`: valid evidence paths, freshness, validation method, citation requirements, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
 - `meta/self-audit.md`: loop-health checks for dead loops, contradictions, drift, and runaway context.
 
-Do not invent missing data sources or credentials. If the loop needs Jenkins, GitHub, GitLab, an MCP server, a broker API, a research report skill, or an internal platform, describe it explicitly and verify access before relying on it.
+The initializer does not fill real project facts. Do not invent missing data sources or credentials. If the loop needs Jenkins, GitHub, GitLab, an MCP server, a broker API, a research report skill, or an internal platform, describe it explicitly and verify access before relying on it.
 
 ## Taking Over An Existing Session
 
@@ -40,15 +60,21 @@ Harnessloop can take over a long-running task that started in another agent sess
 Recommended flow:
 
 1. Ask the source session to generate a `Harnessloop Transfer Packet`.
-2. Save the output in the target project:
+2. Create the intake directory:
+
+```powershell
+.\scripts\init-project.ps1 -Project C:\path\to\target-project -Intake task-slug
+```
+
+3. Save the source session output in the target project:
 
 ```text
 .harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md
 ```
 
-3. In the Harnessloop session, run an intake gate before creating a formal goal.
-4. If the packet is incomplete, write `gap-review.md` in the same intake directory and request only the missing information.
-5. If the packet passes, create a normal goal under `.harnessloop/goals/`.
+4. In the Harnessloop session, run an intake gate before creating a formal goal.
+5. If the packet is incomplete, write `gap-review.md` in the same intake directory and request only the missing information.
+6. If the packet passes, create a normal goal under `.harnessloop/goals/`.
 
 ![Harnessloop takeover intake flow](assets/takeover-intake-flow.svg)
 
