@@ -1,0 +1,32 @@
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_b87599ea250de3 4
+plugins/harnessloop/skills/harnessloop-connectivity/SKILL.md
+  s_cb1f5eceeed9c6::t_b87599ea250de3 27-28,37-38,58,75
+plugins/harnessloop/skills/harnessloop-evidence/SKILL.md
+  s_cb1f5eceeed9c6::t_b87599ea250de3 36,55
+  s_cb1f5eceeed9c6::t_cee808f5aa2007 56
+package.json
+  s_cb1f5eceeed9c6::t_b87599ea250de3 3
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_cb1f5eceeed9c6::t_b87599ea250de3 187
+plugins/harnessloop/skills/harnessloop-channels/SKILL.md
+  s_cb1f5eceeed9c6::t_b87599ea250de3 29,58,69
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_b87599ea250de3 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "e2d1d51abe4141eb5fd492cf956e8d56a3c9cbb7",
+  "prompts": {},
+  "sessions": {
+    "s_cb1f5eceeed9c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f11e9-aeba-7b53-800b-92e997ec5ee9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
