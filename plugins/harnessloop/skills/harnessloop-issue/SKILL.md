@@ -1,6 +1,6 @@
 ---
-name: harness-loop-issue
-description: "Use when analyzing a Harnessloop evolution issue produced by an installed project: classify dead loops, self-contradictions, goal drift, evidence drift, validation drift, handoff stagnation, cost/context runaway, documentation gaps, template gaps, skill gaps, or plugin packaging gaps; extract reusable protocol improvements; and propose the smallest upstream change without copying project-private context."
+name: harnessloop-issue
+description: "Use when the user references harnessloop:issue or asks to analyze a Harnessloop evolution issue produced by an installed project: classify dead loops, self-contradictions, goal drift, evidence drift, validation drift, handoff stagnation, cost/context runaway, documentation gaps, template gaps, skill gaps, or plugin packaging gaps; extract reusable protocol improvements; and propose the smallest upstream change without copying project-private context."
 ---
 
 # Harnessloop Issue
@@ -11,7 +11,9 @@ The goal is to improve Harnessloop itself. Do not solve the source project's bus
 
 ## Input Contract
 
-Require an issue report that includes:
+Accept an issue report path, pasted redacted issue text, or a request such as `harnessloop:issue .harnessloop/meta/evolution-issues/0001-example.md`.
+
+Require the issue content to include:
 
 - Summary and issue class.
 - Redaction boundary.
@@ -23,6 +25,14 @@ Require an issue report that includes:
 
 If the report contains secrets, credentials, raw private data, customer data, or unnecessary source dumps, stop and ask for a redacted version or create a redaction plan before analyzing.
 
+## Processing Contract
+
+Read only the issue and cited Harnessloop files needed to reconstruct the protocol failure. Classify the failure, separate local-project causes from reusable framework gaps, and choose the smallest upstream target: docs, template, main skill, issue skill, example, validation script, or packaging metadata. Do not import broad project context.
+
+## Output Contract
+
+Return a structured analysis with classification, evidence used, root protocol gap, recommended upstream change, smallest patch outline, overfitting risk, residual project action, and resolution/backport guidance. Do not modify repository files unless the user asks for the proposed upstream patch.
+
 ## Analysis Workflow
 
 1. Classify the issue:
@@ -30,7 +40,7 @@ If the report contains secrets, credentials, raw private data, customer data, or
    - `documentation-gap`: users lacked product-level guidance.
    - `template-gap`: a required field or state shape is missing.
    - `workflow-gap`: the protocol allowed an unsafe or ambiguous next action.
-   - `skill-gap`: `harness-loop` instructions were unclear, too broad, or missing.
+   - `skill-gap`: `harnessloop-loop` instructions were unclear, too broad, or missing.
    - `issue-skill-gap`: this issue-processing skill lacks needed guidance.
    - `packaging-gap`: marketplace, install, or plugin metadata created the problem.
 
@@ -43,7 +53,7 @@ If the report contains secrets, credentials, raw private data, customer data, or
    - If the issue is purely local, recommend no upstream change and explain the missing local repair.
    - If the issue generalizes, identify the smallest useful change.
    - Prefer docs or template changes before expanding skill behavior.
-   - Update the main `harness-loop` skill only when the agent execution protocol itself is unclear or unsafe.
+   - Update the main `harnessloop-loop` skill only when the agent execution protocol itself is unclear or unsafe.
 
 4. Produce a concise proposal:
    - Classification.

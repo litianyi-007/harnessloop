@@ -1,11 +1,36 @@
 ---
-name: harness-loop
+name: harnessloop-loop
 description: "Use when running or taking over a long-running goal-driven task in an installed project: create or import Harnessloop state, run intake gates for existing agent sessions, decompose goals, define evidence and validation contracts, enforce scope-locks, manage file-system handoffs, verify with real static/dynamic/runtime/source evidence, classify feedback, self-audit for drift or dead loops, and continue only through evidence-backed control gates."
 ---
 
 # Harnessloop
 
 Use this skill as a project-local operating protocol. Do not treat it as a generic engineering checklist.
+
+## Input Contract
+
+Accept one of these inputs:
+
+- A user goal for a long-running task, including target project path when it is not the current working directory.
+- A command-like request such as `harnessloop status`, `harnessloop continue`, `harnessloop:evidence`, `harnessloop contract control`, or `harnessloop issue evolve`.
+- Existing `.harnessloop/` state files that define the active goal, round, evidence, handoffs, and control state.
+- A takeover request only after `harnessloop-intake` has produced or accepted the intake packet, gate, and intake-review boundary.
+
+The useful input should include goal/non-goal context, acceptance criteria, relevant file paths, available validation commands, external tool requirements, and any required human decisions. If these are missing, create the smallest setup, status, or gap request instead of inventing facts.
+
+## Processing Contract
+
+Process information through the Harnessloop control plane:
+
+1. Read project-local `.harnessloop/` files before acting.
+2. Check goal, evidence, control, environment, and self-audit state.
+3. Create or update only the protocol files required by the requested action.
+4. Execute business work only after scope-lock, evidence contract, and continuation rules allow it.
+5. Cite file paths, commands, logs, tests, URLs, or other evidence for every accepted claim.
+
+## Output Contract
+
+Produce file-backed loop state, not just chat summaries. Depending on the request, write or update goal files, thresholds, data contracts, scope-locks, handoffs, evidence, reviews, decisions, state indexes, or evolution issues. End with a concise status summary that names changed files, evidence used, feedback class if known, and the next allowed action or blocking human decision.
 
 For handoff formatting, use `references/handoff-template.md`.
 For goal decomposition, feedback, and cost/context policy, use the matching templates in `references/`.
@@ -143,11 +168,15 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 - If self-audit fails, do not execute unless the next action repairs the audit failure, creates an explicit human-confirmed contract revision, or writes an evolution issue.
 - If the active work came from `.harnessloop/intake/`, do not execute business work until `intake-gate.md` passes and an `intake-review` round is accepted.
 
-`harnessloop contract evidence add/check/revise` manages acceptable evidence:
+`harnessloop:evidence` or `$harnessloop-evidence` manages acceptable evidence during a loop:
 
 - `add`: register evidence type, path, freshness, validation method, and applicable goal or round.
 - `check`: verify evidence exists, is fresh enough, and can be cited by review.
 - `revise`: change acceptance criteria; require human confirmation.
+- `reject`: record invalid, stale, unsupported, too-sensitive, or inapplicable evidence.
+- `diff`: summarize how the evidence contract changed and whether continuation is allowed.
+
+Do not continue execution directly after a material evidence contract change. Route back through the continuation gate and self-audit when the change affects acceptance, freshness, validation method, or continuation authority.
 
 `harnessloop contract control` manages human intervention and continuation rules:
 

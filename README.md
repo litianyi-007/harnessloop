@@ -75,12 +75,12 @@ claude plugin install harnessloop@harnessloop --scope user
 
 ## Start Your First Loop
 
-Harnessloop is currently a skill/protocol, not a standalone shell CLI. Commands such as `harnessloop status` and `harnessloop continue` describe protocol modes that an agent should execute through `$harness-loop`.
+Harnessloop is currently a skill/protocol, not a standalone shell CLI. Commands such as `harnessloop status` and `harnessloop continue` describe protocol modes that an agent should execute through `$harnessloop-loop`.
 
 After installing, ask the agent:
 
 ```text
-Use $harness-loop to set up Harnessloop for this project and start a goal-driven loop.
+harnessloop:init
 ```
 
 For deterministic initialization from this repository:
@@ -114,7 +114,7 @@ The first setup creates or fills:
   goals/
 ```
 
-Then define a goal, create decomposable thresholds, lock the first round scope, write evidence, run adversarial review, classify feedback, and continue only through the control gate.
+Then use `$harnessloop-loop` to define a goal, create decomposable thresholds, lock the first round scope, write evidence, run adversarial review, classify feedback, and continue only through the control gate.
 
 ## Take Over An Existing Agent Session
 
@@ -129,6 +129,10 @@ The source session does not need Harnessloop installed. Ask it to generate a `Ha
 ```
 
 Harnessloop runs an intake gate before creating a formal goal:
+
+```text
+harnessloop:intake
+```
 
 ![Harnessloop takeover intake flow](docs/assets/takeover-intake-flow.svg)
 
@@ -162,8 +166,11 @@ Evidence classes:
 
 ## Skills
 
-- `$harness-loop`: run or take over a goal-driven Harnessloop in an installed project.
-- `$harness-loop-issue`: analyze a Harnessloop evolution issue and propose the smallest upstream improvement.
+- `$harnessloop-init`: initialize `.harnessloop/` project files when you ask for `harnessloop:init`.
+- `$harnessloop-intake`: review transfer packets and run intake gates when you ask for `harnessloop:intake`.
+- `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts when you ask for `harnessloop:evidence`.
+- `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
+- `$harnessloop-issue`: analyze a Harnessloop evolution issue when you ask for `harnessloop:issue`.
 
 ## Repository Map
 
@@ -187,8 +194,10 @@ The validation script checks marketplace manifests and runs Claude Code strict v
 Validate skills directly:
 
 ```powershell
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harness-loop
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harness-loop-issue
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-intake
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-issue
 ```
 
 ## Current Limits

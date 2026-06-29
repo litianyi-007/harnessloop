@@ -35,8 +35,35 @@ function Invoke-ClaudePluginValidate {
   }
 }
 
+function Resolve-Python3 {
+  $Candidates = @(
+    @("py", "-3"),
+    @("python3"),
+    @("python")
+  )
+
+  foreach ($Candidate in $Candidates) {
+    $Command = $Candidate[0]
+    $CommandArgs = @($Candidate | Select-Object -Skip 1)
+    $Resolved = (Get-Command $Command -ErrorAction SilentlyContinue).Source
+    if (-not $Resolved) {
+      continue
+    }
+
+    $VersionOutput = & $Resolved @CommandArgs --version 2>&1
+    if ($LASTEXITCODE -eq 0 -and (($VersionOutput -join " ") -match "Python 3")) {
+      return @{
+        Command = $Resolved
+        Args = $CommandArgs
+      }
+    }
+  }
+
+  throw "Python 3 not found. Install Python 3 or ensure py -3, python3, or python points to Python 3."
+}
+
 function Invoke-HarnessloopInitSmoke {
-  $InitScript = Join-Path $PluginRoot "skills/harness-loop/scripts/init_project.py"
+  $InitScript = Join-Path $PluginRoot "skills/harnessloop-loop/scripts/init_project.py"
   if (-not (Test-Path -LiteralPath $InitScript)) {
     throw "Missing Harnessloop init script: $InitScript"
   }
@@ -44,7 +71,8 @@ function Invoke-HarnessloopInitSmoke {
   $SmokeRoot = Join-Path $RepoRoot (Join-Path ".tmp" ("init-smoke-" + [guid]::NewGuid().ToString("N")))
   New-Item -ItemType Directory -Path $SmokeRoot -Force | Out-Null
 
-  $Output = & python $InitScript --project $SmokeRoot --intake smoke-task --json 2>&1
+  $Python = Resolve-Python3
+  $Output = & $Python.Command @($Python.Args) $InitScript --project $SmokeRoot --intake smoke-task --json 2>&1
   $ExitCode = $LASTEXITCODE
   if ($ExitCode -ne 0) {
     $Output | ForEach-Object { Write-Host $_ }

@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes the `harness-loop` skill for running project loops and the `harness-loop-issue` skill for analyzing Harnessloop evolution issues.
+The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
 
 ## Project Setup
 
@@ -39,7 +39,7 @@ macOS/Linux:
 When the plugin is installed, ask the agent:
 
 ```text
-Use $harness-loop to initialize Harnessloop in this project.
+harnessloop:init
 ```
 
 The initializer creates:
@@ -72,7 +72,7 @@ Recommended flow:
 .harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md
 ```
 
-4. In the Harnessloop session, run an intake gate before creating a formal goal.
+4. In the Harnessloop session, ask for `harnessloop:intake` to run an intake gate before creating a formal goal.
 5. If the packet is incomplete, write `gap-review.md` in the same intake directory and request only the missing information.
 6. If the packet passes, create a normal goal under `.harnessloop/goals/`.
 
@@ -249,6 +249,8 @@ Each round must have one `scope-lock.md`. Default to the smallest useful change.
 
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 
+Use `harnessloop:evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
+
 ## Validation
 
 A round cannot pass because it looks reasonable. Acceptance requires adversarial review against:
@@ -280,7 +282,7 @@ Harnessloop records its own protocol failures in `.harnessloop/meta/self-audit.m
 
 Try local repair first: refresh evidence, narrow scope, add missing runtime validation, repair a handoff, roll back a wrong action, or revise a contract with human confirmation.
 
-When the failure appears to be a Harnessloop framework gap, write an evolution issue under `.harnessloop/meta/evolution-issues/` and analyze it with `harness-loop-issue`.
+When the failure appears to be a Harnessloop framework gap, write an evolution issue under `.harnessloop/meta/evolution-issues/` and analyze it with `harnessloop:issue`.
 
 ## Example
 

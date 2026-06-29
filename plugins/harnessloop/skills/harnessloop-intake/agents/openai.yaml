@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Intake"
+  short_description: "Review transfer packets safely"
+  default_prompt: "Use $harnessloop-intake when the user says harnessloop:intake to take over an existing agent session."
+
+policy:
+  allow_implicit_invocation: true

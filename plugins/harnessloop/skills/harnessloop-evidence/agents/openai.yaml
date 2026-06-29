@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Evidence"
+  short_description: "Manage Harnessloop evidence contracts"
+  default_prompt: "Use $harnessloop-evidence when the user says harnessloop:evidence to add, check, or revise evidence contracts."
+
+policy:
+  allow_implicit_invocation: true

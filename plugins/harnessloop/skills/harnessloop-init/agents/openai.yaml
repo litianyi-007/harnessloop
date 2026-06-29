@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Init"
+  short_description: "Initialize Harnessloop project files"
+  default_prompt: "Use $harnessloop-init when the user says harnessloop:init to initialize Harnessloop in this project."
+
+policy:
+  allow_implicit_invocation: true

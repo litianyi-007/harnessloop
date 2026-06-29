@@ -19,7 +19,7 @@ flowchart TD
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
   I -->|"blocked"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
-  EI --> ES["harness-loop-issue<br/>upstream analysis"]
+  EI --> ES["harnessloop-issue<br/>upstream analysis"]
   J --> K{"Task type"}
 
   K -->|"core decision"| M["Main session"]

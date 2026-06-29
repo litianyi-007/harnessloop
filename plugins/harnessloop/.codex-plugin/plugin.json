@@ -1,6 +1,6 @@
 {
   "name": "harnessloop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Evidence-backed long-task takeover and execution for AI agents.",
   "author": {
     "name": "Harnessloop"
@@ -13,6 +13,6 @@
     "developerName": "Harnessloop",
     "category": "Productivity",
     "capabilities": [],
-    "defaultPrompt": "Use $harness-loop to set up or take over an evidence-backed long-running task."
+    "defaultPrompt": "Use $harnessloop-init for harnessloop:init, $harnessloop-intake for harnessloop:intake, $harnessloop-evidence for harnessloop:evidence, or $harnessloop-loop for evidence-backed long-running tasks."
   }
 }

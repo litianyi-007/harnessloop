@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In scope for the first version:
 
-- A minimal installable skill named `harness-loop`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-evidence`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -174,11 +174,13 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Self-audit failure prevents execution unless the next action is a local repair, an explicit human-confirmed contract revision, or an evolution issue write-up.
 - Imported work from `.harnessloop/intake/` cannot continue business execution until `intake-gate.md` passes and an `intake-review` round is accepted.
 
-`harnessloop contract evidence add/check/revise` manages acceptable evidence:
+`harnessloop:evidence` manages acceptable evidence through the `harnessloop-evidence` skill:
 
 - `add`: register evidence type, path, freshness, validation method, and applicable goal or round.
 - `check`: verify evidence exists, is fresh enough, and can be cited.
 - `revise`: change acceptance criteria; require human confirmation.
+- `reject`: record invalid, stale, unsupported, too-sensitive, or inapplicable evidence.
+- `diff`: summarize the contract change and continuation effect.
 
 `harnessloop contract control` defines continuation authority:
 
@@ -188,7 +190,7 @@ Harnessloop should support these command semantics even before a CLI exists.
 - Delegation boundaries.
 - Acceptance authority after failed review.
 
-`harnessloop issue evolve` is a protocol action for creating a Harnessloop evolution issue when self-audit finds a framework-level failure. It writes to `.harnessloop/meta/evolution-issues/` and should be handled upstream with the `harness-loop-issue` skill.
+`harnessloop issue evolve` is a protocol action for creating a Harnessloop evolution issue when self-audit finds a framework-level failure. It writes to `.harnessloop/meta/evolution-issues/` and should be handled upstream with the `harnessloop-issue` skill.
 
 `harnessloop intake review` is a protocol action for reviewing a transfer packet. It writes `intake-gate.md`, writes `gap-review.md` when needed, maps accepted evidence into the state index, and blocks business execution until the packet is evidence-backed.
 
@@ -418,14 +420,14 @@ If negative or neutral feedback repeats without new evidence, scope narrowing, r
 
 ## Harnessloop Issue Handling
 
-The plugin includes a second skill, `harness-loop-issue`, for upstream improvement work. Use it when the input is a Harnessloop evolution issue produced by an installed project.
+The plugin includes a second skill, `harnessloop-issue`, for upstream improvement work. Use it when the input is a Harnessloop evolution issue produced by an installed project.
 
 The issue-handling skill should:
 
 - Classify whether the issue is a local project problem, a documentation gap, a template gap, a workflow gap, a skill instruction gap, or a marketplace/plugin packaging gap.
 - Extract reusable failure patterns without copying domain-specific details.
 - Identify the smallest framework change that would prevent recurrence.
-- Recommend whether to update docs, templates, the main `harness-loop` skill, examples, or validation scripts.
+- Recommend whether to update docs, templates, the main `harnessloop-loop` skill, examples, or validation scripts.
 - Reject changes that would make Harnessloop domain-specific too early.
 
 ## Cost And Context Rule
@@ -485,7 +487,7 @@ flowchart TD
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
   I -->|"blocked"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
-  EI --> ES["harness-loop-issue<br/>upstream analysis"]
+  EI --> ES["harnessloop-issue<br/>upstream analysis"]
   J --> K{"Task type"}
 
   K -->|"core decision"| M["Main session"]
@@ -519,7 +521,7 @@ flowchart TD
 The installable skill draft is at:
 
 ```text
-plugins/harnessloop/skills/harness-loop/SKILL.md
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
 ```
 
 It intentionally contains only the core execution protocol. Data connector setup, automation scripts, and concrete source schemas should be added only after the setup questions are clearer.

@@ -144,7 +144,7 @@
 
   <rect x="1190" y="945" width="220" height="64" class="issue"/>
   <text x="1300" y="972" text-anchor="middle" class="text">Evolution issue</text>
-  <text x="1300" y="993" text-anchor="middle" class="small">harness-loop-issue</text>
+  <text x="1300" y="993" text-anchor="middle" class="small">harnessloop-issue</text>
 
   <path d="M234 137 L286 137" class="line"/>
   <path d="M496 137 L512 137" class="line"/>

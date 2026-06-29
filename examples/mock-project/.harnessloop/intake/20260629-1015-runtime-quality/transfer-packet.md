@@ -48,7 +48,7 @@
 | --- | --- | --- | --- |
 | `.harnessloop/goals/20260629-001-runtime-quality/rounds/0001/evidence/runtime/test-output.md` | runtime output | valid | cite as failed runtime evidence |
 | `.harnessloop/meta/self-audit.md` | self-audit | valid | use to block business execution until threshold repair |
-| `.harnessloop/meta/evolution-issues/0001-validation-drift-template-gap.md` | evolution issue | valid | analyze with `harness-loop-issue` |
+| `.harnessloop/meta/evolution-issues/0001-validation-drift-template-gap.md` | evolution issue | valid | analyze with `harnessloop-issue` |
 
 ## 7. Evidence State
 
