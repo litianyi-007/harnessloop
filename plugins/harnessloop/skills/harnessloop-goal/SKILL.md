@@ -9,7 +9,7 @@ Manage Harnessloop goals as contracts. This skill edits or reports goal structur
 
 ## Input Contract
 
-Accept requests such as `harnessloop:goal status`, `harnessloop:goal propose`, `harnessloop:goal negotiate`, `harnessloop:goal update`, `harnessloop:goal split`, `harnessloop:goal reprioritize`, `harnessloop:goal archive`, `harnessloop:goal cancel`, `harnessloop:goal supersede`, or `harnessloop:goal deletion-impact`.
+Accept explicit skill invocations such as `$harnessloop-goal status`, `$harnessloop-goal propose`, `$harnessloop-goal negotiate`, `$harnessloop-goal update`, `$harnessloop-goal split`, `$harnessloop-goal reprioritize`, `$harnessloop-goal archive`, `$harnessloop-goal cancel`, `$harnessloop-goal supersede`, or `$harnessloop-goal deletion-impact`. Treat `harnessloop:goal` as a natural-language alias only; `$harnessloop:goal` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -21,7 +21,7 @@ Useful input includes:
 - `change-reason`: why the goal contract or breakdown is changing.
 - `human-confirmation`: required for material goal contract changes, cancellation, supersession, deletion impact, or current-round impact.
 
-If `.harnessloop/` is missing, stop and suggest `harnessloop:init`. If intake-created work has not passed intake review, route to `$harnessloop-intake` before goal creation or mutation.
+If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If intake-created work has not passed intake review, route to `$harnessloop-intake` before goal creation or mutation.
 
 ## Processing Contract
 
@@ -71,17 +71,17 @@ When files are changed, update the smallest relevant set: `goal.md`, `goal-break
 View current goal:
 
 ```text
-harnessloop:goal status
+$harnessloop-goal status
 ```
 
 Negotiate scope:
 
 ```text
-harnessloop:goal negotiate this is too broad; split API migration from UI cleanup
+$harnessloop-goal negotiate this is too broad; split API migration from UI cleanup
 ```
 
 Cancel a goal:
 
 ```text
-harnessloop:goal cancel active goal; human confirmed because the external dependency was removed
+$harnessloop-goal cancel active goal; human confirmed because the external dependency was removed
 ```

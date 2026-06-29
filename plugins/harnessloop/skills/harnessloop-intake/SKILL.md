@@ -14,13 +14,13 @@ Accept any of these inputs:
 - A target project path and task slug for creating an intake directory.
 - A path to `.harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/transfer-packet.md`.
 - A pasted `Harnessloop Transfer Packet`.
-- A request such as `harnessloop:intake --project C:\repo --intake task-slug`.
+- An explicit skill invocation such as `$harnessloop-intake --project C:\repo --intake task-slug`. Treat `harnessloop:intake` as a natural-language alias only; `$harnessloop:intake` is not a valid skill invocation.
 
 The transfer packet should contain task identity, goal contract, progress state, change state, documentation inventory, process artifacts, evidence state, external tool and access contract, credential requirements without secret values, decision log, risks/blockers, next handoff recommendation, and human questions.
 
 ## Processing Contract
 
-1. Ensure `.harnessloop/` exists. If not, ask to run `harnessloop:init` or run the initializer with an intake slug when the user requested setup.
+1. Ensure `.harnessloop/` exists. If not, ask to run `$harnessloop-init` or run the initializer with an intake slug when the user requested setup.
 2. Place or locate `transfer-packet.md` under `.harnessloop/intake/YYYYMMDD-HHMM-<task-slug>/`.
 3. Review the packet against `harnessloop-loop/references/intake-gate-template.md`.
 4. Check that claims are evidence-backed with paths, commands, test output, logs, URLs, or explicit unsupported-hypothesis labels.

@@ -12,7 +12,8 @@ Use this skill as a project-local operating protocol. Do not treat it as a gener
 Accept one of these inputs:
 
 - A user goal for a long-running task, including target project path when it is not the current working directory.
-- A command-like request such as `harnessloop:goal`, `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop:channels`, `harnessloop:connectivity`, `harnessloop contract control`, or `harnessloop issue evolve`.
+- An explicit skill invocation such as `$harnessloop-loop`, `$harnessloop-goal`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-evidence`, `$harnessloop-channels`, or `$harnessloop-connectivity`.
+- Natural-language aliases such as `harnessloop:goal`, `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop:channels`, `harnessloop:connectivity`, `harnessloop contract control`, or `harnessloop issue evolve`. Skill names cannot contain `:`, so `$harnessloop:...` is not valid.
 - Existing `.harnessloop/` state files that define the active goal, round, evidence, handoffs, and control state.
 - A takeover request only after `harnessloop-intake` has produced or accepted the intake packet, gate, and intake-review boundary.
 
@@ -153,13 +154,13 @@ If the gate passes, the first round should normally be an `intake-review` round 
 
 Treat these as protocol semantics. Do not assume a CLI exists unless the project provides one.
 
-`harnessloop:status` or `$harnessloop-status` is the preferred read-only status entry:
+`$harnessloop-status` is the preferred read-only status entry. Treat `harnessloop:status` as a natural-language alias:
 
 - Read `.harnessloop/state/current.md` plus source files referenced by it.
 - Report active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason.
 - Do not create, modify, archive, or continue any task.
 
-`harnessloop:continue` or `$harnessloop-continue` must run a continuation gate before any execution:
+`$harnessloop-continue` must run a continuation gate before any execution. Treat `harnessloop:continue` as a natural-language alias:
 
 - Read current state, control contract, environment self-check, evidence index, active goal, active round, open handoffs, and latest decision.
 - Continue only through an allowed next action.
@@ -170,7 +171,7 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 - If self-audit fails, do not execute unless the next action repairs the audit failure, creates an explicit human-confirmed contract revision, or writes an evolution issue.
 - If the active work came from `.harnessloop/intake/`, do not execute business work until `intake-gate.md` passes and an `intake-review` round is accepted.
 
-`harnessloop:evidence` or `$harnessloop-evidence` manages acceptable evidence during a loop:
+`$harnessloop-evidence` manages acceptable evidence during a loop. Treat `harnessloop:evidence` as a natural-language alias:
 
 - `add`: register evidence type, path, freshness, validation method, and applicable goal or round.
 - `check`: verify evidence exists, is fresh enough, and can be cited by review.
@@ -184,9 +185,9 @@ If evidence depends on reading from or writing to an external system and any acc
 
 If a task explicitly requires tool calling with a named tool and that tool is missing, not installed, not exposed in the current environment, or possibly the wrong tool, stop and ask the user for confirmation. Do not infer an alternative tool, alias, provider, command, or API from context.
 
-`harnessloop:channels` or `$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `harnessloop:connectivity` or `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred. If connectivity self-check returns `fail`, `blocked`, `skipped`, or `needs-user-confirmation` because required information is missing or invalid, ask the user for the exact missing information before continuing the loop.
+`$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred. Treat `harnessloop:channels` and `harnessloop:connectivity` as natural-language aliases. If connectivity self-check returns `fail`, `blocked`, `skipped`, or `needs-user-confirmation` because required information is missing or invalid, ask the user for the exact missing information before continuing the loop.
 
-`harnessloop:goal` or `$harnessloop-goal` manages goal contracts, subgoals, tasks, lifecycle state, and deletion impact. It must not execute business work or accept rounds. If a goal change affects thresholds, evidence, active scope-lock, or continuation authority, route back through `$harnessloop-evidence` or `$harnessloop-continue`.
+`$harnessloop-goal` manages goal contracts, subgoals, tasks, lifecycle state, and deletion impact. Treat `harnessloop:goal` as a natural-language alias. It must not execute business work or accept rounds. If a goal change affects thresholds, evidence, active scope-lock, or continuation authority, route back through `$harnessloop-evidence` or `$harnessloop-continue`.
 
 `harnessloop contract control` manages human intervention and continuation rules:
 

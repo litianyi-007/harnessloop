@@ -9,7 +9,7 @@ Check declared external system/tool connectivity for Harnessloop evidence and va
 
 ## Input Contract
 
-Accept a request such as `harnessloop:connectivity`, `$harnessloop-connectivity`, `harnessloop:connectivity all`, or a request to check a named system/tool/channel.
+Accept an explicit skill invocation such as `$harnessloop-connectivity`, or natural language asking to check a named system/tool/channel. Treat `harnessloop:connectivity` as a natural-language alias only; `$harnessloop:connectivity` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -79,11 +79,11 @@ Harnessloop connectivity:
 List before checking:
 
 ```text
-harnessloop:channels
+$harnessloop-channels
 ```
 
 Check all complete declarations:
 
 ```text
-harnessloop:connectivity all complete declarations
+$harnessloop-connectivity all complete declarations
 ```

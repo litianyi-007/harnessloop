@@ -9,7 +9,7 @@ Manage evidence contract changes during a Harnessloop run. This skill controls w
 
 ## Input Contract
 
-Accept a request such as `harnessloop:evidence add`, `harnessloop:evidence check`, `harnessloop:evidence revise`, `harnessloop:evidence reject`, or natural language asking to update accepted evidence.
+Accept an explicit skill invocation such as `$harnessloop-evidence add`, `$harnessloop-evidence check`, `$harnessloop-evidence revise`, or `$harnessloop-evidence reject`, or natural language asking to update accepted evidence. Treat `harnessloop:evidence` as a natural-language alias only; `$harnessloop:evidence` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -98,17 +98,17 @@ Prefer updating `.harnessloop/state/evidence-index.md` for global evidence inven
 Add runtime evidence:
 
 ```text
-harnessloop:evidence add runtime evidence/e2e-login-20260629.md applies-to round 0003 validation "npm run test:e2e" freshness "same day"
+$harnessloop-evidence add runtime evidence/e2e-login-20260629.md applies-to round 0003 validation "npm run test:e2e" freshness "same day"
 ```
 
 Check current evidence:
 
 ```text
-harnessloop:evidence check .harnessloop/state/evidence-index.md for active round
+$harnessloop-evidence check .harnessloop/state/evidence-index.md for active round
 ```
 
 Revise acceptance evidence:
 
 ```text
-harnessloop:evidence revise goal data-contract.md to require CI URL plus local test log; human confirmed
+$harnessloop-evidence revise goal data-contract.md to require CI URL plus local test log; human confirmed
 ```

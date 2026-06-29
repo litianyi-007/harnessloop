@@ -9,7 +9,7 @@ Run the Harnessloop continuation gate before any execution. This skill may conti
 
 ## Input Contract
 
-Accept a request such as `harnessloop:continue`, `harnessloop continue`, `$harnessloop-continue`, or natural language asking to resume/advance a Harnessloop task.
+Accept an explicit skill invocation such as `$harnessloop-continue`, or natural language asking to resume/advance a Harnessloop task. Treat `harnessloop:continue` and `harnessloop continue` as natural-language aliases only; `$harnessloop:continue` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -18,7 +18,7 @@ Useful input includes:
 - Optional human decision or unblock record.
 - Optional evidence, tool, or external-system confirmation needed by the current control gate.
 
-If `.harnessloop/` is missing, stop and suggest `harnessloop:init`. If imported intake work is pending, route to `$harnessloop-intake`.
+If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If imported intake work is pending, route to `$harnessloop-intake`.
 
 ## Processing Contract
 

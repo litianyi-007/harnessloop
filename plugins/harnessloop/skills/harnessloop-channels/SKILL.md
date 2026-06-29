@@ -9,7 +9,7 @@ List all declared external systems, channels, and tools that Harnessloop may rel
 
 ## Input Contract
 
-Accept a request such as `harnessloop:channels`, `$harnessloop-channels`, or natural language asking to list external systems/tools/channels.
+Accept an explicit skill invocation such as `$harnessloop-channels`, or natural language asking to list external systems/tools/channels. Treat `harnessloop:channels` as a natural-language alias only; `$harnessloop:channels` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -17,7 +17,7 @@ Useful input includes:
 - Optional scope: setup, evidence, active goal, active round, intake, handoffs, or all.
 - Optional output preference: table, grouped by system, grouped by tool, or missing-fields list.
 
-If `.harnessloop/` is missing, report `not-initialized` and suggest `harnessloop:init`.
+If `.harnessloop/` is missing, report `not-initialized` and suggest `$harnessloop-init`.
 
 ## Processing Contract
 

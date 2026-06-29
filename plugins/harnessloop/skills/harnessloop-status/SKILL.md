@@ -9,7 +9,7 @@ Read Harnessloop state safely. This skill reports current loop state; it must no
 
 ## Input Contract
 
-Accept a request such as `harnessloop:status`, `harnessloop status`, `$harnessloop-status`, or natural language asking for current Harnessloop state.
+Accept an explicit skill invocation such as `$harnessloop-status`, or natural language asking for current Harnessloop state. Treat `harnessloop:status` and `harnessloop status` as natural-language aliases only; `$harnessloop:status` is not a valid skill invocation.
 
 Useful input includes:
 
@@ -17,7 +17,7 @@ Useful input includes:
 - Optional state path, usually `.harnessloop/state/current.md`.
 - Optional scope: active goal, active round, evidence, handoffs, control, environment, self-audit, or next action.
 
-If `.harnessloop/` is missing, report `not-initialized` and suggest `harnessloop:init`. Do not initialize it from this skill.
+If `.harnessloop/` is missing, report `not-initialized` and suggest `$harnessloop-init`. Do not initialize it from this skill.
 
 ## Processing Contract
 

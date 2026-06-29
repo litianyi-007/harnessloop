@@ -11,7 +11,7 @@ The goal is to improve Harnessloop itself. Do not solve the source project's bus
 
 ## Input Contract
 
-Accept an issue report path, pasted redacted issue text, or a request such as `harnessloop:issue .harnessloop/meta/evolution-issues/0001-example.md`.
+Accept an issue report path, pasted redacted issue text, or an explicit skill invocation such as `$harnessloop-issue .harnessloop/meta/evolution-issues/0001-example.md`. Treat `harnessloop:issue` as a natural-language alias only; `$harnessloop:issue` is not a valid skill invocation.
 
 Require the issue content to include:
 

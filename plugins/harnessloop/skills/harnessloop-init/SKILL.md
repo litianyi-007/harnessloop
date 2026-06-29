@@ -16,7 +16,7 @@ Accept a target project path, optional intake slug, and optional mode:
 - `dry-run`: optional; preview files without writing.
 - `force`: optional; overwrite generated files only after explicit user confirmation.
 
-The user may provide this as natural language (`harnessloop:init this repo`) or as a command-like request (`harnessloop:init --project C:\repo --intake task-slug`).
+Accept an explicit skill invocation such as `$harnessloop-init this repo` or `$harnessloop-init --project C:\repo --intake task-slug`. Treat `harnessloop:init` as a natural-language alias only; `$harnessloop:init` is not a valid skill invocation.
 
 ## Processing Contract
 
@@ -24,7 +24,7 @@ Resolve the target project, check whether `.harnessloop/` already exists, then p
 
 ## Output Contract
 
-Return the target project path, whether initialization was created, skipped, previewed, or blocked, and the files/directories created or expected. If intake was requested, return the transfer packet path and tell the user to run `harnessloop:intake` before business execution.
+Return the target project path, whether initialization was created, skipped, previewed, or blocked, and the files/directories created or expected. If intake was requested, return the transfer packet path and tell the user to run `$harnessloop-intake` before business execution.
 
 ## Initialization Decision
 
