@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Goal"
+  short_description: "Manage Harnessloop goal contracts"
+  default_prompt: "Use $harnessloop-goal when the user says harnessloop:goal to inspect, negotiate, update, split, archive, cancel, or supersede goals."
+
+policy:
+  allow_implicit_invocation: true

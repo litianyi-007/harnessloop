@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In scope for the first version:
 
-- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-evidence`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -289,6 +289,8 @@ The self-check must verify whether delegation can:
 Environment self-check findings should feed self-audit. If Harnessloop expects Codex subagents or Claude Code swarm support but cannot verify model, effort, read/write boundaries, or evidence citation behavior, mark delegation as degraded and continue only through conservative handoffs or human-confirmed policy.
 
 ## Goal Files
+
+Use `harnessloop:goal` for goal contract management: status, proposal, negotiation, update, split, reprioritization, archive, cancel, supersede, and deletion impact review. It must preserve auditability and must not hard-delete goals by default.
 
 `goal.md` states:
 

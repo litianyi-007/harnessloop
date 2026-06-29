@@ -168,6 +168,7 @@ Evidence classes:
 
 - `$harnessloop-init`: initialize `.harnessloop/` project files when you ask for `harnessloop:init`.
 - `$harnessloop-intake`: review transfer packets and run intake gates when you ask for `harnessloop:intake`.
+- `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, or supersede goals when you ask for `harnessloop:goal`.
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts when you ask for `harnessloop:evidence`.
 - `$harnessloop-status`: read current Harnessloop state when you ask for `harnessloop:status`.
 - `$harnessloop-continue`: run continuation gates when you ask for `harnessloop:continue`.
@@ -197,6 +198,7 @@ Validate skills directly:
 
 ```powershell
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-goal
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue

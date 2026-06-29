@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
+The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-goal` for `harnessloop:goal`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
 
 ## Project Setup
 
@@ -240,6 +240,8 @@ For each goal, create:
 Treat goals as long-term unless the user explicitly says the task is single-round. Use read-only delegated discovery for background investigation, but keep goal interpretation, task ordering, scope-lock changes, and final acceptance in the main session.
 
 Each round must have one `scope-lock.md`. Default to the smallest useful change. For autoresearch or drift-prone work, change one variable only.
+
+Use `harnessloop:goal` to inspect current goals, negotiate scope, update goal contracts, split subgoals/tasks, reprioritize work, archive/cancel/supersede goals, or produce a deletion impact report. Goal changes that affect active scope, evidence, or continuation must return to the continuation gate.
 
 ## Status And Continue
 
