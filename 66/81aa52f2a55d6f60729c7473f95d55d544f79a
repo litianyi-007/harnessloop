@@ -1,5 +1,5 @@
 plugins/harnessloop/skills/harnessloop-evidence/SKILL.md
-  s_cb1f5eceeed9c6::t_50a894d4aed863 24-24,31-32,43-44,62-63,80-80
+  s_cb1f5eceeed9c6::t_50a894d4aed863 24,31-32,44-45,62-63,80
 plugins/harnessloop/skills/harnessloop-loop/SKILL.md
   s_cb1f5eceeed9c6::t_50a894d4aed863 181-182
 ---
@@ -7,19 +7,15 @@ plugins/harnessloop/skills/harnessloop-loop/SKILL.md
   "schema_version": "authorship/3.0.0",
   "git_ai_version": "1.6.3",
   "base_commit_sha": "6681aa52f2a55d6f60729c7473f95d55d544f79a",
-  "prompts": {
-    "s_cb1f5eceeed9c6::t_50a894d4aed863": {
+  "prompts": {},
+  "sessions": {
+    "s_cb1f5eceeed9c6": {
       "agent_id": {
         "tool": "codex",
         "id": "019f11e9-aeba-7b53-800b-92e997ec5ee9",
         "model": "gpt-5.5"
       },
-      "human_author": "litianyi <litianyi@corp.netease.com>",
-      "messages": [],
-      "total_additions": 10,
-      "total_deletions": 0,
-      "accepted_lines": 10,
-      "overriden_lines": 0
+      "human_author": "litianyi <litianyi@corp.netease.com>"
     }
   }
 }
