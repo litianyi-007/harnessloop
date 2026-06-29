@@ -1,0 +1,27 @@
+package.json
+  s_cb1f5eceeed9c6::t_b6147658197c18 3-3
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_b6147658197c18 3-3
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_b6147658197c18 4-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "edaf4af98781c4ef93d4b99f29a6027a5ed4d01f",
+  "prompts": {
+    "s_cb1f5eceeed9c6::t_b6147658197c18": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f11e9-aeba-7b53-800b-92e997ec5ee9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    }
+  }
+}
