@@ -384,6 +384,19 @@ For other agent environments, keep delegation conservative. If delegation model 
 
 Use delegation to protect the main session's context and cost. Handoffs should pass file paths, bounded questions, and output limits instead of broad conversational context.
 
+Use this execution delegation matrix before starting or continuing a round:
+
+| Task type | Delegation decision | Goal | Value | Preconditions | Never delegate when |
+| --- | --- | --- | --- | --- | --- |
+| Read-only discovery | Should delegate | Map current state, constraints, dependencies, prior failures, data availability, and validation options | Saves main-session context and parallelizes broad investigation | Clear question, bounded paths, no write access, required output path | The question changes goal interpretation or requires a human decision |
+| Evidence collection | Delegate when bounded and read-only | Gather logs, file citations, source excerpts, reports, or command outputs as evidence paths | Keeps raw evidence out of the main session while preserving traceability | Evidence contract names accepted sources, sensitivity is understood, output cites paths | Secrets, private raw data, or external access conditions are unclear |
+| External connectivity check | Usually keep in main gate or `$harnessloop-connectivity` | Verify declared tools, credentials references, endpoints, permissions, and write safety | Prevents blind probing and keeps access questions centralized | Channel contract is complete and the named tool is verified | Tool, endpoint, credential reference, permission, parameter, or write safety is missing |
+| Low-risk local implementation | May delegate | Apply a narrow patch, generate a bounded artifact, or run a contained local check | Moves mechanical work out of the main session without losing scope control | Scope-lock allows the files, rollback is clear, verification command is declared | The change is high-risk, cross-cutting, irreversible, or changes contracts |
+| High-risk or cross-cutting implementation | Main session owns; delegate only narrow subtasks | Preserve architectural intent and mutation control | Avoids uncoordinated changes across variables or contracts | Subtasks are isolated, each has a file/output boundary, main session approves integration | Scope-lock would need expansion or acceptance criteria are still unstable |
+| Adversarial review | Must delegate when a verifiable mechanism exists | Challenge the round against scope-lock, evidence contract, thresholds, and source truth | Reduces self-review bias before acceptance | Reviewer has evidence paths, review template, and required output path | Delegation mechanism/model cannot be verified and the risk requires human review |
+| Acceptance testing | Should delegate when independent | Reproduce validation and check acceptance evidence from a fresh context | Improves confidence and catches hidden assumptions | Test commands, environment, expected output, and evidence destination are explicit | Tests require missing external access, unsafe writes, or human-only judgment |
+| Round acceptance and control decisions | Never delegate | Decide whether feedback is positive, negative, neutral, or blocked | Keeps authority with the main session and control contract | Main session has review, evidence, and decision files | Always; failed-review acceptance additionally requires explicit control contract and human decision |
+
 Before relying on delegation, self-check must record:
 
 - Whether independent tasks can be created.
