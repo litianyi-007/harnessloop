@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Status"
+  short_description: "Read Harnessloop state safely"
+  default_prompt: "Use $harnessloop-status when the user says harnessloop:status to inspect current Harnessloop state."
+
+policy:
+  allow_implicit_invocation: true

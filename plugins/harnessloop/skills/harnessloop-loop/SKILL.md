@@ -12,7 +12,7 @@ Use this skill as a project-local operating protocol. Do not treat it as a gener
 Accept one of these inputs:
 
 - A user goal for a long-running task, including target project path when it is not the current working directory.
-- A command-like request such as `harnessloop status`, `harnessloop continue`, `harnessloop:evidence`, `harnessloop contract control`, or `harnessloop issue evolve`.
+- A command-like request such as `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop contract control`, or `harnessloop issue evolve`.
 - Existing `.harnessloop/` state files that define the active goal, round, evidence, handoffs, and control state.
 - A takeover request only after `harnessloop-intake` has produced or accepted the intake packet, gate, and intake-review boundary.
 
@@ -153,13 +153,13 @@ If the gate passes, the first round should normally be an `intake-review` round 
 
 Treat these as protocol semantics. Do not assume a CLI exists unless the project provides one.
 
-`harnessloop status` is read-only:
+`harnessloop:status` or `$harnessloop-status` is the preferred read-only status entry:
 
 - Read `.harnessloop/state/current.md` plus source files referenced by it.
 - Report active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason.
 - Do not create, modify, archive, or continue any task.
 
-`harnessloop continue` must run a continuation gate before any execution:
+`harnessloop:continue` or `$harnessloop-continue` must run a continuation gate before any execution:
 
 - Read current state, control contract, environment self-check, evidence index, active goal, active round, open handoffs, and latest decision.
 - Continue only through an allowed next action.

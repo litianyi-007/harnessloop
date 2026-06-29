@@ -75,7 +75,7 @@ claude plugin install harnessloop@harnessloop --scope user
 
 ## Start Your First Loop
 
-Harnessloop is currently a skill/protocol, not a standalone shell CLI. Commands such as `harnessloop status` and `harnessloop continue` describe protocol modes that an agent should execute through `$harnessloop-loop`.
+Harnessloop is currently a skill/protocol, not a standalone shell CLI. Commands such as `harnessloop:status` and `harnessloop:continue` describe protocol modes that an agent should execute through skills.
 
 After installing, ask the agent:
 
@@ -169,6 +169,8 @@ Evidence classes:
 - `$harnessloop-init`: initialize `.harnessloop/` project files when you ask for `harnessloop:init`.
 - `$harnessloop-intake`: review transfer packets and run intake gates when you ask for `harnessloop:intake`.
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts when you ask for `harnessloop:evidence`.
+- `$harnessloop-status`: read current Harnessloop state when you ask for `harnessloop:status`.
+- `$harnessloop-continue`: run continuation gates when you ask for `harnessloop:continue`.
 - `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
 - `$harnessloop-issue`: analyze a Harnessloop evolution issue when you ask for `harnessloop:issue`.
 
@@ -196,6 +198,8 @@ Validate skills directly:
 ```powershell
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-intake
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-issue
 ```

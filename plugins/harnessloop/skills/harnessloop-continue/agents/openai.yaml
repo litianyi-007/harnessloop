@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Continue"
+  short_description: "Run Harnessloop continuation gates"
+  default_prompt: "Use $harnessloop-continue when the user says harnessloop:continue to continue through the control gate."
+
+policy:
+  allow_implicit_invocation: true

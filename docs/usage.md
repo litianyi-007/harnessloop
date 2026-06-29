@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
+The plugin exposes `harnessloop-init` for `harnessloop:init`, `harnessloop-intake` for `harnessloop:intake`, `harnessloop-evidence` for `harnessloop:evidence`, `harnessloop-status` for `harnessloop:status`, `harnessloop-continue` for `harnessloop:continue`, `harnessloop-loop` for goal loops, and `harnessloop-issue` for `harnessloop:issue`.
 
 ## Project Setup
 
@@ -243,9 +243,9 @@ Each round must have one `scope-lock.md`. Default to the smallest useful change.
 
 ## Status And Continue
 
-`harnessloop status` is read-only. It reports active goal, active round, feedback, open handoffs, evidence health, control state, environment state, self-audit state, next proposed action, and blocking reason.
+`harnessloop:status` is read-only. It reports active goal, active round, feedback, open handoffs, evidence health, control state, environment state, self-audit state, next proposed action, and blocking reason.
 
-`harnessloop continue` runs a gate before execution. It may continue only when control, evidence, environment, and self-audit checks allow the next action.
+`harnessloop:continue` runs a gate before execution. It may continue only when control, evidence, environment, and self-audit checks allow the next action.
 
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 

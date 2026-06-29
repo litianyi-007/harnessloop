@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In scope for the first version:
 
-- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-evidence`, `harnessloop-loop`, and `harnessloop-issue`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-evidence`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -163,9 +163,9 @@ The first accepted round after takeover should normally be `intake-review`. It m
 
 Harnessloop should support these command semantics even before a CLI exists.
 
-`harnessloop status` is read-only. It reports active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason. It must not create files, continue execution, or mutate state.
+`harnessloop:status` is read-only. It reports active goal, active round, current feedback, open handoffs, evidence health, control state, environment state, next proposed action, and blocking reason. It must not create files, continue execution, or mutate state.
 
-`harnessloop continue` reads current state and runs a continuation gate. It may continue only through allowed next actions:
+`harnessloop:continue` reads current state and runs a continuation gate. It may continue only through allowed next actions:
 
 - Positive feedback may advance to the next subgoal or task.
 - Negative or neutral feedback may advance only to investigation, minimal fix, rollback, or human-confirmed contract revision.
