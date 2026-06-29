@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In current scope:
 
-- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-delegation`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -184,6 +184,8 @@ Harnessloop supports these protocol semantics through explicit skills. Codex ski
 
 `$harnessloop-channels` lists declared external systems, tools, and channels without probing. `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user when required tools, credentials, permissions, endpoints, parameters, or write-safety details are missing. Failed, blocked, skipped, or confirmation-needed self-checks must ask for the exact missing facts before the loop continues.
 
+`$harnessloop-delegation` checks whether subagent, swarm, or other delegated work can be trusted for the requested task type. It records expected versus observed model/effort, mechanism status, scope control, output path control, and evidence citation behavior. A blocked, failed, or unknown required condition prevents high-risk delegation unless a human-confirmed policy allows conservative continuation.
+
 `harnessloop contract control` defines continuation authority:
 
 - Auto-continue states.
@@ -270,7 +272,7 @@ Do not include secrets, credentials, customer data, raw proprietary reports, or 
 
 ## Environment Self-Check
 
-Run environment self-check during setup and before `continue` relies on delegation.
+Run environment self-check during setup and before `continue` relies on delegation. Use `$harnessloop-delegation` as the active check when a user wants to verify delegation readiness on demand or when a handoff reports observed model/effort.
 
 Detection should classify the environment as:
 
@@ -450,6 +452,8 @@ Use subagent or swarm for:
 
 Every delegated handoff should include bounded inputs, required output paths, output length expectations, and evidence paths. The handoff result should summarize the decision-relevant points instead of copying raw context back into the main session.
 
+Run `$harnessloop-delegation` before relying on delegation when the requested work is high-risk, write-capable, cross-cutting, or acceptance-related, or when observed model/effort cannot be verified from the handoff.
+
 Execution-stage delegation follows this matrix:
 
 | Task type | Delegation decision | Goal and value |
@@ -495,7 +499,8 @@ flowchart TD
   IR --> C
 
   A["Setup<br/>data + runtime + cost/context"] --> B["Environment self-check"]
-  B --> BA["Self-audit<br/>setup health"]
+  B --> DC["$harnessloop-delegation<br/>model + effort + scope"]
+  DC --> BA["Self-audit<br/>setup health"]
   BA --> C["Define long-term goal"]
   C --> D["Read-only discovery<br/>subagent / swarm"]
   D --> E["Main session approves<br/>goal breakdown"]
@@ -511,7 +516,8 @@ flowchart TD
   J --> K{"Task type"}
 
   K -->|"core decision"| M["Main session"]
-  K -->|"investigation / execution"| S["Subagent or swarm handoff"]
+  K -->|"investigation / execution"| DCR["$harnessloop-delegation<br/>pre-handoff check"]
+  DCR --> S["Subagent or swarm handoff"]
   K -->|"review"| R["Adversarial review"]
 
   M --> N["Evidence writeback<br/>static / dynamic / runtime / source"]

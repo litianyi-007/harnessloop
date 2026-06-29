@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harnessloop Delegation"
+  short_description: "Check delegation readiness"
+  default_prompt: "Use $harnessloop-delegation to check subagent or swarm readiness before delegated Harnessloop work."

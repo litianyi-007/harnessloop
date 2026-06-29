@@ -189,6 +189,8 @@ Harnessloop keeps the main session responsible for orchestration and control dec
 | Adversarial review and acceptance testing | Delegate when the mechanism and evidence citations are verifiable. |
 | Round acceptance and control decisions | Never delegate. |
 
+Run `$harnessloop-delegation` before relying on subagent or swarm work when model, effort, scope control, output path control, or evidence citation behavior must be verified.
+
 ## Skills
 
 - `$harnessloop-init`: initialize `.harnessloop/` project files.
@@ -197,6 +199,7 @@ Harnessloop keeps the main session responsible for orchestration and control dec
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.
 - `$harnessloop-channels`: list declared external systems, channels, and tools without probing.
 - `$harnessloop-connectivity`: check declared external system/tool connectivity and ask for missing access facts.
+- `$harnessloop-delegation`: check subagent/swarm readiness, scope control, output paths, evidence citation behavior, and model/effort match.
 - `$harnessloop-status`: read current Harnessloop state.
 - `$harnessloop-continue`: run continuation gates before execution.
 - `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
@@ -230,6 +233,7 @@ python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_valid
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-channels
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-connectivity
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-delegation
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-intake

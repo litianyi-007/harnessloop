@@ -12,7 +12,7 @@ Use this skill as a project-local operating protocol. Do not treat it as a gener
 Accept one of these inputs:
 
 - A user goal for a long-running task, including target project path when it is not the current working directory.
-- An explicit skill invocation such as `$harnessloop-loop`, `$harnessloop-goal`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-evidence`, `$harnessloop-channels`, or `$harnessloop-connectivity`.
+- An explicit skill invocation such as `$harnessloop-loop`, `$harnessloop-goal`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, or `$harnessloop-delegation`.
 - Natural-language aliases such as `harnessloop:goal`, `harnessloop:status`, `harnessloop:continue`, `harnessloop:evidence`, `harnessloop:channels`, `harnessloop:connectivity`, `harnessloop contract control`, or `harnessloop issue evolve`. Skill names cannot contain `:`, so `$harnessloop:...` is not valid.
 - Existing `.harnessloop/` state files that define the active goal, round, evidence, handoffs, and control state.
 - A takeover request only after `harnessloop-intake` has produced or accepted the intake packet, gate, and intake-review boundary.
@@ -186,6 +186,8 @@ If evidence depends on reading from or writing to an external system and any acc
 If a task explicitly requires tool calling with a named tool and that tool is missing, not installed, not exposed in the current environment, or possibly the wrong tool, stop and ask the user for confirmation. Do not infer an alternative tool, alias, provider, command, or API from context.
 
 `$harnessloop-channels` lists all declared external systems, channels, and tools without probing. `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user before any missing condition, parameter, credential reference, permission, write target, or named tool is inferred. Treat `harnessloop:channels` and `harnessloop:connectivity` as natural-language aliases. If connectivity self-check returns `fail`, `blocked`, `skipped`, or `needs-user-confirmation` because required information is missing or invalid, ask the user for the exact missing information before continuing the loop.
+
+`$harnessloop-delegation` checks whether subagent, swarm, or other delegated work can be trusted for the requested task type. Run it before high-risk delegation, when expected model/effort must be verified, when observed model/effort is missing, or when delegation capability changes. If the check returns `blocked`, `fail`, or `unknown` for required conditions, do not delegate beyond conservative handoffs or human-confirmed policy.
 
 `$harnessloop-goal` manages goal contracts, subgoals, tasks, lifecycle state, and deletion impact. Treat `harnessloop:goal` as a natural-language alias. It must not execute business work or accept rounds. If a goal change affects thresholds, evidence, active scope-lock, or continuation authority, route back through `$harnessloop-evidence` or `$harnessloop-continue`.
 
@@ -406,7 +408,7 @@ Before relying on delegation, self-check must record:
 - Expected versus observed model and effort.
 - Mismatch handling.
 
-If the expected delegation environment cannot be verified, feed that mismatch into self-audit and continue conservatively. Do not assume the intended model or effort was used.
+If the expected delegation environment cannot be verified, run `$harnessloop-delegation`, feed that mismatch into self-audit, and continue conservatively. Do not assume the intended model or effort was used.
 
 Do not delegate:
 

@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes explicit skills named `$harnessloop-init`, `$harnessloop-intake`, `$harnessloop-goal`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-loop`, and `$harnessloop-issue`.
+The plugin exposes explicit skills named `$harnessloop-init`, `$harnessloop-intake`, `$harnessloop-goal`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, `$harnessloop-delegation`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-loop`, and `$harnessloop-issue`.
 
 Colon phrases such as `harnessloop:init` and `harnessloop:continue` are natural-language aliases only. Codex skill mentions use the skill `name`, so `$harnessloop:init` will not match.
 
@@ -260,11 +260,13 @@ Harnessloop delegates work only when the task is bounded by a handoff, evidence 
 | Acceptance testing | Should delegate when independent | Reproduce validation from a fresh context and produce evidence paths. |
 | Round acceptance and control decisions | Never delegate | Keep protocol authority in the main session and control contract. |
 
+Use `$harnessloop-delegation` before relying on subagent or swarm work when expected versus observed model/effort, scope control, output path control, or evidence citation behavior is uncertain. If the check is `blocked`, `fail`, or `unknown` for a required condition, continue only with conservative handoffs, main-session work, or human confirmation.
+
 ## Status And Continue
 
 `$harnessloop-status` is read-only. It reports active goal, active round, feedback, open handoffs, evidence health, control state, environment state, self-audit state, next proposed action, and blocking reason.
 
-`$harnessloop-continue` runs a gate before execution. It may continue only when control, evidence, environment, and self-audit checks allow the next action.
+`$harnessloop-continue` runs a gate before execution. It may continue only when control, evidence, environment, delegation, and self-audit checks allow the next action.
 
 Positive feedback moves to the next subgoal or task. Negative and neutral feedback move to investigation, minimal fix, rollback, or human-confirmed contract revision. Neutral feedback is not success.
 

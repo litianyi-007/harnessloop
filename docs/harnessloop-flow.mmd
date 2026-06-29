@@ -7,7 +7,8 @@ flowchart TD
   IR --> C
 
   A["Setup<br/>data + runtime + cost/context"] --> B["Environment self-check"]
-  B --> BA["Self-audit<br/>setup health"]
+  B --> DC["$harnessloop-delegation<br/>model + effort + scope"]
+  DC --> BA["Self-audit<br/>setup health"]
   BA --> C["Define long-term goal"]
   C --> D["Read-only discovery<br/>subagent / swarm"]
   D --> E["Main session approves<br/>goal breakdown"]
@@ -19,11 +20,12 @@ flowchart TD
   I -->|"allowed"| J["Round scope-lock<br/>minimal / one variable"]
   I -->|"blocked"| X["Status only / human input"]
   HA -->|"loop / contradiction / drift"| EI["Evolution issue<br/>redacted context"]
-  EI --> ES["harnessloop-issue<br/>upstream analysis"]
+  EI --> ES["$harnessloop-issue<br/>record / analyze / propose-fix"]
   J --> K{"Task type"}
 
   K -->|"core decision"| M["Main session"]
-  K -->|"investigation / execution"| S["Subagent or swarm handoff"]
+  K -->|"investigation / execution"| DCR["$harnessloop-delegation<br/>pre-handoff check"]
+  DCR --> S["Subagent or swarm handoff"]
   K -->|"review"| R["Adversarial review"]
 
   M --> N["Evidence writeback<br/>static / dynamic / runtime / source"]
