@@ -3,8 +3,8 @@
 ```markdown
 # Evidence Index
 
-| Evidence ID | Type | Path | Applies to | Freshness requirement | Observed timestamp | Validation method | Citation required | Artifact health | Claim support | Acceptance effect | Reproducibility | Sensitivity |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Evidence ID | Type | Path | Applies to | Freshness requirement | Observed timestamp | Validation method | Channel parameter references | Citation required | Artifact health | Claim support | Acceptance effect | Reproducibility | Sensitivity |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 ## Artifact Health Values
 

@@ -1,0 +1,6 @@
+channel-params.json
+*.secret.json
+*.token
+*.key
+*.pem
+secrets/

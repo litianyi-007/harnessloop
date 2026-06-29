@@ -1,0 +1,4 @@
+interface:
+  display_name: "Harnessloop Secrets"
+  short_description: "Manage local channel parameters"
+  default_prompt: "Use $harnessloop-secrets to create or check local channel parameter references without exposing secret values."

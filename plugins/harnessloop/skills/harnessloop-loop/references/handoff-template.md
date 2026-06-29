@@ -12,6 +12,7 @@
 - Evidence paths:
 - External tools:
 - Credential names only:
+- Local parameter references:
 - Expected model/effort:
 
 ## Scope Boundaries
@@ -22,10 +23,10 @@ Disallowed:
 
 ## Tool And Access Contract
 
-| Tool/system | Purpose | Read/write scope | Account role | Credential name | Verification method | Failure handling |
-| --- | --- | --- | --- | --- | --- | --- |
+| Tool/system | Purpose | Read/write scope | Account role | Credential name | Local parameter references | Verification method | Failure handling |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 
-Do not include secret values.
+Do not include secret values. Use local parameter keys or provider references only.
 
 ## Budget And Context Limits
 

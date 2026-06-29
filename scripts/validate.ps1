@@ -19,11 +19,17 @@ function Invoke-ClaudePluginValidate {
   param([Parameter(Mandatory = $true)][string]$Path)
 
   $ClaudeCommand = (Get-Command claude.cmd -ErrorAction SilentlyContinue).Source
+  if (-not $ClaudeCommand) {
+    $ClaudeCommand = (Get-Command claude.exe -ErrorAction SilentlyContinue).Source
+  }
+  if (-not $ClaudeCommand) {
+    $ClaudeCommand = (Get-Command claude -ErrorAction SilentlyContinue).Source
+  }
   if (-not $ClaudeCommand -and (Test-Path -LiteralPath "C:\nvm4w\nodejs\claude.cmd")) {
     $ClaudeCommand = "C:\nvm4w\nodejs\claude.cmd"
   }
   if (-not $ClaudeCommand) {
-    throw "claude.cmd not found. Install Claude Code or add it to PATH."
+    throw "claude command not found. Install Claude Code or add it to PATH."
   }
 
   $Output = & $ClaudeCommand plugin validate --strict $Path 2>&1
@@ -81,6 +87,8 @@ function Invoke-HarnessloopInitSmoke {
 
   $ExpectedFiles = @(
     ".harnessloop/setup/data-sources.md",
+    ".harnessloop/local/.gitignore",
+    ".harnessloop/local/channel-params.example.json",
     ".harnessloop/setup/cost-context-policy.md",
     ".harnessloop/state/current.md",
     ".harnessloop/state/environment.md",
@@ -101,6 +109,47 @@ function Invoke-HarnessloopInitSmoke {
   $TransferPackets = Get-ChildItem -LiteralPath (Join-Path $SmokeRoot ".harnessloop/intake") -Recurse -Filter "transfer-packet.md"
   if (@($TransferPackets).Count -ne 1) {
     throw "Harnessloop init smoke test expected one transfer-packet.md, found $(@($TransferPackets).Count)."
+  }
+}
+
+function Invoke-HarnessloopSecretsSmoke {
+  $SecretsScript = Join-Path $PluginRoot "skills/harnessloop-secrets/scripts/channel_params.py"
+  if (-not (Test-Path -LiteralPath $SecretsScript)) {
+    throw "Missing Harnessloop secrets script: $SecretsScript"
+  }
+
+  $SmokeRoot = Join-Path $RepoRoot (Join-Path ".tmp" ("secrets-smoke-" + [guid]::NewGuid().ToString("N")))
+  New-Item -ItemType Directory -Path $SmokeRoot -Force | Out-Null
+
+  $Python = Resolve-Python3
+  $InitOutput = & $Python.Command @($Python.Args) $SecretsScript --project $SmokeRoot init 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    $InitOutput | ForEach-Object { Write-Host $_ }
+    throw "Harnessloop secrets init smoke test failed."
+  }
+
+  $AddOutput = & $Python.Command @($Python.Args) $SecretsScript --project $SmokeRoot add --channel smoke-ci --key SMOKE_TOKEN --sensitivity secret --storage env --env SMOKE_TOKEN --required-for connectivity 2>&1
+  if ($LASTEXITCODE -ne 2) {
+    $AddOutput | ForEach-Object { Write-Host $_ }
+    throw "Harnessloop secrets add smoke test expected missing env status."
+  }
+
+  $StorePath = Join-Path $SmokeRoot ".harnessloop/local/channel-params.json"
+  $IgnorePath = Join-Path $SmokeRoot ".harnessloop/local/.gitignore"
+  if (-not (Test-Path -LiteralPath $StorePath)) {
+    throw "Harnessloop secrets smoke test missing local store: $StorePath"
+  }
+  if (-not ((Get-Content -Raw -LiteralPath $IgnorePath) -match "channel-params\.json")) {
+    throw "Harnessloop secrets smoke test did not protect channel-params.json."
+  }
+
+  $Store = Read-JsonFile $StorePath
+  $Param = $Store.channels.'smoke-ci'.parameters.SMOKE_TOKEN
+  if ($Param.sensitivity -ne "secret" -or $Param.storage -ne "env" -or $Param.env -ne "SMOKE_TOKEN") {
+    throw "Harnessloop secrets smoke test wrote unexpected parameter metadata."
+  }
+  if ($null -ne $Param.value) {
+    throw "Harnessloop secrets smoke test must not set a secret value during add."
   }
 }
 
@@ -142,6 +191,7 @@ if ($ClaudeEntry.source -ne "./plugins/harnessloop") {
 }
 
 Invoke-HarnessloopInitSmoke
+Invoke-HarnessloopSecretsSmoke
 Invoke-ClaudePluginValidate $RepoRoot
 Invoke-ClaudePluginValidate $PluginRoot
 

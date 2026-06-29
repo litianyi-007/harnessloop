@@ -8,7 +8,7 @@ Harnessloop is a project-local protocol for running goal-driven harness loops ar
 
 In current scope:
 
-- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-delegation`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
+- Installable skills named `harnessloop-init`, `harnessloop-intake`, `harnessloop-goal`, `harnessloop-evidence`, `harnessloop-channels`, `harnessloop-connectivity`, `harnessloop-secrets`, `harnessloop-delegation`, `harnessloop-status`, `harnessloop-continue`, `harnessloop-loop`, and `harnessloop-issue`.
 - A project-local `.harnessloop/` file protocol.
 - Existing-session takeover and intake-gate conventions.
 - Long-term goal discovery and breakdown conventions.
@@ -58,6 +58,10 @@ Out of current scope:
   setup/
     data-sources.md
     cost-context-policy.md
+  local/
+    .gitignore
+    channel-params.example.json
+    channel-params.json  # local ignored file, never committed
   intake/
     YYYYMMDD-HHMM-<task-slug>/
       transfer-packet.md
@@ -184,6 +188,8 @@ Harnessloop supports these protocol semantics through explicit skills. Codex ski
 
 `$harnessloop-channels` lists declared external systems, tools, and channels without probing. `$harnessloop-connectivity` checks only declared connectivity methods and must ask the user when required tools, credentials, permissions, endpoints, parameters, or write-safety details are missing. Failed, blocked, skipped, or confirmation-needed self-checks must ask for the exact missing facts before the loop continues.
 
+`$harnessloop-secrets` manages local-only channel parameters and secret references in `.harnessloop/local/channel-params.json`. Use it when an evidence contract or external channel needs reusable local parameters. If the channel id, parameter key, sensitivity, storage method, and purpose are explicit, create a local placeholder key before evidence collection or connectivity checks. The committed Harnessloop files may store parameter keys, provider references, required scopes, and status, but never values.
+
 `$harnessloop-delegation` checks whether subagent, swarm, or other delegated work can be trusted for the requested task type. It records expected versus observed model/effort, mechanism status, scope control, output path control, and evidence citation behavior. A blocked, failed, or unknown required condition prevents high-risk delegation unless a human-confirmed policy allows conservative continuation.
 
 `harnessloop contract control` defines continuation authority:
@@ -227,6 +233,8 @@ State files are control-plane indexes. They summarize and route the loop, but do
 `state/control-contract.md` records human intervention and continuation rules.
 
 `state/evidence-index.md` indexes evidence by ID, type, path, applicability, freshness requirement, observed timestamp, validation method, citation requirement, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
+
+`local/channel-params.json` stores ignored local channel values or provider references. `local/channel-params.example.json` documents expected keys without values. No setup, evidence, state, handoff, review, or decision file may copy values out of the local store.
 
 `state/self-check.md` records setup and continuation gate checks.
 

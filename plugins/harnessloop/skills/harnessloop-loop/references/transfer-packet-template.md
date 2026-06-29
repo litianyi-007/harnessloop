@@ -58,14 +58,21 @@
 
 ## 8. External Tool And Access Contract
 
-| Tool name | Purpose | Read/write permissions | Account role | Permission scope | Access verification method | Failure handling |
-| --- | --- | --- | --- | --- | --- | --- |
+| Tool name | Purpose | Read/write permissions | Account role | Permission scope | Local parameter references | Access verification method | Failure handling |
+| --- | --- | --- | --- | --- | --- | --- | --- |
 
 ## 9. Credential Requirements And Secret Handling
 
 Do not include secret values.
 
 | Secret name | Storage | Required scope | Used by | Verification command | Current status | Human action required |
+| --- | --- | --- | --- | --- | --- | --- |
+
+## 9.1 Local Channel Parameter Requirements
+
+Do not include parameter values. List only keys, storage/provider references, and expected presence.
+
+| Channel ID | Parameter key | Sensitivity | Storage | Reference | Required for | Current status |
 | --- | --- | --- | --- | --- | --- | --- |
 
 ## 10. Decision Log
@@ -92,4 +99,3 @@ Do not include secret values.
 
 ## 13. Unknowns And Questions For Human
 ```
-

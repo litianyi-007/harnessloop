@@ -15,6 +15,7 @@ REFERENCES_DIR = SKILL_DIR / "references"
 
 BASE_DIRS = [
     ".harnessloop/setup",
+    ".harnessloop/local",
     ".harnessloop/intake",
     ".harnessloop/state",
     ".harnessloop/meta/evolution-issues",
@@ -32,6 +33,11 @@ BASE_FILES = {
     ".harnessloop/state/self-check.md": "self-check-template.md",
     ".harnessloop/meta/self-audit.md": "self-audit-template.md",
     ".harnessloop/evals/matrix.md": "eval-matrix-template.md",
+}
+
+LOCAL_FILES = {
+    ".harnessloop/local/.gitignore": "local-gitignore-template.txt",
+    ".harnessloop/local/channel-params.example.json": "channel-params-example-template.json",
 }
 
 
@@ -97,6 +103,9 @@ def initialize(project: Path, intake: str | None, force: bool, dry_run: bool) ->
     for rel, template in BASE_FILES.items():
         write_file(project / rel, read_template(template), force, dry_run, result)
 
+    for rel, template in LOCAL_FILES.items():
+        write_file(project / rel, read_template(template), force, dry_run, result)
+
     if intake:
         intake_dir = project / ".harnessloop/intake" / normalize_slug(intake)
         result["intake_path"] = str(intake_dir)
@@ -139,4 +148,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

@@ -22,7 +22,7 @@ If `.harnessloop/` is missing, report `not-initialized` and suggest `$harnessloo
 ## Processing Contract
 
 1. Read declared sources from `.harnessloop/setup/data-sources.md`, `.harnessloop/state/evidence-index.md`, active goal `data-contract.md`, active round evidence/review files, intake transfer packets, and open handoffs when present.
-2. Extract only declared external systems, tools, channels, accounts, credential references, permissions, required parameters, verification methods, failure handling, and sensitivity labels.
+2. Extract only declared external systems, tools, channels, accounts, credential references, local parameter references, permissions, required parameters, verification methods, failure handling, and sensitivity labels.
 3. Mark missing or ambiguous fields explicitly instead of inferring them.
 4. Classify each channel as `declared-complete`, `declared-incomplete`, `unused`, `unknown-owner`, `missing-verification`, or `needs-user-confirmation`.
 5. Do not call tools, probe endpoints, check credentials, run CLIs, or access external systems.
@@ -48,6 +48,7 @@ Harnessloop channel inventory:
   - account/role:
   - permission scope:
   - credential reference:
+  - local parameter references:
   - required parameters:
   - verification method:
   - failure handling:
@@ -65,6 +66,7 @@ When the user asks to test connectivity, route to `$harnessloop-connectivity`.
 
 - Inventory is read-only by default; do not mutate contracts unless the user explicitly asks to repair documentation.
 - Do not infer tool identity, endpoint, credential location, permission scope, or required parameters.
+- Do not infer local channel parameter values or storage locations; route missing reusable parameters to `$harnessloop-secrets`.
 - Do not test connectivity from this skill.
 - If inventory is incomplete, ask for the exact missing fields before recommending a connectivity check.
 - Do not include secret values; report only credential names or references.

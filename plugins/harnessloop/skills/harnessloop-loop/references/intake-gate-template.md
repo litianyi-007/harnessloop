@@ -21,6 +21,7 @@
 | Process artifacts are traceable | unknown |  |  |
 | External tools and access are described | unknown |  |  |
 | Credential requirements avoid secret values | unknown |  |  |
+| Local channel parameter references are listed without values | unknown |  |  |
 | Current changes and rollback risk are clear | unknown |  |  |
 | Next action is minimal and safe | unknown |  |  |
 | Human decisions are listed | unknown |  |  |
@@ -41,4 +42,3 @@ Status values: `pass`, `fail`, `unknown`, `not-applicable`.
 - Business execution allowed now: yes | no
 - Reason:
 ```
-

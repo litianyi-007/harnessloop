@@ -18,7 +18,7 @@ Claude Code:
 .\scripts\install-claude.ps1
 ```
 
-The plugin exposes explicit skills named `$harnessloop-init`, `$harnessloop-intake`, `$harnessloop-goal`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, `$harnessloop-delegation`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-loop`, and `$harnessloop-issue`.
+The plugin exposes explicit skills named `$harnessloop-init`, `$harnessloop-intake`, `$harnessloop-goal`, `$harnessloop-evidence`, `$harnessloop-channels`, `$harnessloop-connectivity`, `$harnessloop-secrets`, `$harnessloop-delegation`, `$harnessloop-status`, `$harnessloop-continue`, `$harnessloop-loop`, and `$harnessloop-issue`.
 
 Colon phrases such as `harnessloop:init` and `harnessloop:continue` are natural-language aliases only. Codex skill mentions use the skill `name`, so `$harnessloop:init` will not match.
 
@@ -51,6 +51,7 @@ The initializer creates:
 - `state/environment.md`: detected environment and observed delegation behavior.
 - `state/control-contract.md`: when the loop can continue automatically, when it needs human confirmation, and when it must stop.
 - `state/evidence-index.md`: valid evidence paths, freshness, validation method, citation requirements, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
+- `local/.gitignore` and `local/channel-params.example.json`: ignored local channel parameter store scaffolding.
 - `meta/self-audit.md`: loop-health checks for dead loops, contradictions, drift, and runaway context.
 
 The initializer does not fill real project facts. Do not invent missing data sources or credentials. If the loop needs Jenkins, GitHub, GitLab, an MCP server, a broker API, a research report skill, or an internal platform, describe it explicitly and verify access before relying on it.
@@ -173,6 +174,7 @@ For each tool include:
 - Read/write permissions:
 - Account role:
 - Permission scope:
+- Local parameter references:
 - Access verification method:
 - Failure handling:
 
@@ -188,6 +190,19 @@ For each required secret include:
 - Verification command:
 - Current status: configured | missing | unknown
 - Human action required: yes | no
+
+## 9.1 Local Channel Parameter Requirements
+
+Do not include parameter values. List only keys, storage/provider references, and expected presence.
+
+For each required parameter include:
+- Channel ID:
+- Parameter key:
+- Sensitivity:
+- Storage:
+- Reference:
+- Required for:
+- Current status:
 
 ## 10. Decision Log
 
@@ -219,6 +234,7 @@ The Harnessloop intake gate must not accept a packet only because it is detailed
 - Documentation inventory is complete enough to find source-of-truth material.
 - Process artifacts are traceable through paths, URLs, commands, or explicit unsupported hypotheses.
 - External tool access and credential requirements are described without secret values.
+- Local channel parameter references are described without values.
 - Completed work has evidence.
 - Current goal, progress, next action, and risks are internally consistent.
 - Missing validation, stale evidence, goal drift, validation drift, and unresolved human decisions are called out.
@@ -273,6 +289,8 @@ Positive feedback moves to the next subgoal or task. Negative and neutral feedba
 Use `$harnessloop-evidence` when evidence contracts need human-driven updates during a loop. It can add, check, revise, reject, or diff evidence entries, but material changes must return to the continuation gate before execution continues.
 
 Use `$harnessloop-channels` to list declared external systems, access channels, and tools. Use `$harnessloop-connectivity` to run declared connectivity checks. Missing tools, credentials, permissions, endpoints, parameters, or write-safety details must be confirmed by the user before any access attempt. If a connectivity self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, ask the user for the exact missing facts before continuing.
+
+Use `$harnessloop-secrets` when a channel needs reusable local parameters such as endpoint keys, usernames, tokens, API keys, job names, account ids, or provider references. It manages `.harnessloop/local/channel-params.json`, which is ignored by `.harnessloop/local/.gitignore`. When evidence introduces a declared external channel parameter, create a local placeholder key, then let the user set the value manually or let the agent write it only through the ignored local store. Evidence and channel contracts store only parameter keys and references, not values.
 
 ## Validation
 

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "channels": {
+    "example-channel": {
+      "parameters": {
+        "EXAMPLE_TOKEN": {
+          "sensitivity": "secret",
+          "storage": "env",
+          "env": "EXAMPLE_TOKEN",
+          "value": null,
+          "required_for": [
+            "connectivity"
+          ],
+          "status": "missing",
+          "notes": "Replace this example with a project-specific channel parameter reference. Do not commit real values."
+        }
+      }
+    }
+  }
+}

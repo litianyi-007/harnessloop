@@ -102,6 +102,9 @@ The first setup creates or fills:
   setup/
     data-sources.md
     cost-context-policy.md
+  local/
+    .gitignore
+    channel-params.example.json
   state/
     current.md
     environment.md
@@ -138,7 +141,7 @@ $harnessloop-intake
 
 If the packet is incomplete, Harnessloop writes `gap-review.md` and asks only for missing facts. If it passes, the first round should normally be `intake-review`, which maps imported evidence into `.harnessloop/state/evidence-index.md` before any business execution continues.
 
-The transfer packet must include task identity, goal contract, progress state, change state, documentation inventory, process artifacts, evidence, external tools, credential requirements without secret values, decisions, risks, and next handoff recommendation. See [docs/usage.md](docs/usage.md) for the full prompt.
+The transfer packet must include task identity, goal contract, progress state, change state, documentation inventory, process artifacts, evidence, external tools, credential requirements without secret values, local channel parameter keys, decisions, risks, and next handoff recommendation. See [docs/usage.md](docs/usage.md) for the full prompt.
 
 ## Evidence Model
 
@@ -159,6 +162,7 @@ Harnessloop separates channel inventory from connectivity checks:
 
 - `$harnessloop-channels`: lists declared external systems, tools, MCP servers, CLIs, APIs, CI systems, databases, brokers, and credential references without probing.
 - `$harnessloop-connectivity`: runs only declared connectivity methods after the required tool, endpoint/resource, credential reference, permission scope, parameters, and write-safety rules are explicit.
+- `$harnessloop-secrets`: creates and checks local-only channel parameter keys in `.harnessloop/local/channel-params.json`; values are never committed or copied into evidence.
 
 If a channel self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, Harnessloop must ask for the exact missing facts before trying alternatives or continuing.
 
@@ -172,6 +176,7 @@ If a channel self-check fails, is blocked, is skipped, or needs user confirmatio
 - `handoff`: a file-based task transfer for subagents or reviewers.
 - `channel inventory`: declared external systems and tools, listed without probing.
 - `connectivity check`: declared access verification that stops and asks when required access facts are missing.
+- `local channel parameters`: ignored local values or provider references used by external channels.
 - `self-audit`: loop health check for dead loops, contradictions, drift, and runaway context.
 - `evolution issue`: a redacted issue that helps improve Harnessloop itself.
 
@@ -199,6 +204,7 @@ Run `$harnessloop-delegation` before relying on subagent or swarm work when mode
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.
 - `$harnessloop-channels`: list declared external systems, channels, and tools without probing.
 - `$harnessloop-connectivity`: check declared external system/tool connectivity and ask for missing access facts.
+- `$harnessloop-secrets`: manage local channel parameter keys, secret references, presence checks, and redaction rules.
 - `$harnessloop-delegation`: check subagent/swarm readiness, scope control, output paths, evidence citation behavior, and model/effort match.
 - `$harnessloop-status`: read current Harnessloop state.
 - `$harnessloop-continue`: run continuation gates before execution.
@@ -233,6 +239,7 @@ python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_valid
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-channels
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-connectivity
+python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-secrets
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-delegation
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
 python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue

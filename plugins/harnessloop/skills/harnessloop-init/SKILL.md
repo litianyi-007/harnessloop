@@ -59,6 +59,9 @@ If the initializer cannot be found or cannot run, create only the protocol skele
   setup/
     data-sources.md
     cost-context-policy.md
+  local/
+    .gitignore
+    channel-params.example.json
   state/
     current.md
     environment.md

@@ -29,7 +29,7 @@ If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If imported
 5. If feedback is `blocked`, stop unless a clear human unblock record is present.
 6. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
 7. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
-8. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution.
+8. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
 9. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
 
 ## Output Contract
