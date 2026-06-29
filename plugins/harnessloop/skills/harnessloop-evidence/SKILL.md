@@ -21,11 +21,14 @@ Useful input includes:
 - `applies-to`: project setup, goal, threshold, round, scope-lock, review, or decision.
 - `freshness-rule`: expected timestamp, max age, refresh cadence, or immutability statement.
 - `validation-method`: command, test, checksum, query, review method, access check, or reproducibility condition.
+- `external-system`: required when evidence depends on reading from or writing to an external system; include system name, operation, endpoint or resource identifier, required account/role, permission scope, credential reference without secret value, required parameters, and access verification method.
 - `citation-requirement`: how future reviews must cite this evidence.
 - `sensitivity`: public, internal, confidential, secret-reference-only, or unknown.
 - `human-confirmation`: required for any acceptance criteria revision, lower validation bar, or broader evidence scope.
 
 If the request lacks enough information to safely mutate the contract, produce a missing-fields response instead of guessing.
+
+For external-system evidence, missing connection conditions or parameters are a hard stop. Ask the user immediately for the missing facts; do not infer endpoint names, account roles, credential locations, permission scopes, request parameters, write semantics, or fallback access paths.
 
 ## Processing Contract
 
@@ -37,6 +40,8 @@ If the request lacks enough information to safely mutate the contract, produce a
 6. For `reject`, record why evidence is invalid, stale, unsupported, too sensitive, or not applicable.
 7. For `diff`, summarize the contract change and its continuation effect.
 8. Update self-audit or recommend `$harnessloop-loop` self-audit when the evidence change reveals drift, contradiction, stale data, or validation drift.
+
+When an external system read or write is involved, first verify that the request states the system, operation, required parameters, permission scope, credential reference, and failure handling. If any of these are missing or ambiguous, stop before tool use and ask the user a focused question for the missing condition.
 
 ## Output Contract
 
@@ -54,6 +59,8 @@ Evidence contract action:
 - observed freshness:
 - validation method:
 - citation requirement:
+- external system:
+- access requirements:
 - artifact health: valid | invalid | stale | unreachable | unknown
 - claim support: supports | refutes | inconclusive | not-evaluated
 - acceptance effect: allow | block | needs-review | no-change
@@ -70,6 +77,7 @@ Prefer updating `.harnessloop/state/evidence-index.md` for global evidence inven
 - Do not weaken evidence requirements without human confirmation.
 - Do not treat valid artifact health as claim support; failed tests may be valid evidence that refutes acceptance.
 - Do not store secrets, tokens, cookies, private keys, raw customer data, or unnecessary proprietary excerpts.
+- Do not infer external-system access details. Missing endpoint, account, credential reference, permission, required parameter, write target, or access verification method must be resolved by asking the user before attempting access.
 - If evidence mutation would permit continuation after a blocked, negative, or neutral decision, return `needs-review` and route back to `$harnessloop-loop`.
 
 ## Examples

@@ -178,6 +178,8 @@ Treat these as protocol semantics. Do not assume a CLI exists unless the project
 
 Do not continue execution directly after a material evidence contract change. Route back through the continuation gate and self-audit when the change affects acceptance, freshness, validation method, or continuation authority.
 
+If evidence depends on reading from or writing to an external system and any access condition or required parameter is missing, do not infer it or probe blindly. Ask the user for the missing system, operation, endpoint/resource, account role, permission scope, credential reference, parameters, or failure handling before attempting access.
+
 `harnessloop contract control` manages human intervention and continuation rules:
 
 - Define auto-continue states.
