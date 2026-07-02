@@ -62,6 +62,8 @@ If the initializer cannot be found or cannot run, create only the protocol skele
   local/
     .gitignore
     channel-params.example.json
+  intake/
+    .gitignore
   state/
     current.md
     environment.md

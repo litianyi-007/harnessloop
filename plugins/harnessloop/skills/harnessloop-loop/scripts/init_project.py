@@ -40,6 +40,10 @@ LOCAL_FILES = {
     ".harnessloop/local/channel-params.example.json": "channel-params-example-template.json",
 }
 
+INTAKE_FILES = {
+    ".harnessloop/intake/.gitignore": "intake-gitignore-template.txt",
+}
+
 
 def read_template(name: str) -> str:
     path = REFERENCES_DIR / name
@@ -104,6 +108,9 @@ def initialize(project: Path, intake: str | None, force: bool, dry_run: bool) ->
         write_file(project / rel, read_template(template), force, dry_run, result)
 
     for rel, template in LOCAL_FILES.items():
+        write_file(project / rel, read_template(template), force, dry_run, result)
+
+    for rel, template in INTAKE_FILES.items():
         write_file(project / rel, read_template(template), force, dry_run, result)
 
     if intake:

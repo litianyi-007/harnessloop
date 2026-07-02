@@ -1,0 +1,4 @@
+# Transfer packets can carry another session's raw context, sensitive
+# documentation notes, or unconfirmed assumptions. Keep them local; the
+# intake-gate.md and gap-review.md outputs remain tracked as the audit trail.
+*/transfer-packet.md
