@@ -1,0 +1,16 @@
+observation-article.md
+  s_e6217f417e8db8::t_03663d8e308f63 1-165
+product-feedback.md
+  s_e6217f417e8db8::t_272c23e9a23263 1-263
+observation-outline.md
+  s_e6217f417e8db8::t_d0a95d032643d9 1-56
+adversarial-review-p0.md
+  s_e6217f417e8db8::t_6a1ab60ac009f2 190-257
+  s_e6217f417e8db8::t_175abcc9e07ac9 1-189
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "5185e8be3f33bfd710b6fbdbdcb48cfaf1d826b3",
+  "prompts": {}
+}
