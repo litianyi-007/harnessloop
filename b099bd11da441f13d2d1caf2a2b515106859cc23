@@ -1,0 +1,28 @@
+docs/harnessloop-framework.md
+  s_e6217f417e8db8::t_17a2a0b8313639 66-66
+product-feedback.md
+  s_e6217f417e8db8::t_272c23e9a23263 1-263
+README.md
+  s_e6217f417e8db8::t_70981bfb308816 108-109,119-120
+  s_e6217f417e8db8::t_3d78b6deb28a64 234-235,238-238,240-241,243-248
+adversarial-review-p0.md
+  s_e6217f417e8db8::t_175abcc9e07ac9 1-189
+  s_e6217f417e8db8::t_6a1ab60ac009f2 190-257
+docs/usage.md
+  s_e6217f417e8db8::t_04f639172af2b4 51-51,55-55,57-57,59-59
+observation-article.md
+  s_e6217f417e8db8::t_03663d8e308f63 1-165
+AGENTS.md
+  s_e6217f417e8db8::t_8f8cad60f730d3 9-10
+.github/workflows/validate.yml
+  s_e6217f417e8db8::t_0e7c001fd7ce5d 1-21,28-32
+  s_e6217f417e8db8::t_56a8f6c1e99cd1 22-27,33-37
+observation-outline.md
+  s_e6217f417e8db8::t_d0a95d032643d9 1-56
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "b099bd11da441f13d2d1caf2a2b515106859cc23",
+  "prompts": {}
+}
