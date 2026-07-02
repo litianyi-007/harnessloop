@@ -6,6 +6,7 @@
   "plugins": [
     {
       "name": "harnessloop",
+      "license": "Apache-2.0",
       "source": {
         "source": "local",
         "path": "./plugins/harnessloop"

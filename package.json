@@ -2,10 +2,11 @@
   "name": "harnessloop-plugin-marketplace",
   "version": "0.9.0",
   "private": true,
+  "license": "Apache-2.0",
   "scripts": {
-    "validate": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/validate.ps1",
-    "init:project": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/init-project.ps1",
-    "install:codex": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/install-codex.ps1",
-    "install:claude": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/install-claude.ps1"
+    "validate": "node scripts/run-python.mjs scripts/validate.py",
+    "init:project": "node scripts/run-python.mjs scripts/init-project.py",
+    "install:codex": "codex plugin marketplace add . && codex plugin add harnessloop@harnessloop",
+    "install:claude": "claude plugin marketplace add . --scope user && claude plugin install harnessloop@harnessloop --scope user"
   }
 }
