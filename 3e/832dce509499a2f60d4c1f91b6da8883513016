@@ -1,0 +1,26 @@
+plugins/harnessloop/skills/harnessloop-loop/references/intake-gitignore-template.txt
+  s_e6217f417e8db8::t_8cbbab6cb85e1f 1-4
+plugins/harnessloop/skills/harnessloop-init/SKILL.md
+  s_e6217f417e8db8::t_97636de26fce7b 65-66
+plugins/harnessloop/skills/harnessloop-loop/scripts/init_project.py
+  s_e6217f417e8db8::t_6175a16ce84297 113-115
+  s_e6217f417e8db8::t_c1382e35fac051 43-46
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_e6217f417e8db8::t_73f4766a7d60ab 81
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "3e832dce509499a2f60d4c1f91b6da8883513016",
+  "prompts": {},
+  "sessions": {
+    "s_e6217f417e8db8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23e2de89-3b93-497d-b76d-a49941a8b5ef",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
