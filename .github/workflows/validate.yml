@@ -1,0 +1,37 @@
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Exercised through the npm entry so the run-python.mjs shim is covered
+      # on every platform, not just the direct python invocation.
+      - name: Run repository validation
+        env:
+          # CI runners have no Claude CLI; the strict plugin validation step
+          # still runs locally and is required before release.
+          HARNESSLOOP_SKIP_CLAUDE: "1"
+        run: npm run validate
+
+# Merge gating: enable branch protection (or a ruleset) on `main` requiring
+# the `validate` checks to pass. This is a repository setting and cannot be
+# expressed in this file.
