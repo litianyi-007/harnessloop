@@ -1,0 +1,27 @@
+docs/usage.md
+  s_e6217f417e8db8::t_04f639172af2b4 51,55,57,59
+AGENTS.md
+  s_e6217f417e8db8::t_8f8cad60f730d3 9-10
+docs/harnessloop-framework.md
+  s_e6217f417e8db8::t_17a2a0b8313639 66
+README.md
+  s_e6217f417e8db8::t_3d78b6deb28a64 234-235,238,240-241,244-248
+  s_e6217f417e8db8::t_70981bfb308816 108-109,119-120
+  s_e6217f417e8db8::t_8ac7a0a117b73b 249
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "b099bd11da441f13d2d1caf2a2b515106859cc23",
+  "prompts": {},
+  "sessions": {
+    "s_e6217f417e8db8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23e2de89-3b93-497d-b76d-a49941a8b5ef",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
