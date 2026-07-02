@@ -63,6 +63,7 @@ Out of current scope:
     channel-params.example.json
     channel-params.json  # local ignored file, never committed
   intake/
+    .gitignore  # ignores transfer-packet.md; gate/review outputs stay tracked
     YYYYMMDD-HHMM-<task-slug>/
       transfer-packet.md
       intake-gate.md

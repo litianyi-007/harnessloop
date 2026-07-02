@@ -6,8 +6,8 @@ This repository packages Harnessloop as a local plugin marketplace. Core plugin 
 
 ## Build, Test, and Development Commands
 
-- `npm run validate`: runs `scripts/validate.ps1`, checking manifests, marketplace entries, init smoke output, and Claude strict plugin validation.
-- `npm run init:project -- -Project C:\path\to\project`: initializes Harnessloop files in a target project through the PowerShell wrapper.
+- `npm run validate`: runs `scripts/validate.py` (via a Node shim that resolves Python 3), checking manifests, marketplace entries, init smoke output, secrets smoke output, documentation skeleton consistency, mechanical protocol gates (`verify_protocol.py`), and Claude strict plugin validation. `scripts/validate.ps1` and `scripts/validate.sh` are thin wrappers around the same validator. Set `HARNESSLOOP_SKIP_CLAUDE=1` to skip the Claude CLI step where it is not installed (e.g. CI).
+- `npm run init:project -- --project C:\path\to\project`: initializes Harnessloop files in a target project through the Python wrapper.
 - `npm run install:codex` / `npm run install:claude`: installs the local marketplace plugin for the target agent.
 - `./scripts/install-codex.sh` and `./scripts/install-claude.sh`: Unix equivalents for local installation.
 

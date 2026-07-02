@@ -105,6 +105,8 @@ The first setup creates or fills:
   local/
     .gitignore
     channel-params.example.json
+  intake/
+    .gitignore
   state/
     current.md
     environment.md
@@ -114,6 +116,8 @@ The first setup creates or fills:
   meta/
     self-audit.md
     evolution-issues/
+  evals/
+    matrix.md
   goals/
 ```
 
@@ -227,28 +231,21 @@ Run `$harnessloop-delegation` before relying on subagent or swarm work when mode
 
 ## Validate
 
-```powershell
-.\scripts\validate.ps1
+```bash
+npm run validate
 ```
 
-The validation script checks marketplace manifests and runs Claude Code strict validation against the marketplace root and plugin root.
+Or call the validator directly on any platform:
 
-Validate skills directly:
-
-```powershell
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-init
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-loop
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-goal
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-evidence
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-channels
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-connectivity
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-secrets
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-delegation
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-status
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-continue
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-intake
-python C:\Users\litianyi\.codex\skills\.system\skill-creator\scripts\quick_validate.py plugins\harnessloop\skills\harnessloop-issue
+```bash
+python scripts/validate.py
 ```
+
+Wrapper scripts `scripts/validate.ps1` (Windows) and `scripts/validate.sh` (macOS/Linux) run the same Python validator.
+
+The validator checks marketplace manifests, runs the init and secrets smoke tests, verifies documentation skeleton consistency against `init_project.py` (the single source of truth), enforces the mechanical protocol gates in `verify_protocol.py` against `examples/mock-project`, and runs Claude Code strict plugin validation. Set `HARNESSLOOP_SKIP_CLAUDE=1` to skip the Claude CLI step in environments where it is not installed.
+
+If the Codex skill-creator toolkit is installed, its `quick_validate.py` can additionally lint each directory under `plugins/harnessloop/skills/`.
 
 ## Current Limits
 

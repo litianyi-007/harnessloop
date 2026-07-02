@@ -48,11 +48,15 @@ The initializer creates:
 
 - `setup/data-sources.md`: real static data, dynamic/generated data, external tools, access requirements, freshness rules, drift risks, and validation methods.
 - `setup/cost-context-policy.md`: main-session role, subagent/swarm role, model/effort expectations, budget limits, and non-delegable decisions.
+- `state/current.md`: the status entry point for the active goal, round, feedback, and next action.
 - `state/environment.md`: detected environment and observed delegation behavior.
 - `state/control-contract.md`: when the loop can continue automatically, when it needs human confirmation, and when it must stop.
 - `state/evidence-index.md`: valid evidence paths, freshness, validation method, citation requirements, artifact health, claim support, acceptance effect, reproducibility, and sensitivity.
+- `state/self-check.md`: setup and continuation gate check records.
 - `local/.gitignore` and `local/channel-params.example.json`: ignored local channel parameter store scaffolding.
+- `intake/.gitignore`: keeps takeover transfer packets local while gate and review outputs stay tracked.
 - `meta/self-audit.md`: loop-health checks for dead loops, contradictions, drift, and runaway context.
+- `evals/matrix.md`: protocol robustness scenario matrix.
 
 The initializer does not fill real project facts. Do not invent missing data sources or credentials. If the loop needs Jenkins, GitHub, GitLab, an MCP server, a broker API, a research report skill, or an internal platform, describe it explicitly and verify access before relying on it.
 
