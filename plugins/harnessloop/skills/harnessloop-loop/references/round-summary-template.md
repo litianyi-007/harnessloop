@@ -22,6 +22,19 @@
 
 ## Review Result
 
+## Cost
+
+Paste the output of `scripts/round_cost.py` here. Do not read transcript
+files into the session; only the script's summary enters context.
+
+- Transcript window:
+- Input tokens:
+- Cache write tokens:
+- Cache read tokens:
+- Output tokens:
+- Protocol-attributed (heuristic):
+- Estimated cost:
+
 ## Decision
 
 ## Blocker Classification

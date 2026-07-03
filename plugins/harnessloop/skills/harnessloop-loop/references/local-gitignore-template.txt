@@ -1,4 +1,5 @@
 channel-params.json
+cost-marker.json
 *.secret.json
 *.token
 *.key

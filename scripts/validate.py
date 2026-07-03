@@ -8,7 +8,8 @@ Checks, in order:
 4. Documentation skeleton consistency against init_project.py (single source of truth).
 5. Mechanical protocol gates (verify_protocol.py) on examples/mock-project,
    including negative fixtures that must fail.
-6. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
+6. Round cost settlement smoke test (round_cost.py) on a synthetic transcript.
+7. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
    for environments without the claude CLI, e.g. bare CI runners).
 
 Exit code 0 = all passed.
@@ -60,7 +61,7 @@ def run_python(script: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def validate_manifests() -> None:
-    print("[1/6] Manifests and marketplace entries")
+    print("[1/7] Manifests and marketplace entries")
     codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
     codex_marketplace = read_json(REPO_ROOT / ".agents" / "plugins" / "marketplace.json")
     claude_manifest = read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
@@ -106,7 +107,7 @@ def validate_manifests() -> None:
 
 
 def validate_init_smoke() -> None:
-    print("[2/6] Init smoke test")
+    print("[2/7] Init smoke test")
     smoke_root = REPO_ROOT / ".tmp" / f"init-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
     try:
@@ -127,7 +128,7 @@ def validate_init_smoke() -> None:
 
 
 def validate_secrets_smoke() -> None:
-    print("[3/6] Secrets smoke test")
+    print("[3/7] Secrets smoke test")
     secrets_script = PLUGIN_ROOT / "skills" / "harnessloop-secrets" / "scripts" / "channel_params.py"
     smoke_root = REPO_ROOT / ".tmp" / f"secrets-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
@@ -202,7 +203,7 @@ def skeleton_blocks(text: str) -> str:
 
 
 def validate_doc_consistency() -> None:
-    print("[4/6] Documentation skeleton consistency (source of truth: init_project.py)")
+    print("[4/7] Documentation skeleton consistency (source of truth: init_project.py)")
     dirs, files = skeleton_entries()
 
     # usage.md documents the initializer output as a bullet list, not a tree.
@@ -232,7 +233,7 @@ def top_level(rel: str) -> str:
 
 
 def validate_protocol_gates() -> None:
-    print("[5/6] Mechanical protocol gates (verify_protocol.py)")
+    print("[5/7] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
     violations = verify_protocol.verify_project(mock_project)
     check(not violations, f"examples/mock-project passes verify ({len(violations)} violation(s))")
@@ -285,8 +286,58 @@ def validate_protocol_gates() -> None:
         shutil.rmtree(fixture_root, ignore_errors=True)
 
 
+def validate_round_cost_smoke() -> None:
+    print("[6/7] Round cost settlement smoke test (round_cost.py)")
+    cost_script = LOOP_SCRIPTS / "round_cost.py"
+    smoke_root = REPO_ROOT / ".tmp" / f"cost-smoke-{uuid.uuid4().hex}"
+    project = smoke_root / "project"
+    transcripts = smoke_root / "transcripts"
+    try:
+        project.mkdir(parents=True)
+        transcripts.mkdir(parents=True)
+        turn = {
+            "type": "assistant",
+            "message": {
+                "usage": {
+                    "input_tokens": 100,
+                    "cache_creation_input_tokens": 50,
+                    "cache_read_input_tokens": 1000,
+                    "output_tokens": 200,
+                },
+                "content": [{"type": "text", "text": "updating .harnessloop/state/current.md"}],
+            },
+        }
+        business_turn = json.loads(json.dumps(turn))
+        business_turn["message"]["content"] = [{"type": "text", "text": "business work"}]
+        (transcripts / "session.jsonl").write_text(
+            json.dumps(turn) + "\n" + "garbage-line\n" + json.dumps(business_turn) + "\n",
+            encoding="utf-8",
+        )
+
+        result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(transcripts))
+        check(result.returncode == 0, "round_cost.py exits 0 on synthetic transcript")
+        check("## Cost" in result.stdout, "round_cost.py emits a ## Cost section")
+        check("2 assistant turn(s)" in result.stdout, "round_cost.py counts assistant turns")
+        check("1/2 turns" in result.stdout, "round_cost.py attributes protocol turns heuristically")
+        check(
+            (project / ".harnessloop" / "local" / "cost-marker.json").exists(),
+            "round_cost.py writes the settlement marker",
+        )
+
+        result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(transcripts))
+        check(
+            result.returncode == 0 and "0 assistant turn(s)" in result.stdout,
+            "second settlement reports an empty incremental window",
+        )
+
+        result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(smoke_root / "missing"))
+        check(result.returncode == 2, "missing transcript dir exits 2")
+    finally:
+        shutil.rmtree(smoke_root, ignore_errors=True)
+
+
 def validate_claude_strict() -> None:
-    print("[6/6] Claude strict plugin validation")
+    print("[7/7] Claude strict plugin validation")
     if os.environ.get("HARNESSLOOP_SKIP_CLAUDE") == "1":
         print("  skipped: HARNESSLOOP_SKIP_CLAUDE=1")
         return
@@ -323,6 +374,7 @@ def main() -> int:
     validate_secrets_smoke()
     validate_doc_consistency()
     validate_protocol_gates()
+    validate_round_cost_smoke()
     validate_claude_strict()
 
     print()

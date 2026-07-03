@@ -482,7 +482,7 @@ The eval matrix is not a runtime gate by itself. It informs setup hardening, tem
 
 After each completed round:
 
-1. Update `round-summary.md`.
+1. Update `round-summary.md`, including its `## Cost` section: run `scripts/round_cost.py --project <target-project>` and paste its markdown output. The script settles token usage since the last settlement from local session transcripts; never read transcript files into the session. If it exits non-zero, record cost as unavailable with the reason.
 2. Write `decision.md` with positive, negative, neutral, or blocked.
 3. Archive closed handoffs.
 4. Update `meta/self-audit.md` when the round exposes loop-health risk.
