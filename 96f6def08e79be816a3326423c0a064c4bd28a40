@@ -1,0 +1,44 @@
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  0000019f26860000 1-500
+plugins/harnessloop/skills/harnessloop-loop/references/local-gitignore-template.txt
+  0000019f26860000 1-7
+plugins/harnessloop/skills/harnessloop-loop/references/round-summary-template.md
+  0000019f26860000 1-50
+plugins/harnessloop/skills/harnessloop-loop/scripts/round_cost.py
+  0000019f26860000 1-193
+scripts/validate.py
+  0000019f26860000 1-389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "96f6def08e79be816a3326423c0a064c4bd28a40",
+  "prompts": {
+    "s_cdf29e08620961::t_aed7de2e27625b": {
+      "agent_id": {
+        "tool": "mock_ai",
+        "id": "ai-thread-1783057742058066600",
+        "model": "unknown"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019f26860000": {
+      "agent_id": {
+        "tool": "claude",
+        "model": "claude-fable-5",
+        "id": "ai-thread-claude-claude-fable-5-1783057743872"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 1139,
+      "total_deletions": 0,
+      "accepted_lines": 1139,
+      "overriden_lines": 0
+    }
+  }
+}
