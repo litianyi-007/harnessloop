@@ -1,0 +1,38 @@
+README.md
+  0000019f277084a6 1-276
+docs/cost-model.md
+  0000019f277084a6 1-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "559513589322de881dd9f441d0b6d3e5e30ec571",
+  "prompts": {
+    "s_6043d2f3f8af5b::t_04ca73313ba514": {
+      "agent_id": {
+        "tool": "mock_ai",
+        "id": "ai-thread-1783073111990408200",
+        "model": "unknown"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019f277084a6": {
+      "agent_id": {
+        "tool": "claude",
+        "model": "claude-fable-5",
+        "id": "ai-thread-claude-claude-fable-5-1783073113254"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 434,
+      "total_deletions": 0,
+      "accepted_lines": 434,
+      "overriden_lines": 0
+    }
+  }
+}
