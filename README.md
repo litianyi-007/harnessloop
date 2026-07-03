@@ -203,6 +203,21 @@ Harnessloop keeps the main session responsible for orchestration and control dec
 
 Run `$harnessloop-delegation` before relying on subagent or swarm work when model, effort, scope control, output path control, or evidence citation behavior must be verified.
 
+## Cost Accountability
+
+Harnessloop treats its own overhead as a first-class protocol measurement.
+At every round close, `round_cost.py` settles token usage from local session
+transcripts and writes an itemized `## Cost` section into the round summary:
+input/cache/output tokens, a protocol-attribution estimate, and an optional
+dollar figure from user-supplied rates. Gate interceptions — rounds rejected
+by adversarial review, drift caught by self-audit — are recorded in decision
+files so the protocol's cost and its catches sit in the same auditable
+ledger.
+
+Harnessloop does not claim the overhead pays for itself; it gives you the
+bill, the interception record, and a judgment framework, and lets your own
+project's data decide. See [docs/cost-model.md](docs/cost-model.md).
+
 ## Skills
 
 - `$harnessloop-init`: initialize `.harnessloop/` project files.
@@ -222,6 +237,7 @@ Run `$harnessloop-delegation` before relying on subagent or swarm work when mode
 
 - `docs/usage.md`: product-level usage guide and transfer packet prompt.
 - `docs/harnessloop-framework.md`: framework design and detailed protocol.
+- `docs/cost-model.md`: protocol overhead measurement and cost/benefit judgment framework.
 - `docs/harnessloop-flow.mmd`: canonical detailed Mermaid flow source.
 - `docs/harnessloop-flow.svg`: rendered detailed flow preview.
 - `docs/assets/`: README and documentation visuals.
