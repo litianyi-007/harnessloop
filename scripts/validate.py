@@ -285,6 +285,88 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
 
+    # Rule B pathish false-positive fixtures (evolution issue TH-0006): a
+    # real project run turned up six false-positive dangling-citation hits
+    # from regex/glob spans, a submodule-relative path, and bare-domain
+    # URLs. Cover each exemption plus the explicit verify:ignore escape
+    # hatch, and confirm a genuinely dangling citation is still caught
+    # (must not trade false positives for false negatives).
+    exempt_root = REPO_ROOT / ".tmp" / f"verify-fixture-exempt-{uuid.uuid4().hex}"
+    round_dir2 = exempt_root / ".harnessloop" / "goals" / "20260102-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir2 / "evidence").mkdir(parents=True)
+        (round_dir2 / "reviews").mkdir(parents=True)
+        (round_dir2 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+
+        # A first-level git submodule with a real file, cited relative to
+        # the submodule's own root rather than the project root.
+        (exempt_root / ".gitmodules").write_text(
+            '[submodule "vendorlib"]\n\tpath = vendorlib\n\turl = https://example.invalid/vendorlib.git\n',
+            encoding="utf-8",
+        )
+        (exempt_root / "vendorlib" / "pkg").mkdir(parents=True)
+        (exempt_root / "vendorlib" / "pkg" / "real_file.py").write_text("# real\n", encoding="utf-8")
+
+        (round_dir2 / "reviews" / "exemptions.md").write_text(
+            "Regex/glob spans must not be treated as path citations:\n"
+            "- `^_?\\s*(no|none)\\b.*declared.*_?$`\n"
+            "- `__pycache__/*.pyc`\n"
+            "\n"
+            "Bare-domain URLs must not be treated as path citations:\n"
+            "- `docs.python.org/3/library/os.html`\n"
+            "- `github.com/org/repo/blob/main/src/foo.py`\n"
+            "\n"
+            "Submodule-relative citation, resolves against the vendorlib submodule root:\n"
+            "- `pkg/real_file.py`\n"
+            "\n"
+            "Submodule-relative citation to a file that genuinely does not exist "
+            "(submodule bases must not blanket-exempt everything):\n"
+            "- `pkg/does_not_exist_in_submodule.py`\n"
+            "\n"
+            "<!-- verify:ignore -->\n"
+            "Explicitly ignored line citing `totally/made/up/ignored_prev_line.py`\n"
+            "Explicitly ignored same-line citation `totally/made/up/ignored_same_line.py` <!-- verify:ignore -->\n"
+            "\n"
+            "A genuinely dangling citation with none of the above properties, must still fail:\n"
+            "- `docs/genuinely_missing_file.md`\n",
+            encoding="utf-8",
+        )
+
+        violations = verify_protocol.verify_project(exempt_root)
+        details = " | ".join(v["detail"] for v in violations)
+
+        check(
+            "declared.*_?$" not in details and "__pycache__/*.pyc" not in details,
+            "verify exempts regex/glob-metacharacter spans from citation checking",
+        )
+        check(
+            "docs.python.org" not in details and "github.com/org/repo" not in details,
+            "verify exempts bare-domain URL spans from citation checking",
+        )
+        check(
+            "pkg/real_file.py" not in details,
+            "verify resolves a citation relative to a first-level git submodule root",
+        )
+        check(
+            any("pkg/does_not_exist_in_submodule.py" in v["detail"] for v in violations),
+            "verify still catches a dangling citation inside a submodule-relative path",
+        )
+        check(
+            "ignored_prev_line.py" not in details and "ignored_same_line.py" not in details,
+            "verify:ignore marker (same line or line immediately above) suppresses citation checking",
+        )
+        check(
+            any("genuinely_missing_file.md" in v["detail"] for v in violations),
+            "verify still catches a genuinely dangling citation with no applicable exemption (no false negative)",
+        )
+    finally:
+        shutil.rmtree(exempt_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[6/7] Round cost settlement smoke test (round_cost.py)")
