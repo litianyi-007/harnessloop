@@ -221,6 +221,7 @@ project's data decide. See [docs/cost-model.md](docs/cost-model.md).
 ## Skills
 
 - `$harnessloop-init`: initialize `.harnessloop/` project files.
+- `$harnessloop-setup`: complete or check environment detection, data sources, cost/context policy, and control-contract profile via the five-step setup wizard.
 - `$harnessloop-intake`: review transfer packets and run intake gates.
 - `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, supersede, or assess deletion impact for goals.
 - `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.

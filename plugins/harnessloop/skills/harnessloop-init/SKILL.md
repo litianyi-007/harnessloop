@@ -32,7 +32,7 @@ First identify the target project:
 
 - Use the current working directory unless the user names another path.
 - If `AGENTS.md`, `CLAUDE.md`, or repository docs already mention a project-specific Harnessloop policy, read them before initializing.
-- If `.harnessloop/` already exists, do not overwrite it. Report that Harnessloop is already initialized and suggest `$harnessloop-loop` for status or continuation.
+- If `.harnessloop/` already exists, do not overwrite it. Report that Harnessloop is already initialized and suggest `$harnessloop-setup` to check/complete setup, or `$harnessloop-status` for a read-only summary.
 
 ## Preferred Setup
 
@@ -87,6 +87,6 @@ Report:
 - Target project path.
 - Whether initialization was created, skipped, or blocked.
 - Files or directories created.
-- Next recommended prompt: `Use $harnessloop-loop to define the goal and start the evidence-backed loop.`
+- Next recommended prompt: `Use $harnessloop-setup to walk through environment detection, data sources, cost/context policy, and control-contract profile before defining a goal.`
 
 If this was a takeover intake, tell the user where to place the transfer packet and that `$harnessloop-loop` must run the intake gate before business execution continues.

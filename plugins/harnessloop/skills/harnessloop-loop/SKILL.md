@@ -37,7 +37,7 @@ Produce file-backed loop state, not just chat summaries. Depending on the reques
 
 For handoff formatting, use `references/handoff-template.md`.
 For goal decomposition, feedback, and cost/context policy, use the matching templates in `references/`.
-For control-plane state, evidence indexing, environment self-check, and evals, use the matching templates in `references/`.
+For control-plane state, evidence indexing, environment self-check, and evals, use the matching templates in `references/`. For control-contract profile presets (lite/standard/strict), see `references/control-contract-profiles.md`.
 For loop self-audit and upstream evolution issues, use `references/self-audit-template.md` and `references/evolution-issue-template.md`.
 For existing-session takeover, use `references/transfer-packet-template.md`, `references/intake-gate-template.md`, `references/gap-review-template.md`, and `references/intake-review-round-template.md`.
 For goal and round files, use the matching `*-template.md` files in `references/`.
@@ -66,7 +66,7 @@ Only stop the loop when the goal is achieved, required human input is missing, r
 
 ## Project Setup
 
-If `.harnessloop/` does not exist in the target project, propose creating:
+If `.harnessloop/` does not exist in the target project, or `check_setup.py` reports `gate_blocking: true` for an existing `.harnessloop/`, propose creating (or completing) the following:
 
 ```text
 .harnessloop/
@@ -97,6 +97,14 @@ If `.harnessloop/` does not exist in the target project, propose creating:
   goals/
 ```
 
+If `.harnessloop/` already exists, do not re-run the initializer. Instead check completeness:
+
+```bash
+python3 -B <skill-dir>/scripts/check_setup.py --project <target-project> --json
+```
+
+If this reports `gate_blocking: true`, hand off to `$harnessloop-setup` to complete the blocking core file (environment.md, control-contract.md, or cost-context-policy.md) before creating a goal or entering a round. If `gate_blocking` is `false` but `complete` is `false`, proceed normally and mention the non-blocking gap (see `references/control-contract-profiles.md` for the profile options `$harnessloop-setup` uses at its control-contract step) so the user can close it later. Do not fill `data-sources.md`, `cost-context-policy.md`, `control-contract.md`, or `environment.md` by free-form conversation outside the wizard.
+
 Prefer the bundled initializer instead of hand-creating files:
 
 ```bash
@@ -111,7 +119,7 @@ python <skill-dir>/scripts/init_project.py --project <target-project> --intake <
 
 The initializer must not overwrite existing files unless explicitly run with `--force`. It creates protocol skeleton files only; it must not invent project data sources, accounts, credentials, goals, or validation results.
 
-During setup, ask the user to fill in data-source connection requirements. Do not invent the data-source scope or content.
+During setup, run `$harnessloop-setup` to fill in data-source connection requirements, cost/context policy, control-contract profile (see `references/control-contract-profiles.md` for the lite/standard/strict presets), and environment detection through its five-step wizard. Do not invent the data-source scope or content, and do not fill these files by ad hoc conversation outside the wizard.
 
 `data-sources.md` should record, at minimum:
 

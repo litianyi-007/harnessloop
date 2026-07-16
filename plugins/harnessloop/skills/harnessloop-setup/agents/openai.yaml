@@ -1,0 +1,7 @@
+interface:
+  display_name: "Harnessloop Setup"
+  short_description: "Complete Harnessloop project setup"
+  default_prompt: "Use $harnessloop-setup when the user says harnessloop:setup to complete or check environment detection, data sources, cost/context policy, and control-contract profile setup."
+
+policy:
+  allow_implicit_invocation: true

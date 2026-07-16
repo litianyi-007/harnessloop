@@ -4,12 +4,15 @@
 Checks, in order:
 1. Manifest and marketplace invariants (Codex + Claude).
 2. Init smoke test (skeleton creation, intake packet).
-3. Secrets smoke test (channel-params store, gitignore protection, no values).
-4. Documentation skeleton consistency against init_project.py (single source of truth).
-5. Mechanical protocol gates (verify_protocol.py) on examples/mock-project,
+3. Setup completeness smoke test (check_setup.py) on a skeleton project and a
+   programmatically-filled fixture, including the double-gate (gate_blocking
+   vs complete) regression cases.
+4. Secrets smoke test (channel-params store, gitignore protection, no values).
+5. Documentation skeleton consistency against init_project.py (single source of truth).
+6. Mechanical protocol gates (verify_protocol.py) on examples/mock-project,
    including negative fixtures that must fail.
-6. Round cost settlement smoke test (round_cost.py) on a synthetic transcript.
-7. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
+7. Round cost settlement smoke test (round_cost.py) on a synthetic transcript.
+8. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
    for environments without the claude CLI, e.g. bare CI runners).
 
 Exit code 0 = all passed.
@@ -32,6 +35,7 @@ LOOP_SCRIPTS = PLUGIN_ROOT / "skills" / "harnessloop-loop" / "scripts"
 sys.path.insert(0, str(LOOP_SCRIPTS))
 import init_project  # noqa: E402
 import verify_protocol  # noqa: E402
+import check_setup  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -61,7 +65,7 @@ def run_python(script: Path, *args: str) -> subprocess.CompletedProcess:
 
 
 def validate_manifests() -> None:
-    print("[1/7] Manifests and marketplace entries")
+    print("[1/8] Manifests and marketplace entries")
     codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
     codex_marketplace = read_json(REPO_ROOT / ".agents" / "plugins" / "marketplace.json")
     claude_manifest = read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
@@ -107,7 +111,7 @@ def validate_manifests() -> None:
 
 
 def validate_init_smoke() -> None:
-    print("[2/7] Init smoke test")
+    print("[2/8] Init smoke test")
     smoke_root = REPO_ROOT / ".tmp" / f"init-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
     try:
@@ -127,8 +131,208 @@ def validate_init_smoke() -> None:
         shutil.rmtree(smoke_root, ignore_errors=True)
 
 
+def _fill_setup_project(root: Path) -> None:
+    """Programmatically fill every leaf field / table slot check_setup.py's
+    manifest defines, deriving edit locations directly from
+    check_setup.MANIFEST / locate_field_line / locate_table_bounds so this
+    fixture can never drift out of sync with the detector it exercises
+    (design-v2 section 7.2 bullet 2: deliberately not reusing
+    examples/mock-project, whose structure is already known to lag the
+    current templates).
+    """
+    init_project.initialize(root, None, False, False)
+    for rel in check_setup.FILES_ORDER:
+        path = root / rel
+        spec = check_setup.MANIFEST[rel]
+        text = path.read_text(encoding="utf-8")
+
+        if spec["fields"]:
+            lines = text.splitlines()
+            for heading, container, label in spec["fields"]:
+                idx = check_setup.locate_field_line(text, rel, heading, container, label)
+                if idx is None:
+                    raise AssertionError(f"fixture: cannot locate field {label!r} in {rel}")
+                lines[idx] = check_setup.render_leaf_value(lines[idx], label, "value")
+            text = "\n".join(lines) + "\n"
+
+        for heading in spec["tables"]:
+            bounds = check_setup.locate_table_bounds(text, heading)
+            if bounds is None:
+                raise AssertionError(f"fixture: cannot locate table {heading!r} in {rel}")
+            sep_idx, _slice_end = bounds
+            lines = text.splitlines()
+            lines.insert(sep_idx + 1, check_setup.render_sentinel_line(heading))
+            text = "\n".join(lines) + "\n"
+
+        path.write_text(text, encoding="utf-8")
+
+
+def _run_check_setup(project: Path) -> subprocess.CompletedProcess:
+    return run_python(LOOP_SCRIPTS / "check_setup.py", "--project", str(project), "--json")
+
+
+def _run_check_setup_json(project: Path, expected_exit: int, label: str) -> dict:
+    result = _run_check_setup(project)
+    check(result.returncode == expected_exit, f"{label}: check_setup.py exits {expected_exit}")
+    if result.returncode != expected_exit or not result.stdout.strip():
+        print(result.stdout + result.stderr)
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        print(result.stdout + result.stderr)
+        return {}
+
+
+def validate_check_setup_smoke() -> None:
+    print("[3/8] Setup completeness smoke test (check_setup.py)")
+
+    # 1. Bare skeleton: incomplete + gate_blocking (design-v2 section 7.2
+    # bullet 1). All 3 core policy files (environment, control-contract,
+    # cost-context-policy) are still `template`.
+    bare_root = REPO_ROOT / ".tmp" / f"check-setup-bare-{uuid.uuid4().hex}"
+    bare_root.mkdir(parents=True)
+    try:
+        init_project.initialize(bare_root, None, False, False)
+        report = _run_check_setup_json(bare_root, 1, "bare skeleton")
+        check(report.get("complete") is False, "bare skeleton: complete=false")
+        check(report.get("filled") == 0, "bare skeleton: filled=0")
+        check(report.get("total") == 5, "bare skeleton: total=5")
+        check(report.get("gate_blocking") is True, "bare skeleton: gate_blocking=true (all 3 core files template)")
+        check(report.get("field_todo_count") == 0, "bare skeleton: field_todo_count=0")
+        check(report.get("selfcheck_todo_count") == 0, "bare skeleton: selfcheck_todo_count=0")
+    finally:
+        shutil.rmtree(bare_root, ignore_errors=True)
+
+    # M-B regression (adversarial review, round 0003): a stray prose line
+    # left in an otherwise-empty table section -- neither a real `|`-prefixed
+    # row nor the S1 sentinel -- must not count as "answered". Pre-fix,
+    # `_resolve_table` treated any non-blank line after the separator as a
+    # data row, bypassing the sentinel anchor entirely; this assertion must
+    # fail against that code.
+    prose_root = REPO_ROOT / ".tmp" / f"check-setup-prose-{uuid.uuid4().hex}"
+    prose_root.mkdir(parents=True)
+    try:
+        init_project.initialize(prose_root, None, False, False)
+        ds_path = prose_root / ".harnessloop/setup/data-sources.md"
+        text = ds_path.read_text(encoding="utf-8")
+        bounds = check_setup.locate_table_bounds(text, "Static Sources")
+        if bounds is None:
+            raise AssertionError("fixture: cannot locate Static Sources table bounds")
+        sep_idx, _slice_end = bounds
+        lines = text.splitlines()
+        lines.insert(sep_idx + 1, "not sure yet, need to check with the data team")
+        ds_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = _run_check_setup_json(prose_root, 1, "M-B: prose line in empty table")
+        ds_report = report.get("files", {}).get(".harnessloop/setup/data-sources.md", {})
+        check(
+            ds_report.get("state") == "template",
+            f"M-B: data-sources.md stays template with a prose line and no real row/sentinel "
+            f"(got state={ds_report.get('state')!r})",
+        )
+        check(
+            ds_report.get("fields_filled") == 0,
+            f"M-B: Static Sources not counted as filled by a prose line (got fields_filled={ds_report.get('fields_filled')!r})",
+        )
+        check(
+            "Static Sources" in ds_report.get("missing_sections", []),
+            f"M-B: Static Sources still listed in missing_sections (got {ds_report.get('missing_sections')!r})",
+        )
+    finally:
+        shutil.rmtree(prose_root, ignore_errors=True)
+
+    # 3. Usage error: nonexistent project path exits 2 (bullet 3).
+    missing_root = REPO_ROOT / ".tmp" / f"check-setup-missing-{uuid.uuid4().hex}"
+    result = _run_check_setup(missing_root)
+    check(result.returncode == 2, "check_setup.py exits 2 for a nonexistent project path")
+
+    # 2. Programmatically-filled fixture: complete, no TODOs (bullet 2).
+    filled_root = REPO_ROOT / ".tmp" / f"check-setup-filled-{uuid.uuid4().hex}"
+    filled_root.mkdir(parents=True)
+    try:
+        _fill_setup_project(filled_root)
+        report = _run_check_setup_json(filled_root, 0, "filled fixture")
+        check(report.get("complete") is True, "filled fixture: complete=true")
+        check(report.get("filled") == 5, "filled fixture: filled=5")
+        check(report.get("total") == 5, "filled fixture: total=5")
+        check(report.get("gate_blocking") is False, "filled fixture: gate_blocking=false")
+        check(report.get("field_todo_count") == 0, "filled fixture: field_todo_count=0")
+        check(report.get("selfcheck_todo_count") == 0, "filled fixture: selfcheck_todo_count=0")
+    finally:
+        shutil.rmtree(filled_root, ignore_errors=True)
+
+    # 4. Partial + non-core gap must NOT block (M1 core regression guard,
+    # bullet 4). Reset data-sources.md's External Tools And Platforms table
+    # back to template state on a fresh copy of the filled fixture.
+    partial_root = REPO_ROOT / ".tmp" / f"check-setup-partial-{uuid.uuid4().hex}"
+    partial_root.mkdir(parents=True)
+    try:
+        _fill_setup_project(partial_root)
+        ds_path = partial_root / ".harnessloop/setup/data-sources.md"
+        sentinel = check_setup.render_sentinel_line("External Tools And Platforms")
+        lines = [line for line in ds_path.read_text(encoding="utf-8").splitlines() if line != sentinel]
+        ds_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = _run_check_setup_json(partial_root, 1, "partial fixture (non-core gap)")
+        ds_state = report.get("files", {}).get(".harnessloop/setup/data-sources.md", {}).get("state")
+        check(ds_state == "partial", f"data-sources.md reports partial (got {ds_state!r})")
+        check(report.get("complete") is False, "partial fixture: complete=false")
+        check(
+            report.get("gate_blocking") is False,
+            "partial fixture: gate_blocking=false (non-core file partial does not block; M1 regression guard)",
+        )
+    finally:
+        shutil.rmtree(partial_root, ignore_errors=True)
+
+    # 5. Core file reverted to template must block (M1 core regression
+    # guard, bullet 5).
+    blocking_root = REPO_ROOT / ".tmp" / f"check-setup-blocking-{uuid.uuid4().hex}"
+    blocking_root.mkdir(parents=True)
+    try:
+        _fill_setup_project(blocking_root)
+        cc_path = blocking_root / ".harnessloop/state/control-contract.md"
+        cc_path.write_text(init_project.read_template("control-contract-template.md"), encoding="utf-8")
+
+        report = _run_check_setup_json(blocking_root, 1, "core file reverted to template")
+        check(report.get("gate_blocking") is True, "control-contract.md reverted to template: gate_blocking=true")
+        check(
+            report.get("next_step") == ".harnessloop/state/control-contract.md",
+            f"next_step points at control-contract.md (got {report.get('next_step')!r})",
+        )
+    finally:
+        shutil.rmtree(blocking_root, ignore_errors=True)
+
+    # 6. TODO visibility (bullet 6): a literal `TODO (owner: user)` value
+    # still counts as filled, but must not be silent -- field_todo_count
+    # must surface it. (selfcheck_todo_count is the separate, sanctioned
+    # deviation from design-v2's single todo_count field -- see round
+    # 0003-02 handoff and check_setup.py's module docstring.)
+    todo_root = REPO_ROOT / ".tmp" / f"check-setup-todo-{uuid.uuid4().hex}"
+    todo_root.mkdir(parents=True)
+    try:
+        _fill_setup_project(todo_root)
+        ccp_rel = ".harnessloop/setup/cost-context-policy.md"
+        ccp_path = todo_root / ccp_rel
+        text = ccp_path.read_text(encoding="utf-8")
+        idx = check_setup.locate_field_line(text, ccp_rel, "Main Session", "Responsibilities", "Orchestration")
+        lines = text.splitlines()
+        lines[idx] = check_setup.render_leaf_value(lines[idx], "Orchestration", check_setup.TODO_LITERAL)
+        ccp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = _run_check_setup_json(todo_root, 0, "literal TODO value")
+        ccp_state = report.get("files", {}).get(ccp_rel, {}).get("state")
+        check(ccp_state == "filled", f"literal TODO value still counts as filled (got {ccp_state!r})")
+        check(
+            report.get("field_todo_count", 0) >= 1,
+            f"field_todo_count surfaces the literal TODO (got {report.get('field_todo_count')!r})",
+        )
+    finally:
+        shutil.rmtree(todo_root, ignore_errors=True)
+
+
 def validate_secrets_smoke() -> None:
-    print("[3/7] Secrets smoke test")
+    print("[4/8] Secrets smoke test")
     secrets_script = PLUGIN_ROOT / "skills" / "harnessloop-secrets" / "scripts" / "channel_params.py"
     smoke_root = REPO_ROOT / ".tmp" / f"secrets-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
@@ -203,7 +407,7 @@ def skeleton_blocks(text: str) -> str:
 
 
 def validate_doc_consistency() -> None:
-    print("[4/7] Documentation skeleton consistency (source of truth: init_project.py)")
+    print("[5/8] Documentation skeleton consistency (source of truth: init_project.py)")
     dirs, files = skeleton_entries()
 
     # usage.md documents the initializer output as a bullet list, not a tree.
@@ -233,7 +437,7 @@ def top_level(rel: str) -> str:
 
 
 def validate_protocol_gates() -> None:
-    print("[5/7] Mechanical protocol gates (verify_protocol.py)")
+    print("[6/8] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
     violations = verify_protocol.verify_project(mock_project)
     check(not violations, f"examples/mock-project passes verify ({len(violations)} violation(s))")
@@ -425,7 +629,7 @@ def validate_protocol_gates() -> None:
 
 
 def validate_round_cost_smoke() -> None:
-    print("[6/7] Round cost settlement smoke test (round_cost.py)")
+    print("[7/8] Round cost settlement smoke test (round_cost.py)")
     cost_script = LOOP_SCRIPTS / "round_cost.py"
     smoke_root = REPO_ROOT / ".tmp" / f"cost-smoke-{uuid.uuid4().hex}"
     project = smoke_root / "project"
@@ -560,7 +764,7 @@ def validate_round_cost_smoke() -> None:
 
 
 def validate_claude_strict() -> None:
-    print("[7/7] Claude strict plugin validation")
+    print("[8/8] Claude strict plugin validation")
     if os.environ.get("HARNESSLOOP_SKIP_CLAUDE") == "1":
         print("  skipped: HARNESSLOOP_SKIP_CLAUDE=1")
         return
@@ -594,6 +798,7 @@ def validate_claude_strict() -> None:
 def main() -> int:
     validate_manifests()
     validate_init_smoke()
+    validate_check_setup_smoke()
     validate_secrets_smoke()
     validate_doc_consistency()
     validate_protocol_gates()
