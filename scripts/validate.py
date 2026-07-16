@@ -367,6 +367,62 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(exempt_root, ignore_errors=True)
 
+    # Rule B "bases missing <project>/.harnessloop/" fixture (TH-0007): a
+    # real round 2 review cited PATHISH_PREFIXES verbatim (setup/, state/)
+    # and a templated goal-contract path, both of which the pre-fix bases
+    # list could never resolve. Cover the fix plus a negative safeguard
+    # (a genuinely missing file under .harnessloop/ must still fail).
+    harnessloop_base_root = REPO_ROOT / ".tmp" / f"verify-fixture-harnessloop-base-{uuid.uuid4().hex}"
+    round_dir3 = harnessloop_base_root / ".harnessloop" / "goals" / "20260103-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir3 / "evidence").mkdir(parents=True)
+        (round_dir3 / "reviews").mkdir(parents=True)
+        (round_dir3 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+
+        # Real protocol-relative files that live under <project>/.harnessloop/,
+        # cited using their PATHISH_PREFIXES prefix verbatim (setup/, state/).
+        (harnessloop_base_root / ".harnessloop" / "setup").mkdir(parents=True)
+        (harnessloop_base_root / ".harnessloop" / "setup" / "data-sources.md").write_text("real\n", encoding="utf-8")
+        (harnessloop_base_root / ".harnessloop" / "state").mkdir(parents=True)
+        (harnessloop_base_root / ".harnessloop" / "state" / "self-check.md").write_text("real\n", encoding="utf-8")
+
+        (round_dir3 / "reviews" / "harnessloop-base.md").write_text(
+            "Protocol-relative citations resolve against <project>/.harnessloop/:\n"
+            "- `setup/data-sources.md`\n"
+            "- `state/self-check.md`\n"
+            "\n"
+            "A genuinely missing file under .harnessloop/ must still fail "
+            "(the added base must not blanket-exempt everything):\n"
+            "- `state/does-not-exist-under-harnessloop.md`\n"
+            "\n"
+            "Templated/placeholder path must not be treated as a citation:\n"
+            "- `goals/<id>/data-contract.md`\n",
+            encoding="utf-8",
+        )
+
+        violations = verify_protocol.verify_project(harnessloop_base_root)
+        details = " | ".join(v["detail"] for v in violations)
+
+        check(
+            "setup/data-sources.md" not in details and "state/self-check.md" not in details,
+            "verify resolves a PATHISH_PREFIXES-verbatim citation against <project>/.harnessloop/",
+        )
+        check(
+            any("does-not-exist-under-harnessloop.md" in v["detail"] for v in violations),
+            "verify still catches a genuinely dangling citation under .harnessloop/ (no false negative)",
+        )
+        check(
+            "data-contract.md" not in details,
+            "verify exempts a templated path with an angle-bracket placeholder from citation checking",
+        )
+    finally:
+        shutil.rmtree(harnessloop_base_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[6/7] Round cost settlement smoke test (round_cost.py)")

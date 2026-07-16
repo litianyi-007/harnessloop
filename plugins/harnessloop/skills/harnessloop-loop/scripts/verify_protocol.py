@@ -18,6 +18,9 @@ This script enforces only machine-checkable rules:
       `docs.python.org/3/library/os.html` or `github.com/org/repo` — full
       `scheme://` URLs were already exempt, this extends that to the bare
       form reviewers commonly write when citing external docs;
+    - it contains an angle-bracket placeholder anywhere, e.g.
+      `goals/<id>/data-contract.md` — this describes the *shape* of a path
+      template, not a literal reference;
     - the citation's line, or the line immediately before it, carries an
       explicit `<!-- verify:ignore -->` HTML comment — use this to mark a
       review line whose citation is known-intentional prose (e.g. quoting
@@ -26,7 +29,10 @@ This script enforces only machine-checkable rules:
       mechanically; it does not require a project-level opt-out.
 
   Existence is checked against the project root, the round's goal
-  directory, the round directory itself, and — new — the root of every
+  directory, the round directory itself, the project's own `.harnessloop/`
+  directory (so a citation using one of the PATHISH_PREFIXES verbatim,
+  e.g. `setup/data-sources.md` or `state/self-check.md`, resolves against
+  where those directories actually live), and the root of every
   first-level git submodule declared in the project's .gitmodules (so a
   citation written relative to a submodule's own root, e.g. `plugins/foo/`
   when `foo` is checked out as a submodule at <project>/foo, resolves
@@ -145,6 +151,18 @@ def _looks_like_bare_domain(cleaned: str) -> bool:
     return bool(BARE_DOMAIN_RE.match(head))
 
 
+def _looks_like_placeholder(cleaned: str) -> bool:
+    """True if the span contains an angle-bracket placeholder anywhere.
+
+    Templated paths such as ``goals/<id>/data-contract.md`` describe a
+    *shape* of path, not a literal reference — the leading-character check
+    below only catches a span that *starts* with `<`; a placeholder in the
+    middle of an otherwise pathish span (e.g. after a real prefix like
+    `goals/`) needs its own check.
+    """
+    return "<" in cleaned or ">" in cleaned
+
+
 def pathish_citations(markdown_text: str) -> list[str]:
     """Extract citation spans that look like file paths.
 
@@ -152,10 +170,12 @@ def pathish_citations(markdown_text: str) -> list[str]:
     extension, a trailing slash, or a `..` segment is treated as a path so
     that citations of source/test files (e.g. `src/app.py`) are verified too.
     Spans with spaces, URLs, flags, and variables are ignored, as are
-    regex/glob patterns (`_looks_like_pattern`) and bare-domain URLs
-    (`_looks_like_bare_domain`). A line carrying (or immediately following a
-    line that carries) the `<!-- verify:ignore -->` marker has all of its
-    citations skipped — see module docstring.
+    regex/glob patterns (`_looks_like_pattern`), bare-domain URLs
+    (`_looks_like_bare_domain`), and templated paths containing an
+    angle-bracket placeholder (`_looks_like_placeholder`, e.g.
+    `goals/<id>/data-contract.md`). A line carrying (or immediately
+    following a line that carries) the `<!-- verify:ignore -->` marker has
+    all of its citations skipped — see module docstring.
     """
     cited: list[str] = []
     lines = markdown_text.splitlines()
@@ -171,6 +191,8 @@ def pathish_citations(markdown_text: str) -> list[str]:
             if _looks_like_pattern(cleaned):
                 continue
             if _looks_like_bare_domain(cleaned):
+                continue
+            if _looks_like_placeholder(cleaned):
                 continue
             if cleaned.startswith(PATHISH_PREFIXES):
                 cited.append(cleaned)
@@ -219,10 +241,13 @@ def verify_round(project: Path, round_dir: Path) -> list[dict]:
     violations: list[dict] = []
     goal_dir = round_dir.parent.parent
     bases = [project, goal_dir, round_dir]
-    # Rule B only: extra resolution bases for citations written relative to
-    # a submodule's own root. Kept separate from `bases` so Rule A's
-    # scope-lock containment check is not loosened by this.
-    citation_bases = bases + submodule_roots(project)
+    # Rule B only: extra resolution bases for (1) citations that use one of
+    # the PATHISH_PREFIXES verbatim (setup/, state/, goals/, ...) — those
+    # directories actually live under <project>/.harnessloop/, which none of
+    # `bases` covers on their own — and (2) citations written relative to a
+    # submodule's own root. Kept separate from `bases` so Rule A's
+    # scope-lock containment check is not loosened by either addition.
+    citation_bases = bases + [project / ".harnessloop"] + submodule_roots(project)
 
     checked_files = [
         path
@@ -298,14 +323,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Verify mechanical Harnessloop protocol gates (scope-lock containment "
-            "and citation existence). Citation spans that are regex/glob patterns "
-            "or bare-domain URLs (docs.python.org/..., github.com/...) are exempt "
+            "and citation existence). Citation spans that are regex/glob patterns, "
+            "bare-domain URLs (docs.python.org/..., github.com/...), or templated "
+            "paths with an angle-bracket placeholder (goals/<id>/...) are exempt "
             "automatically; a citation known to be intentional prose rather than a "
             "real reference can be exempted explicitly by putting "
             "'<!-- verify:ignore -->' on the same line or the line before it. "
-            "Citations are also resolved against first-level git submodule roots "
-            "declared in the project's .gitmodules, in addition to the project, "
-            "goal, and round directories."
+            "Citations are resolved against the project root, the round's goal and "
+            "round directories, the project's own .harnessloop/ directory (for "
+            "citations using a PATHISH_PREFIXES prefix verbatim, e.g. "
+            "setup/data-sources.md), and the root of every first-level git "
+            "submodule declared in the project's .gitmodules."
         )
     )
     parser.add_argument("--project", "-p", default=".", help="Target project directory. Defaults to current directory.")
