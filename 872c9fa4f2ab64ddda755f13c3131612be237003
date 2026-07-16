@@ -1,0 +1,43 @@
+scripts/init-project.sh
+  s_59509b328fdbf5::t_7949bb152c5544 1-7
+plugins/harnessloop/skills/harness-loop/references/data-sources-template.md
+  s_59509b328fdbf5::t_fb454bcb24d986 1-30
+docs/usage.md
+  s_59509b328fdbf5::t_7949bb152c5544 25-45,54,63-69,75-77
+package.json
+  s_59509b328fdbf5::t_7949bb152c5544 7
+README.md
+  s_59509b328fdbf5::t_7949bb152c5544 86-97,123-125
+  s_59509b328fdbf5::t_47ec7fd757c417 126
+scripts/validate.ps1
+  s_59509b328fdbf5::t_d99dea6686890a 38-78,116
+plugins/harnessloop/skills/harness-loop/references/self-check-template.md
+  s_59509b328fdbf5::t_fb454bcb24d986 1-18
+scripts/init-project.ps1
+  s_59509b328fdbf5::t_7949bb152c5544 1-34
+plugins/harnessloop/skills/harness-loop/references/current-state-template.md
+  s_59509b328fdbf5::t_fb454bcb24d986 1-17
+docs/harnessloop-framework.md
+  s_59509b328fdbf5::t_7949bb152c5544 103-116
+plugins/harnessloop/skills/harness-loop/SKILL.md
+  s_59509b328fdbf5::t_7949bb152c5544 16,66-78
+  s_59509b328fdbf5::t_07beb34915bcf6 79
+plugins/harnessloop/skills/harness-loop/scripts/init_project.py
+  s_59509b328fdbf5::t_fb454bcb24d986 1-142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "872c9fa4f2ab64ddda755f13c3131612be237003",
+  "prompts": {},
+  "sessions": {
+    "s_59509b328fdbf5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f0c2b-8efa-7aa0-bb1b-a5ab8eacd98e",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}

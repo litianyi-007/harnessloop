@@ -1,0 +1,39 @@
+.gitignore
+  s_e6217f417e8db8::t_dd19496c05f42b 4
+scripts/run-python.mjs
+  s_e6217f417e8db8::t_483cfa4a1ffccd 1-26
+scripts/validate.ps1
+  s_e6217f417e8db8::t_a7179f5853fc58 34-36
+scripts/validate.sh
+  s_e6217f417e8db8::t_dd7966a9d794d9 1-6,16-20
+  s_e6217f417e8db8::t_56e3424329547b 7-15
+scripts/init-project.py
+  s_e6217f417e8db8::t_e3a917090187c9 1-17
+scripts/validate.py
+  s_e6217f417e8db8::t_0a8f897e3cb805 57-58
+  s_e6217f417e8db8::t_5aed6ef15342d4 100-106
+  s_e6217f417e8db8::t_59d6ed1a037ff5 181-203,208,210-214,217,220-222,224-225
+  s_e6217f417e8db8::t_8bcd5bed39b0e7 254-255,262-283
+  s_e6217f417e8db8::t_d199fcb6ee87e6 1-56,59-99,107-180,204-207,209,215-216,218-219,223,226-253,256-261,284-308,311-312,314-337
+  s_e6217f417e8db8::t_38e00a6252db68 309-310,313
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_e6217f417e8db8::t_395a00a8ca0839 1-49,55-61,78-80,88-90,95-96,102-206
+  s_e6217f417e8db8::t_f26f6097fb75fe 81-87,91-94,97-101
+  s_e6217f417e8db8::t_1e3bba233b762c 50-54,62-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "d37429328d479ba0bc690ebecb200ffb56856c8c",
+  "prompts": {},
+  "sessions": {
+    "s_e6217f417e8db8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23e2de89-3b93-497d-b76d-a49941a8b5ef",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}

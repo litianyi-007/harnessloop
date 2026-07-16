@@ -1,0 +1,45 @@
+docs/harnessloop-framework.md
+  s_cb1f5eceeed9c6::t_76d984058b532d 11,185
+  s_cb1f5eceeed9c6::t_8642089f6d200d 186
+README.md
+  s_cb1f5eceeed9c6::t_76d984058b532d 173-174,205-206
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_cb1f5eceeed9c6::t_76d984058b532d 15,187
+  s_cb1f5eceeed9c6::t_6e571f02d76410 188
+plugins/harnessloop/skills/harnessloop-channels/agents/openai.yaml
+  s_cb1f5eceeed9c6::t_5c65d02e9cf8ed 1-7
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_76d984058b532d 4
+package.json
+  s_cb1f5eceeed9c6::t_76d984058b532d 3
+plugins/harnessloop/skills/harnessloop-connectivity/agents/openai.yaml
+  s_cb1f5eceeed9c6::t_5c65d02e9cf8ed 1-7
+plugins/harnessloop/skills/harnessloop-evidence/SKILL.md
+  s_cb1f5eceeed9c6::t_76d984058b532d 36-37,53
+  s_cb1f5eceeed9c6::t_96a31654f63f6f 54
+plugins/harnessloop/skills/harnessloop-connectivity/SKILL.md
+  s_cb1f5eceeed9c6::t_5c65d02e9cf8ed 1-85
+docs/usage.md
+  s_cb1f5eceeed9c6::t_76d984058b532d 21,256
+  s_cb1f5eceeed9c6::t_9632f6e7a476b2 257
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_cb1f5eceeed9c6::t_76d984058b532d 3,16
+plugins/harnessloop/skills/harnessloop-channels/SKILL.md
+  s_cb1f5eceeed9c6::t_5c65d02e9cf8ed 1-67
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "42f9212d0371e2aa716b66fe4bb2ec8831b57faa",
+  "prompts": {},
+  "sessions": {
+    "s_cb1f5eceeed9c6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f11e9-aeba-7b53-800b-92e997ec5ee9",
+        "model": "gpt-5.5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}

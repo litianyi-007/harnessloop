@@ -1,0 +1,30 @@
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_e6217f417e8db8::t_3537b12872d216 4
+LICENSE
+  s_e6217f417e8db8::t_e98a8af9b154fd 1-201
+.agents/plugins/marketplace.json
+  s_e6217f417e8db8::t_dadfd9fa2cb65e 9
+package.json
+  s_e6217f417e8db8::t_2db97b9f8dea11 5,9-10
+  s_e6217f417e8db8::t_c8f62fef4ba982 7-8
+.claude-plugin/marketplace.json
+  s_e6217f417e8db8::t_c0db0ec5a17366 14
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_e6217f417e8db8::t_8919ec53a522a6 5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.9",
+  "base_commit_sha": "a41e77146163df2a2d8a82d7b5b16bc3d81bad60",
+  "prompts": {},
+  "sessions": {
+    "s_e6217f417e8db8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "23e2de89-3b93-497d-b76d-a49941a8b5ef",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
