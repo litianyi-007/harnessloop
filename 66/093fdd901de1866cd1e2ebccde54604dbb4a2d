@@ -1,0 +1,30 @@
+plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py
+  s_c587ecf7bbc3e2::t_2dc3144d316eb9 71-77,84-88,90-92,96-98,102,109-111,116-118,120-125,127,132-143
+  s_c587ecf7bbc3e2::t_0760eac11549df 103-108,112-115
+  s_c587ecf7bbc3e2::t_82e63ac1d800e7 128-131
+  s_c587ecf7bbc3e2::t_e0f776a451c1ae 27
+  s_c587ecf7bbc3e2::t_6f2a656c4f412d 286-296,302-303,306,320-325,335
+  s_c587ecf7bbc3e2::t_622cb430136c3e 297-300,304
+  s_c587ecf7bbc3e2::t_4d43b606d6970a 9,11,20-24,28
+  s_c587ecf7bbc3e2::t_f368aa1e9e2bf6 640-644,650-661
+  s_c587ecf7bbc3e2::t_a588f617b189ad 252-275
+  s_c587ecf7bbc3e2::t_8440ad152e5702 539-592,601,603-612,615-616,623
+plugins/harnessloop/skills/harnessloop-loop/references/local-gitignore-template.txt
+  s_c587ecf7bbc3e2::t_12f69c0c95d22c 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "66093fdd901de1866cd1e2ebccde54604dbb4a2d",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
