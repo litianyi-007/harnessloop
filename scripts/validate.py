@@ -309,8 +309,39 @@ def validate_round_cost_smoke() -> None:
         }
         business_turn = json.loads(json.dumps(turn))
         business_turn["message"]["content"] = [{"type": "text", "text": "business work"}]
+
+        # Same-id multi-line usage: Claude Code writes one JSONL line per
+        # content block of a single assistant message, and every line for
+        # that message.id repeats the message's usage. round_cost.py must
+        # dedupe by message.id instead of summing every line, or these two
+        # lines for msg_dup001 (still "open" - no closing message after them
+        # yet, mirroring round_cost.py normally being invoked from inside
+        # the very message it is reporting on) would be billed twice each
+        # settlement they're re-scanned in. These assertions fail against
+        # the pre-fix per-line-summing logic.
+        dup_block_1 = {
+            "type": "assistant",
+            "message": {
+                "id": "msg_dup001",
+                "usage": {
+                    "input_tokens": 300,
+                    "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 400,
+                    "output_tokens": 50,
+                },
+                "content": [{"type": "thinking", "thinking": "planning the change"}],
+            },
+        }
+        dup_block_2 = json.loads(json.dumps(dup_block_1))
+        dup_block_2["message"]["usage"]["output_tokens"] = 120
+        dup_block_2["message"]["content"] = [{"type": "tool_use", "name": "Bash", "input": {}}]
+
         (transcripts / "session.jsonl").write_text(
-            json.dumps(turn) + "\n" + "garbage-line\n" + json.dumps(business_turn) + "\n",
+            json.dumps(turn) + "\n"
+            + "garbage-line\n"
+            + json.dumps(business_turn) + "\n"
+            + json.dumps(dup_block_1) + "\n"
+            + json.dumps(dup_block_2) + "\n",
             encoding="utf-8",
         )
 
@@ -320,14 +351,68 @@ def validate_round_cost_smoke() -> None:
         check("2 assistant turn(s)" in result.stdout, "round_cost.py counts assistant turns")
         check("1/2 turns" in result.stdout, "round_cost.py attributes protocol turns heuristically")
         check(
-            (project / ".harnessloop" / "local" / "cost-marker.json").exists(),
-            "round_cost.py writes the settlement marker",
+            "Output tokens: 400" in result.stdout,
+            "round_cost.py defers the still-open msg_dup001 message instead of billing its partial lines",
+        )
+
+        marker_path = project / ".harnessloop" / "local" / "cost-marker.json"
+        check(marker_path.exists(), "round_cost.py writes the settlement marker")
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        pending = marker.get("files", {}).get("session.jsonl", {})
+        check(
+            pending.get("offset") == 5
+            and pending.get("pending_id") == "msg_dup001"
+            and pending.get("pending_usage") == {"input": 300, "cache_write": 20, "cache_read": 400, "output": 120},
+            "marker carries the still-open message.id and its max-merged usage across the settlement window",
+        )
+
+        # Continue the session: msg_dup001's 3rd (final) content-block line
+        # arrives, then a genuinely new message (msg_next002) closes it out.
+        # This is the cross-settlement-window case: msg_dup001's lines are
+        # split across two round_cost.py runs by the marker offset above,
+        # and must still be billed exactly once (using its max usage, not
+        # the sum of all 3 lines: 50 + 120 + 150 = 320 would be wrong).
+        dup_block_3 = json.loads(json.dumps(dup_block_1))
+        dup_block_3["message"]["usage"]["output_tokens"] = 150
+        dup_block_3["message"]["content"] = [
+            {"type": "text", "text": "done, see .harnessloop/round-summary.md"}
+        ]
+        next_turn = {
+            "type": "assistant",
+            "message": {
+                "id": "msg_next002",
+                "usage": {
+                    "input_tokens": 77,
+                    "cache_creation_input_tokens": 5,
+                    "cache_read_input_tokens": 10,
+                    "output_tokens": 33,
+                },
+                "content": [{"type": "text", "text": "next turn, business as usual"}],
+            },
+        }
+        with (transcripts / "session.jsonl").open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(dup_block_3) + "\n")
+            fh.write(json.dumps(next_turn) + "\n")
+
+        result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(transcripts))
+        check(result.returncode == 0, "round_cost.py exits 0 on the continuation window")
+        check(
+            "1 assistant turn(s)" in result.stdout,
+            "round_cost.py bills msg_dup001 exactly once, on the run that observes its closing message",
+        )
+        check(
+            "Input tokens: 300" in result.stdout and "Output tokens: 150" in result.stdout,
+            "deduped total matches msg_dup001's max usage across its 3 lines, not their sum (50+120+150=320)",
+        )
+        check(
+            "1/1 turns" in result.stdout and "100% of output" in result.stdout,
+            "protocol attribution (mentioned only in msg_dup001's 3rd line) still applies to the whole deduped message",
         )
 
         result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(transcripts))
         check(
             result.returncode == 0 and "0 assistant turn(s)" in result.stdout,
-            "second settlement reports an empty incremental window",
+            "third settlement reports an empty incremental window (msg_next002 still open, deferred)",
         )
 
         result = run_python(cost_script, "--project", str(project), "--transcript-dir", str(smoke_root / "missing"))

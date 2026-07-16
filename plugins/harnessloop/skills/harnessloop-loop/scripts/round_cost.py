@@ -23,6 +23,14 @@ transcript lines were already counted, so each run reports only the window
 since the previous run. Multi-session rounds are covered: all transcript
 files for the project are tracked independently.
 
+Message-id dedup: Claude Code writes one JSONL line per content block of an
+assistant message (thinking/tool_use/text/...), and every line for the same
+`message.id` repeats that message's full usage snapshot. Lines are grouped by
+`message.id` and each id's usage is counted exactly once (see `settle()` for
+the dedup and cross-settlement-window contract, including how the marker
+carries forward a message that is still being written when this script runs
+mid-turn).
+
 Exit codes: 0 = settled, 2 = transcript directory not found or usage error.
 """
 
@@ -62,9 +70,114 @@ def load_prices(project: Path) -> dict | None:
     return None
 
 
+USAGE_KEYS = PRICE_KEYS  # same four cost categories; separate name for readability at call sites
+
+
+def _zero_usage() -> dict:
+    return {key: 0 for key in USAGE_KEYS}
+
+
+def _read_usage(message: dict) -> dict | None:
+    """Pull the four cost-relevant fields out of a message's `usage` block."""
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    return {
+        "input": usage.get("input_tokens", 0) or 0,
+        "cache_write": usage.get("cache_creation_input_tokens", 0) or 0,
+        "cache_read": usage.get("cache_read_input_tokens", 0) or 0,
+        "output": usage.get("output_tokens", 0) or 0,
+    }
+
+
+def _merge_usage_max(a: dict, b: dict) -> dict:
+    """Element-wise max of two usage snapshots for the same message.id.
+
+    Claude Code splits one assistant message into several JSONL lines (one
+    per content block), and every line for that message.id repeats the
+    message-level usage. In the common case all repeats are byte-identical.
+    But streaming can also emit leading placeholder lines with all-zero
+    usage (written before usage is known) or partial output_token counts
+    that grow across lines before settling on the final value (both observed
+    on real local transcripts). Element-wise max across every line seen for
+    an id is correct for all three shapes: identical duplicates collapse to
+    the same value, placeholder zeros are dominated by the real value once
+    it appears, and a growing output_tokens count resolves to its final
+    (largest) value regardless of which line it lands on.
+    """
+    return {key: max(a[key], b[key]) for key in USAGE_KEYS}
+
+
+def _mentions_harnessloop(content) -> bool:
+    return ".harnessloop" in json.dumps(content, ensure_ascii=False)
+
+
+def _load_file_state(raw) -> tuple[int, str | None, dict, bool]:
+    """Normalize one file's marker entry to (offset, pending_id, pending_usage, pending_attributed).
+
+    Supports both the legacy schema (a bare int offset, pre-dedup-fix, with
+    no carried-over message) and the current schema (a dict carrying the
+    offset plus whatever message was still open — not yet billed — at that
+    offset), so marker files written before this fix keep working; they just
+    start with no pending message, which is always safe (see `settle()`).
+    """
+    if isinstance(raw, int) and not isinstance(raw, bool):
+        return (raw if raw >= 0 else 0), None, _zero_usage(), False
+    if isinstance(raw, dict):
+        offset = raw.get("offset", 0)
+        if not isinstance(offset, int) or offset < 0:
+            offset = 0
+        pending_id = raw.get("pending_id")
+        if not isinstance(pending_id, str):
+            pending_id = None
+        pending_usage = raw.get("pending_usage")
+        if not isinstance(pending_usage, dict) or not all(
+            isinstance(pending_usage.get(key), int) for key in USAGE_KEYS
+        ):
+            pending_usage = _zero_usage()
+        return offset, pending_id, pending_usage, bool(raw.get("pending_attributed", False))
+    return 0, None, _zero_usage(), False
+
+
 def settle(transcript_dir: Path, marker: dict) -> tuple[dict, dict]:
-    """Aggregate usage after each file's marker offset; return (totals, new offsets)."""
-    offsets = marker.get("files", {}) if isinstance(marker.get("files"), dict) else {}
+    """Aggregate usage after each file's marker offset; return (totals, new offsets).
+
+    Dedup contract
+    --------------
+    A single assistant *message* is written as multiple JSONL lines (one per
+    content block), each repeating that message's usage. Billing every line
+    independently over-counts a message by however many lines it was split
+    into — observed 2x-4x on real transcripts. This function instead groups
+    consecutive lines by `message.id` and bills each id's usage exactly once,
+    via `_merge_usage_max` across its lines.
+
+    Cross-settlement-window boundary
+    ---------------------------------
+    This script is normally invoked *from inside* the very assistant message
+    it is reporting on (the tool call is one content block of that message),
+    so the marker offset routinely lands in the middle of a message's run of
+    lines: earlier content-block lines for the in-progress message are
+    already on disk; later ones (written after this tool call returns) are
+    not yet. Naively deduping only within the current run's window would
+    double-bill that message: once as a partial group now, again as a
+    partial-or-full group next run.
+
+    To prevent that, a message's usage is added to `totals` only once its
+    group is known to be *closed* — i.e. once a line with a different
+    (or absent) message.id is observed after it. The still-open group at
+    end-of-file is carried forward in the returned offsets as
+    `pending_id` / `pending_usage` / `pending_attributed` instead of being
+    billed; the next run resumes merging into it before deciding whether to
+    close and bill it. Net effect: every message.id is billed exactly once,
+    by whichever run first sees a line for a different subsequent id. The
+    trade-off is that the very last open message in a transcript (e.g. the
+    one invoking this script) has its usage deferred to the next
+    settlement rather than counted immediately — under-counting a handful
+    of tokens at the tail is preferable to the multi-x over-counting this
+    replaces. Lines without a message.id cannot be correlated at all and are
+    billed on their own, matching pre-fix behavior for that case.
+    """
+    files_marker = marker.get("files", {}) if isinstance(marker.get("files"), dict) else {}
     totals = {
         "turns": 0,
         "input": 0,
@@ -75,12 +188,22 @@ def settle(transcript_dir: Path, marker: dict) -> tuple[dict, dict]:
         "protocol_output": 0,
         "files": 0,
     }
-    new_offsets: dict[str, int] = {}
+    new_offsets: dict[str, dict] = {}
+
+    def bill(usage: dict, attributed: bool) -> None:
+        totals["turns"] += 1
+        totals["input"] += usage["input"]
+        totals["cache_write"] += usage["cache_write"]
+        totals["cache_read"] += usage["cache_read"]
+        totals["output"] += usage["output"]
+        if attributed:
+            totals["protocol_turns"] += 1
+            totals["protocol_output"] += usage["output"]
 
     for transcript in sorted(transcript_dir.glob("*.jsonl")):
-        start = offsets.get(transcript.name, 0)
-        if not isinstance(start, int) or start < 0:
-            start = 0
+        start, pending_id, pending_usage, pending_attributed = _load_file_state(
+            files_marker.get(transcript.name)
+        )
         line_count = 0
         with transcript.open(encoding="utf-8", errors="replace") as fh:
             for line_count, line in enumerate(fh, start=1):
@@ -93,22 +216,48 @@ def settle(transcript_dir: Path, marker: dict) -> tuple[dict, dict]:
                 if record.get("type") != "assistant":
                     continue
                 message = record.get("message") or {}
-                usage = message.get("usage")
-                if not isinstance(usage, dict):
+                usage = _read_usage(message)
+                if usage is None:
                     continue
-                totals["turns"] += 1
-                totals["input"] += usage.get("input_tokens", 0) or 0
-                totals["cache_write"] += usage.get("cache_creation_input_tokens", 0) or 0
-                totals["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
-                output_tokens = usage.get("output_tokens", 0) or 0
-                totals["output"] += output_tokens
-                content_blob = json.dumps(message.get("content"), ensure_ascii=False)
-                if ".harnessloop" in content_blob:
-                    totals["protocol_turns"] += 1
-                    totals["protocol_output"] += output_tokens
-        # Next settlement starts after the last line seen now; a shrunk or
-        # replaced file naturally resets to its current length.
-        new_offsets[transcript.name] = line_count
+                mid = message.get("id")
+                attributed = _mentions_harnessloop(message.get("content"))
+
+                if mid is None:
+                    # No id to correlate against: bill this line on its own
+                    # (pre-fix behavior for this case). Does not touch
+                    # whatever message is currently pending.
+                    bill(usage, attributed)
+                    continue
+
+                if mid == pending_id:
+                    # Another content-block line for the still-open message:
+                    # fold it in, do not bill yet.
+                    pending_usage = _merge_usage_max(pending_usage, usage)
+                    pending_attributed = pending_attributed or attributed
+                    continue
+
+                # A different id: the previously pending message (if any) is
+                # now known to be closed, so bill it, then open the new one.
+                if pending_id is not None:
+                    bill(pending_usage, pending_attributed)
+                pending_id = mid
+                pending_usage = usage
+                pending_attributed = attributed
+
+        # The group still open at end-of-file is NOT billed here — it may
+        # gain more lines (and only then be known closed) next run. It is
+        # carried forward instead. If the file shrank or was replaced (no
+        # lines advance past `start`), any stale pending group loaded from
+        # the marker is carried forward unchanged rather than dropped; it
+        # will be billed once some future line with a different id appears.
+        # That is safe: it is real, previously-unbilled usage, so billing it
+        # exactly once later is correct.
+        new_offsets[transcript.name] = {
+            "offset": line_count,
+            "pending_id": pending_id,
+            "pending_usage": pending_usage,
+            "pending_attributed": pending_attributed,
+        }
         totals["files"] += 1
 
     return totals, new_offsets
@@ -171,7 +320,12 @@ def main() -> int:
         marker_path.parent.mkdir(parents=True, exist_ok=True)
         marker_path.write_text(
             json.dumps(
-                {"version": 1, "updated": datetime.now().isoformat(timespec="seconds"), "files": new_offsets},
+                # version 2: "files" entries are dicts carrying an open
+                # message.id (if any) across settlement windows, not bare
+                # int offsets — see settle()'s dedup contract. load_json()
+                # + _load_file_state() still accept version-1 (bare int)
+                # marker files.
+                {"version": 2, "updated": datetime.now().isoformat(timespec="seconds"), "files": new_offsets},
                 indent=2,
             )
             + "\n",
