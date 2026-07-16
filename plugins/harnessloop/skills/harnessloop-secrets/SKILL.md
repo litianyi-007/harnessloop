@@ -52,12 +52,12 @@ If the user provides a secret value in chat, do not repeat it. Ask whether to st
 Prefer the bundled script for local store mutations and checks:
 
 ```text
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> init
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> add --channel <channel-id> --key <KEY> --sensitivity secret --storage env --env <ENV_NAME> --required-for connectivity
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> set --channel <channel-id> --key <KEY> --value-env <ENV_NAME>
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> check --channel <channel-id>
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> resolve --channel <channel-id> --key <KEY>
-python plugins/harnessloop/skills/harnessloop-secrets/scripts/channel_params.py --project <project> audit
+python <skill-dir>/scripts/channel_params.py --project <project> init
+python <skill-dir>/scripts/channel_params.py --project <project> add --channel <channel-id> --key <KEY> --sensitivity secret --storage env --env <ENV_NAME> --required-for connectivity
+python <skill-dir>/scripts/channel_params.py --project <project> set --channel <channel-id> --key <KEY> --value-env <ENV_NAME>
+python <skill-dir>/scripts/channel_params.py --project <project> check --channel <channel-id>
+python <skill-dir>/scripts/channel_params.py --project <project> resolve --channel <channel-id> --key <KEY>
+python <skill-dir>/scripts/channel_params.py --project <project> audit
 ```
 
 The script prints redacted JSON with presence, source, missing fields, and questions. It must not print secret values.

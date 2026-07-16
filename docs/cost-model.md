@@ -48,7 +48,7 @@ round_cost.py .............. bills the overhead
 At each round close, the loop protocol runs:
 
 ```bash
-python <plugin>/skills/harnessloop-loop/scripts/round_cost.py --project <target-project>
+python <plugin-root>/skills/harnessloop-loop/scripts/round_cost.py --project <target-project>
 ```
 
 It aggregates API usage (input / cache-write / cache-read / output tokens)

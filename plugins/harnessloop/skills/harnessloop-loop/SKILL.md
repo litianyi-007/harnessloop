@@ -41,7 +41,7 @@ For control-plane state, evidence indexing, environment self-check, and evals, u
 For loop self-audit and upstream evolution issues, use `references/self-audit-template.md` and `references/evolution-issue-template.md`.
 For existing-session takeover, use `references/transfer-packet-template.md`, `references/intake-gate-template.md`, `references/gap-review-template.md`, and `references/intake-review-round-template.md`.
 For goal and round files, use the matching `*-template.md` files in `references/`.
-For deterministic project initialization, run `scripts/init_project.py`.
+For deterministic project initialization, run `<skill-dir>/scripts/init_project.py`.
 
 ## Core Contract
 
@@ -431,6 +431,8 @@ Do not delegate:
 
 ## Verification Phase
 
+Two gates operate at different layers, and both must pass before a round is accepted. `<skill-dir>/scripts/verify_protocol.py` is a mechanical gate: it enforces only machine-checkable rules (scope-lock containment, dangling evidence citations) and is run in Loop Continuation step 1. Adversarial review below is a separate model-judgment gate: it checks whether the evidence actually supports the claim. A mechanical pass is not a protocol pass — a round that exits `verify_protocol.py` clean still fails if adversarial review, thresholds, or feedback classification are not satisfied.
+
 Do not accept a round with a generic engineering review alone.
 
 Assign adversarial review that checks the work against:
@@ -482,13 +484,14 @@ The eval matrix is not a runtime gate by itself. It informs setup hardening, tem
 
 After each completed round:
 
-1. Update `round-summary.md`, including its `## Cost` section: run `scripts/round_cost.py --project <target-project>` and paste its markdown output. The script settles token usage since the last settlement from local session transcripts; never read transcript files into the session. If it exits non-zero, record cost as unavailable with the reason.
-2. Write `decision.md` with positive, negative, neutral, or blocked.
-3. Archive closed handoffs.
-4. Update `meta/self-audit.md` when the round exposes loop-health risk.
-5. If feedback is positive and the goal is not achieved, continue to the next subgoal or task.
-6. If feedback is negative or neutral and no human decision is required, propose or enter the next smallest investigation, fix, or rollback scope-lock.
-7. If feedback is blocked, classify the blocker. Enter the next read-only recovery round when `runtime-recoverable`; otherwise ask for the exact missing user input, access fact, or write-safety decision.
+1. Run the mechanical protocol gate: `python <skill-dir>/scripts/verify_protocol.py --project <target-project>`. If it exits non-zero, this round must not be marked `positive`; record the violation in `decision.md` and classify the blocker as `contract-insufficient` until it is repaired. A clean exit here does not by itself accept the round — steps 2-8 below still apply.
+2. Update `round-summary.md`, including its `## Cost` section: in a `claude-code` environment (see `state/environment.md`), run `python <skill-dir>/scripts/round_cost.py --project <target-project>` and paste its markdown output. The script settles token usage since the last settlement from local session transcripts; never read transcript files into the session. In any other environment, record cost as `unavailable: no local transcript source` — `round_cost.py` only reads Claude Code session transcripts. If the script is run and exits non-zero, record cost as unavailable with the reason.
+3. Write `decision.md` with positive, negative, neutral, or blocked.
+4. Archive closed handoffs.
+5. Update `meta/self-audit.md` when the round exposes loop-health risk.
+6. If feedback is positive and the goal is not achieved, continue to the next subgoal or task.
+7. If feedback is negative or neutral and no human decision is required, propose or enter the next smallest investigation, fix, or rollback scope-lock.
+8. If feedback is blocked, classify the blocker. Enter the next read-only recovery round when `runtime-recoverable`; otherwise ask for the exact missing user input, access fact, or write-safety decision.
 
 Stop only when:
 

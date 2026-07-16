@@ -24,8 +24,10 @@
 
 ## Cost
 
-Paste the output of `scripts/round_cost.py` here. Do not read transcript
-files into the session; only the script's summary enters context.
+Paste the output of `<skill-dir>/scripts/round_cost.py` here (claude-code
+environments only; other environments record cost as `unavailable: no local
+transcript source`). Do not read transcript files into the session; only the
+script's summary enters context.
 
 - Transcript window:
 - Input tokens:

@@ -24,16 +24,17 @@ If `.harnessloop/` is missing, stop and suggest `$harnessloop-init`. If imported
 ## Processing Contract
 
 1. Read `.harnessloop/state/current.md`, `state/control-contract.md`, `state/environment.md`, `state/evidence-index.md`, `state/self-check.md`, `meta/self-audit.md`, the active goal, active round, open handoffs, and latest decision.
-2. Confirm the requested next action matches the control contract and latest feedback.
-3. If feedback is `positive`, continue only to the next subgoal/task or goal completion path.
-4. If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, missing evidence repair, or human-confirmed contract revision.
-5. If feedback is `blocked`, classify the blocker before stopping. Use `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
-6. If the blocker is `runtime-recoverable` and the next action is read-only investigation with declared evidence targets, create or enter the next investigation/recovery round instead of pausing for the user.
-7. If the blocker requires write cleanup, external mutation, missing access facts, missing local channel parameters, a named tool that is unavailable, or business judgment, stop and ask the user through `askuserquestion` when available.
-8. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
-9. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
-10. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
-11. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
+2. If the latest decision treats the active round as `positive`, confirm that `python <plugin-root>/skills/harnessloop-loop/scripts/verify_protocol.py --project <target-project>` was run for that round and exited zero, or run it now. A non-zero exit means the round must not be treated as `positive`; reclassify the blocker as `contract-insufficient` and stop for evidence/contract repair instead of continuing.
+3. Confirm the requested next action matches the control contract and latest feedback.
+4. If feedback is `positive`, continue only to the next subgoal/task or goal completion path.
+5. If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, missing evidence repair, or human-confirmed contract revision.
+6. If feedback is `blocked`, classify the blocker before stopping. Use `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
+7. If the blocker is `runtime-recoverable` and the next action is read-only investigation with declared evidence targets, create or enter the next investigation/recovery round instead of pausing for the user.
+8. If the blocker requires write cleanup, external mutation, missing access facts, missing local channel parameters, a named tool that is unavailable, or business judgment, stop and ask the user through `askuserquestion` when available.
+9. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
+10. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
+11. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
+12. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
 
 ## Blocker Classification
 
