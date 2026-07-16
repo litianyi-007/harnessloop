@@ -1,0 +1,88 @@
+plugins/harnessloop/skills/harnessloop-setup/agents/openai.yaml
+  s_c587ecf7bbc3e2::t_0ea28cbec9e185 1-7
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_54bd6fb3723b59 100-107
+  s_c587ecf7bbc3e2::t_37c7fa1d99d456 122
+  s_c587ecf7bbc3e2::t_b2385598572550 40
+  s_c587ecf7bbc3e2::t_f1d524df460199 69
+plugins/harnessloop/skills/harnessloop-loop/scripts/check_setup.py
+  s_c587ecf7bbc3e2::t_9ef0dc9c5d7829 316,319-326,338,349-366
+  s_c587ecf7bbc3e2::t_23d6ec18ebb11f 1-315,317-318,327-337,339-348,367-433,442-666
+  s_c587ecf7bbc3e2::t_619e810bcf15d4 434-441
+README.md
+  s_c587ecf7bbc3e2::t_b035f770d8909f 224
+package.json
+  s_c587ecf7bbc3e2::t_18ec10e241e972 3
+docs/harnessloop-framework.md
+  s_c587ecf7bbc3e2::t_0f508602d890b5 11
+plugins/harnessloop/skills/harnessloop-status/SKILL.md
+  s_c587ecf7bbc3e2::t_0447c526be7026 43-44
+  s_c587ecf7bbc3e2::t_5a5aad99f9ead7 22
+  s_c587ecf7bbc3e2::t_2cb61d90ac0213 27
+  s_c587ecf7bbc3e2::t_c4910ca690c73d 23,28-31
+  s_c587ecf7bbc3e2::t_3b7f3337f876e0 72
+  s_c587ecf7bbc3e2::t_bfa1219c392319 40-42,45
+plugins/harnessloop/skills/harnessloop-setup/SKILL.md
+  s_c587ecf7bbc3e2::t_9f830cda9d1150 179
+  s_c587ecf7bbc3e2::t_03dc8a0bfb85d9 198
+  s_c587ecf7bbc3e2::t_7da547a86a9cd0 212-213
+  s_c587ecf7bbc3e2::t_94d52da6bc96c9 121
+  s_c587ecf7bbc3e2::t_ce3dc0c34514b3 80
+  s_c587ecf7bbc3e2::t_1406569b5083eb 44-45
+  s_c587ecf7bbc3e2::t_b5ec8dd343b5ab 1-31,33-43,49-79,81-113,115-120,122,127-147,149-178,180-197,199-211,214-216
+  s_c587ecf7bbc3e2::t_46a45fd473abff 32
+  s_c587ecf7bbc3e2::t_52688d86a51168 123-126
+  s_c587ecf7bbc3e2::t_1aacf549c24094 114
+  s_c587ecf7bbc3e2::t_57b8395e45261c 148
+  s_c587ecf7bbc3e2::t_e83adf71b94a08 46-48
+docs/usage.md
+  s_c587ecf7bbc3e2::t_3ef5d85840cc7c 21
+plugins/harnessloop/skills/harnessloop-loop/references/control-contract-profiles.md
+  s_c587ecf7bbc3e2::t_1912deed6548e6 1-68
+plugins/harnessloop/skills/harnessloop-init/SKILL.md
+  s_c587ecf7bbc3e2::t_98d6a9070b9510 35
+  s_c587ecf7bbc3e2::t_fded36bd06ab9b 90
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_e6cf00d8b8bbda 4
+.claude-plugin/marketplace.json
+  s_c587ecf7bbc3e2::t_f29941bedf39a1 13
+plugins/harnessloop/skills/harnessloop-continue/SKILL.md
+  s_c587ecf7bbc3e2::t_753824ba1fec06 24
+  s_c587ecf7bbc3e2::t_6b9d4c0a28a0d4 61,67
+  s_c587ecf7bbc3e2::t_58300e3fddf72a 28
+  s_c587ecf7bbc3e2::t_8820e8279f380b 25,29-40
+  s_c587ecf7bbc3e2::t_f5d14e24c9b80e 97
+  s_c587ecf7bbc3e2::t_a3a5a96e2dec81 68-69
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_19ed7f5952fa85 3
+  s_c587ecf7bbc3e2::t_62fca804e9c5e7 17
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_2f5bfee916be1a 68
+  s_c587ecf7bbc3e2::t_c80000dcd13a72 207-244
+  s_c587ecf7bbc3e2::t_30c84aa1a66ed9 114
+  s_c587ecf7bbc3e2::t_705cc6ba9e0f40 410
+  s_c587ecf7bbc3e2::t_e91f62b3ea84b2 440
+  s_c587ecf7bbc3e2::t_9cd47abb19654b 7-12,14-15
+  s_c587ecf7bbc3e2::t_8c2a6cdf552d4d 335
+  s_c587ecf7bbc3e2::t_379b37c36cb894 632
+  s_c587ecf7bbc3e2::t_246861e5ff018e 767
+  s_c587ecf7bbc3e2::t_0dc06e2a5c7fef 801
+  s_c587ecf7bbc3e2::t_cfe8bbf5210a43 134-206,245-333
+  s_c587ecf7bbc3e2::t_7b26e9ef2ead9d 38
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "6936fbc63497ba7619acaccc177a13c976f4202e",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
