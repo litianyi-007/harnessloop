@@ -1,0 +1,30 @@
+docs/cost-model.md
+  s_c587ecf7bbc3e2::t_68b576332e4639 51
+plugins/harnessloop/skills/harnessloop-continue/SKILL.md
+  s_c587ecf7bbc3e2::t_32139a57f70fb2 27-37
+plugins/harnessloop/skills/harnessloop-secrets/SKILL.md
+  s_c587ecf7bbc3e2::t_e15d315e6b8ebc 55-60
+plugins/harnessloop/skills/harnessloop-loop/references/round-summary-template.md
+  s_c587ecf7bbc3e2::t_b39c0d455d78a7 27-30
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_6372562b301d75 487-494
+  s_c587ecf7bbc3e2::t_5c7f451a316099 434
+  s_c587ecf7bbc3e2::t_ff2e46677c1bee 44
+  s_c587ecf7bbc3e2::t_dd81feb6685d3e 435
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "0829b034bda725791181a500421b9d13a5940e81",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
