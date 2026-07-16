@@ -185,6 +185,27 @@ def _run_check_setup_json(project: Path, expected_exit: int, label: str) -> dict
 
 
 def validate_check_setup_smoke() -> None:
+    """Stage 3: setup-completeness smoke test (check_setup.py).
+
+    Known limitation (hopper T-001 review, Finding 5 / TH-0009 -- accepted,
+    NOT fixed this round): the "filled"/"partial"/reverted-to-template
+    fixtures below (`_fill_setup_project` and its callers) are built by
+    driving `check_setup.MANIFEST`, `check_setup.locate_field_line`, and
+    `check_setup.locate_table_bounds` directly -- the exact same manifest
+    and slicing logic `check_setup.py` itself uses to detect completeness.
+    A field the manifest omits, or a locator bug that mis-slices a
+    heading/container identically in both the fixture writer and the
+    detector, can therefore self-confirm: fixture and detector would agree
+    with each other while both silently disagreeing with the actual wizard
+    templates. Considered and deferred this round: MANIFEST already
+    hand-transcribes 60+ leaf fields from the templates once (round 0003);
+    an independently hand-authored fixture would duplicate that
+    transcription surface (and its own drift risk) to guard against a
+    narrower defect class than the two concrete, independently-reproduced
+    detection bugs (empty pipe rows, wrong-category sentinels) actually
+    fixed here. Tracked in TH-0009 for a future cost/benefit revisit rather
+    than silently ignored.
+    """
     print("[3/8] Setup completeness smoke test (check_setup.py)")
 
     # 1. Bare skeleton: incomplete + gate_blocking (design-v2 section 7.2
@@ -241,6 +262,80 @@ def validate_check_setup_smoke() -> None:
         )
     finally:
         shutil.rmtree(prose_root, ignore_errors=True)
+
+    # T-001 Finding 1 regression (hopper review, TH-0009): an all-empty
+    # markdown row (`|  |  |`, the raw template row shape) left under an
+    # otherwise-empty table section must not count as a real data row.
+    # Pre-fix, `_resolve_table` counted any post-separator line starting
+    # with `|` as a data row regardless of cell contents; this assertion
+    # must fail against that code (independently confirmed by temporarily
+    # reverting the fix -- see TH-0009).
+    empty_row_root = REPO_ROOT / ".tmp" / f"check-setup-emptyrow-{uuid.uuid4().hex}"
+    empty_row_root.mkdir(parents=True)
+    try:
+        init_project.initialize(empty_row_root, None, False, False)
+        ds_path = empty_row_root / ".harnessloop/setup/data-sources.md"
+        text = ds_path.read_text(encoding="utf-8")
+        bounds = check_setup.locate_table_bounds(text, "Static Sources")
+        if bounds is None:
+            raise AssertionError("fixture: cannot locate Static Sources table bounds")
+        sep_idx, _slice_end = bounds
+        lines = text.splitlines()
+        lines.insert(sep_idx + 1, "|  |  |")
+        ds_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = _run_check_setup_json(empty_row_root, 1, "T-001#1: all-empty pipe row in table")
+        ds_report = report.get("files", {}).get(".harnessloop/setup/data-sources.md", {})
+        check(
+            ds_report.get("state") == "template",
+            f"T-001#1: data-sources.md stays template with an all-empty pipe row "
+            f"and no real row/sentinel (got state={ds_report.get('state')!r})",
+        )
+        check(
+            "Static Sources" in ds_report.get("missing_sections", []),
+            f"T-001#1: Static Sources still listed in missing_sections with an empty pipe row "
+            f"(got {ds_report.get('missing_sections')!r})",
+        )
+    finally:
+        shutil.rmtree(empty_row_root, ignore_errors=True)
+
+    # T-001 Finding 2 regression (hopper review, TH-0009): a syntactically
+    # valid S1 sentinel written for the WRONG category (the "Dynamic Or
+    # Generated Sources" sentinel pasted under the "Static Sources" table)
+    # must not count as Static Sources being answered. Pre-fix, the sentinel
+    # regex matched generic "no/none ... (confirmed via setup wizard)"
+    # wording without binding to the current heading's own category text;
+    # this assertion must fail against that code (independently confirmed by
+    # temporarily reverting the fix -- see TH-0009).
+    wrong_sentinel_root = REPO_ROOT / ".tmp" / f"check-setup-wrongsentinel-{uuid.uuid4().hex}"
+    wrong_sentinel_root.mkdir(parents=True)
+    try:
+        init_project.initialize(wrong_sentinel_root, None, False, False)
+        ds_path = wrong_sentinel_root / ".harnessloop/setup/data-sources.md"
+        text = ds_path.read_text(encoding="utf-8")
+        bounds = check_setup.locate_table_bounds(text, "Static Sources")
+        if bounds is None:
+            raise AssertionError("fixture: cannot locate Static Sources table bounds")
+        sep_idx, _slice_end = bounds
+        lines = text.splitlines()
+        wrong_sentinel = check_setup.render_sentinel_line("Dynamic Or Generated Sources")
+        lines.insert(sep_idx + 1, wrong_sentinel)
+        ds_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        report = _run_check_setup_json(wrong_sentinel_root, 1, "T-001#2: wrong-category sentinel")
+        ds_report = report.get("files", {}).get(".harnessloop/setup/data-sources.md", {})
+        check(
+            ds_report.get("state") == "template",
+            f"T-001#2: data-sources.md stays template when Static Sources holds the "
+            f"Dynamic Or Generated Sources sentinel (got state={ds_report.get('state')!r})",
+        )
+        check(
+            "Static Sources" in ds_report.get("missing_sections", []),
+            f"T-001#2: Static Sources still listed in missing_sections with a wrong-category "
+            f"sentinel (got {ds_report.get('missing_sections')!r})",
+        )
+    finally:
+        shutil.rmtree(wrong_sentinel_root, ignore_errors=True)
 
     # 3. Usage error: nonexistent project path exits 2 (bullet 3).
     missing_root = REPO_ROOT / ".tmp" / f"check-setup-missing-{uuid.uuid4().hex}"

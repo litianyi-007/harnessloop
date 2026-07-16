@@ -219,12 +219,6 @@ GATE_BLOCKING_FILES = frozenset(
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
 
-# S1 (tightened): requires the literal phrase `(confirmed via setup wizard)`;
-# only `No`/`None` is case-insensitive, the parenthetical is verbatim.
-_SENTINEL_RE = re.compile(
-    r"^_?\s*(?:(?i:no|none))\b[^_\n]*\(confirmed via setup wizard\)\.?_?\s*$"
-)
-
 
 def _label_pattern(label: str) -> re.Pattern:
     """Tolerant leaf-field label matcher (section 4.3 + S10 + R4).
@@ -366,6 +360,32 @@ def render_sentinel_line(heading: str) -> str:
     return f"_No {heading.lower()} declared for this project (confirmed via setup wizard)._"
 
 
+def _sentinel_pattern(heading: str) -> re.Pattern:
+    """Build the heading-bound 'none declared' sentinel matcher (hopper
+    T-001 review Finding 2 / TH-0009 fix).
+
+    Previously a single module-level `_SENTINEL_RE` accepted any line of the
+    shape `No/None ... (confirmed via setup wizard).` regardless of which
+    table heading it appeared under, so a syntactically valid sentinel
+    written for the *wrong* category (e.g. the "Dynamic Or Generated
+    Sources" sentinel pasted under "Static Sources") was accepted as if it
+    answered the table it was actually found in. This binds the match to
+    `render_sentinel_line(heading)`'s own canonical text for *this* heading:
+    the category segment (`heading.lower()`) and everything else in the
+    sentence must match verbatim. The only tolerances kept from the old
+    regex are the ones S1 explicitly allows: an optional leading/trailing
+    `_` (markdown italics may or may not be present) and case-insensitivity
+    of the leading `No`/`None` word.
+    """
+    canonical = render_sentinel_line(heading).strip("_")
+    if not canonical.lower().startswith("no "):
+        # render_sentinel_line always starts with "No "; guard rather than
+        # silently building a pattern that can never match anything.
+        raise AssertionError(f"unexpected sentinel shape for heading {heading!r}: {canonical!r}")
+    rest = canonical[len("No "):]
+    return re.compile(r"^_?\s*(?:(?i:no|none))\s+" + re.escape(rest) + r"\s*_?\s*$")
+
+
 def locate_table_bounds(text: str, heading: str) -> Optional[Tuple[int, int]]:
     """Return (separator_line_index, slice_end_index) for the table under
     `## heading`, or None if the heading/separator cannot be found. Exposed
@@ -438,11 +458,21 @@ def _resolve_table(text: str, heading: str) -> Tuple[bool, bool]:
             # bypassing the S1 sentinel anchor -- prose neither matches the
             # sentinel regex nor is a genuine row, so it must not satisfy
             # either path to "filled").
-            if lines[j].strip().startswith("|"):
+            stripped = lines[j].strip()
+            if not stripped.startswith("|"):
+                continue
+            # hopper T-001 review Finding 1 / TH-0009 fix: a row of all-empty
+            # cells (e.g. `|  |  |`, the raw template row shape) must not
+            # count as data either -- only a row with at least one non-blank
+            # cell (after stripping) is a genuine answered row. Previously
+            # `startswith("|")` alone was sufficient, so the template's own
+            # empty separator-following row satisfied "filled".
+            cells = stripped.strip("|").split("|")
+            if any(cell.strip() for cell in cells):
                 has_rows = True
                 break
 
-    has_sentinel = any(_SENTINEL_RE.match(lines[i]) for i in range(start, end))
+    has_sentinel = any(_sentinel_pattern(heading).match(lines[i]) for i in range(start, end))
     return has_rows, has_sentinel
 
 
