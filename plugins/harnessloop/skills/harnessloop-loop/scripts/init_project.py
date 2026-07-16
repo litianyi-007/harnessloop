@@ -73,7 +73,10 @@ def write_file(path: Path, content: str, force: bool, dry_run: bool, result: dic
         result["would_write"].append(str(path))
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8", newline="\n")
+    # Path.write_text() only accepts newline= on Python 3.10+; keep LF-forcing
+    # behavior on the oldest supported interpreters via open().
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(content)
     result["written"].append(str(path))
 
 
