@@ -845,6 +845,183 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(harnessloop_base_root, ignore_errors=True)
 
+    # TH-0008 (Rule B dangling-citation false-positive reduction): unit-level
+    # teeth on the pure helper functions first, then an end-to-end round
+    # fixture covering the same ground through the real verify_project path.
+    # A live 62-file .hopper/handoffs/ corpus put dangling-citation
+    # false-positives at 532/1054 (50%); this suite is the falsifiable half
+    # of the fix -- every assertion here must independently break if any one
+    # of the five changes (locator-suffix stripping, nested-submodule bases,
+    # suffix-unique fallback, ~//abs exemption) is reverted.
+    print("  TH-0008: Rule B false-positive reduction")
+
+    # -- strip_locator_suffix: unit teeth --
+    check(
+        verify_protocol.strip_locator_suffix("plugins/foo/scripts/check_setup.py:123") == "plugins/foo/scripts/check_setup.py",
+        "strip_locator_suffix strips a trailing :<line>",
+    )
+    check(
+        verify_protocol.strip_locator_suffix("docs/x.md:10-20") == "docs/x.md",
+        "strip_locator_suffix strips a trailing :<start>-<end> line range",
+    )
+    check(
+        verify_protocol.strip_locator_suffix(".hopper/tasks/code-review-adversarial.md::root") == ".hopper/tasks/code-review-adversarial.md",
+        "strip_locator_suffix strips a trailing ::<anchor>",
+    )
+    check(
+        verify_protocol.strip_locator_suffix("plugins/foo/bar.py") == "plugins/foo/bar.py",
+        "strip_locator_suffix leaves a locator-free path unchanged",
+    )
+
+    # -- suffix_unique_match: unit teeth (segment comparison, >=2 segments, uniqueness) --
+    unique_index = {
+        "SKILL.md": [("plugins", "harnessloop", "skills", "harnessloop-setup", "SKILL.md")],
+        "macos.html": [("app", "docs", "macos.html")],
+        "setup.md": [("docs", "guide", "setup.md"), ("other", "guide", "setup.md")],
+    }
+    check(
+        verify_protocol.suffix_unique_match("harnessloop-setup/SKILL.md", unique_index) is True,
+        "suffix_unique_match accepts a unique multi-segment suffix hit (TH-0008 original case)",
+    )
+    check(
+        verify_protocol.suffix_unique_match("SKILL.md", unique_index) is False,
+        "suffix_unique_match rejects a single (bare) segment even when the basename is indexed (false-negative guard: typo-prone, no context)",
+    )
+    check(
+        verify_protocol.suffix_unique_match("harnessloop-setup/SKIL.md", unique_index) is False,
+        "suffix_unique_match rejects a typo'd basename with zero index hits (false-negative guard)",
+    )
+    check(
+        verify_protocol.suffix_unique_match("component/os.html", unique_index) is False,
+        "suffix_unique_match does not let `os.html` match `.../macos.html` (segment comparison, not string endswith)",
+    )
+    check(
+        verify_protocol.suffix_unique_match("guide/setup.md", unique_index) is False,
+        "suffix_unique_match rejects an ambiguous suffix matching >=2 real files (false-negative guard: no false exemption from ambiguity)",
+    )
+
+    # -- _looks_like_out_of_project / pathish_citations: ~/ and absolute-path exemption --
+    home_and_abs_text = (
+        "External design wiki, home-relative, out of project scope:\n"
+        "- `~/.llm-wiki/agent-app-design/kernel/kernel-ecosystem-facts.md`\n"
+        "\n"
+        "Filesystem-absolute, out of project scope:\n"
+        "- `/etc/hosts`\n"
+    )
+    check(
+        verify_protocol.pathish_citations(home_and_abs_text) == [],
+        "pathish_citations extracts neither a ~/ home-relative nor a /-absolute span as a citation",
+    )
+
+    # -- end-to-end round fixture: locators, nested submodule, suffix fallback, ~//abs exemption --
+    th0008_root = REPO_ROOT / ".tmp" / f"verify-fixture-th0008-{uuid.uuid4().hex}"
+    round_dir4 = th0008_root / ".harnessloop" / "goals" / "20260105-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir4 / "evidence" / "runtime").mkdir(parents=True)
+        (round_dir4 / "reviews").mkdir(parents=True)
+        (round_dir4 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (round_dir4 / "evidence" / "runtime" / "real.md").write_text("real\n", encoding="utf-8")
+
+        # Nested submodule (TH-0008: submodule_roots() previously only
+        # honored top-level .gitmodules path= entries; kernels/openclaw and
+        # kernels/hermes in this very repo are two-segment paths).
+        (th0008_root / ".gitmodules").write_text(
+            '[submodule "kernels/vendorlib"]\n'
+            "\tpath = kernels/vendorlib\n"
+            "\turl = https://example.invalid/vendorlib.git\n",
+            encoding="utf-8",
+        )
+        (th0008_root / "kernels" / "vendorlib" / "pkg").mkdir(parents=True)
+        (th0008_root / "kernels" / "vendorlib" / "pkg" / "real_file.py").write_text("# real\n", encoding="utf-8")
+        # Decoy sharing the cited suffix's last two segments (`pkg/real_file.py`)
+        # so the suffix-unique fallback sees *two* hits (ambiguous -> False) and
+        # cannot rescue this citation on its own. This isolates the assertion
+        # below to submodule_roots()'s nested-path handling specifically --
+        # without the decoy, the suffix fallback alone would resolve
+        # `pkg/real_file.py` even if the nested-submodule fix regressed.
+        (th0008_root / "decoy" / "pkg").mkdir(parents=True)
+        (th0008_root / "decoy" / "pkg" / "real_file.py").write_text("# decoy\n", encoding="utf-8")
+
+        # Suffix-unique fallback target, mirroring the actual TH-0008 case:
+        # harnessloop-setup/SKILL.md really lives several segments deeper.
+        (th0008_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup").mkdir(parents=True)
+        (th0008_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup" / "SKILL.md").write_text(
+            "# skill\n", encoding="utf-8"
+        )
+        # openai.yaml under harnessloop-setup/agents/ -- the other TH-0008 original example.
+        (th0008_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup" / "agents").mkdir()
+        (th0008_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup" / "agents" / "openai.yaml").write_text(
+            "name: openai\n", encoding="utf-8"
+        )
+
+        (round_dir4 / "reviews" / "th0008.md").write_text(
+            "Locator suffix, real file, must resolve:\n"
+            "- `rounds/0001/evidence/runtime/real.md:42`\n"
+            "- `rounds/0001/evidence/runtime/real.md:10-20`\n"
+            "\n"
+            "Locator suffix on a file that genuinely does not exist -- must still fail "
+            "(locator-stripping must not blanket-exempt everything):\n"
+            "- `rounds/0001/evidence/runtime/does-not-exist.md:999`\n"
+            "\n"
+            "Nested-submodule-relative citation, resolves against kernels/vendorlib:\n"
+            "- `pkg/real_file.py`\n"
+            "\n"
+            "Suffix-unique fallback (TH-0008 original targets):\n"
+            "- `harnessloop-setup/SKILL.md`\n"
+            "- `harnessloop-setup/agents/openai.yaml`\n"
+            "\n"
+            "Single-segment bare filename must still fail even though the fallback would "
+            "otherwise find it (false-negative guard: no project-relative context):\n"
+            "- `agents/`\n"
+            "\n"
+            "Typo'd suffix must still fail (false-negative guard):\n"
+            "- `harnessloop-setup/SKIILL.md`\n"
+            "\n"
+            "Home-relative and absolute citations, out of project scope, exempt:\n"
+            "- `~/.llm-wiki/agent-app-design/kernel/kernel-ecosystem-facts.md`\n"
+            "- `/etc/hosts`\n",
+            encoding="utf-8",
+        )
+
+        violations, _coverage = verify_protocol.verify_project(th0008_root)
+        details = " | ".join(v["detail"] for v in violations)
+
+        check(
+            "real.md" not in details,
+            "verify resolves a real.md citation carrying a :<line> or :<start>-<end> locator suffix",
+        )
+        check(
+            any("does-not-exist.md" in v["detail"] for v in violations),
+            "verify still catches a dangling citation even with a numeric locator suffix (no false negative)",
+        )
+        check(
+            "pkg/real_file.py" not in details,
+            "verify resolves a citation relative to a nested (multi-segment) git submodule root",
+        )
+        check(
+            "harnessloop-setup/SKILL.md" not in details and "harnessloop-setup/agents/openai.yaml" not in details,
+            "verify resolves the TH-0008 original suffix-unique citations (harnessloop-setup/SKILL.md, harnessloop-setup/agents/openai.yaml)",
+        )
+        check(
+            any("`agents/`" in v["detail"] for v in violations),
+            "verify still flags a single-segment (bare) citation as dangling even though a longer suffix would match (false-negative guard)",
+        )
+        check(
+            any("SKIILL.md" in v["detail"] for v in violations),
+            "verify still flags a typo'd suffix citation as dangling (false-negative guard)",
+        )
+        check(
+            "kernel-ecosystem-facts.md" not in details and "/etc/hosts" not in details,
+            "verify exempts ~/ home-relative and /-absolute citations instead of resolving (and failing) them literally",
+        )
+    finally:
+        shutil.rmtree(th0008_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")
