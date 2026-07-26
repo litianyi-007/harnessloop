@@ -50,23 +50,36 @@ This script enforces only machine-checkable rules:
   locator is not silently mis-resolved.
 
   Every base resolution (project root, goal/round dirs, `.harnessloop/`,
-  submodule roots, and the suffix fallback below) is *containment-checked*
-  using canonical (symlink-resolved) paths on both sides, not merely a
-  lexical `normpath` comparison: the candidate and the project root are
-  each passed through `Path.resolve(strict=False)` before the containment
-  test, and the candidate must land inside the resolved project root (see
-  `_is_contained`). A citation containing `../` that would otherwise walk
-  outside the project (e.g. `../outside/ghost.py`), a `.gitmodules`
-  `path =` entry that points outside the project root, or a
-  project-internal symlink (a submodule-root path itself, an explicit-base
-  candidate, or a suffix-index hit) whose real target lives outside the
-  project tree, is never treated as resolved — even if something of that
-  name happens to exist on the host filesystem just outside the project
-  tree (TH-0008 REWORK: `submodule_parent_escape`; T-063 MUST-FIX 2:
-  `symlink_containment_escape` — lexical `normpath` containment alone
-  passes a symlink whose path is inside the project but whose target is
-  not, and that held across all three of the base-resolution, submodule-root,
-  and suffix-match paths, not just one). Resolving the project root too
+  submodule roots) is *containment-checked* using canonical
+  (symlink-resolved) paths on both sides, not merely a lexical `normpath`
+  comparison: the candidate and the project root are each passed through
+  `Path.resolve(strict=False)` before the containment test, and the
+  candidate must land inside the resolved project root (see
+  `_is_contained`). Critically, this canonicalization is applied to the
+  *raw* joined candidate (`base / cited`, not a pre-folded
+  `os.path.normpath` string): folding a citation like `link/../escape.md`
+  with plain lexical `normpath` *before* resolving would erase the `link/..`
+  round-trip entirely, silently discarding the very symlink hop the
+  containment check exists to catch, and could land on a coincidentally
+  named path elsewhere in the project instead of ever reasoning about where
+  `link` actually points (T-064 MUST-FIX C: `symlink_dotdot_normpath_order`
+  — `_resolve_in_project` and `submodule_roots` both used to normpath the
+  join before containment-checking it; both now canonicalize the
+  unfolded join directly, so `link`'s real target is resolved *first* and
+  the trailing `..` is applied to that real target, not to the literal
+  text). A citation containing `../` that would otherwise walk outside the
+  project (e.g. `../outside/ghost.py`), a `.gitmodules` `path =` entry that
+  points outside the project root, or a project-internal symlink (a
+  submodule-root path itself or an explicit-base candidate) whose real
+  target lives outside the project tree, is never treated as resolved —
+  even if something of that name happens to exist on the host filesystem
+  just outside the project tree, or something of the *same basename*
+  happens to exist inside the project (TH-0008 REWORK:
+  `submodule_parent_escape`; T-063 MUST-FIX 2: `symlink_containment_escape`
+  — lexical `normpath` containment alone passes a symlink whose path is
+  inside the project but whose target is not, and that held across both the
+  base-resolution and submodule-root paths, not just one; T-064 MUST-FIX C:
+  `symlink_dotdot_normpath_order` above). Resolving the project root too
   (not only the candidate) matters even absent any project-authored
   symlink: on macOS, e.g., `/tmp` is itself a symlink to `/private/tmp`, so
   a project rooted under `/tmp` would otherwise be compared against an
@@ -78,29 +91,51 @@ This script enforces only machine-checkable rules:
   always applied in addition to, not instead of, containment.
 
   If a citation still does not resolve against any of the bases above
-  (after locator-stripping), it is tried once more as a path *suffix*
-  against the project's indexed files (see `build_suffix_index` /
-  `suffix_unique_match`): this is the fallback for a citation that is
-  correct but written relative to neither the project root, the
-  round/goal directory, `.harnessloop/`, nor any submodule root — e.g.
-  `harnessloop-setup/SKILL.md` for a file that actually lives at
-  `plugins/harnessloop/skills/harnessloop-setup/SKILL.md`. This fallback is
-  deliberately conservative: it requires at least two path segments (a
-  single bare filename never qualifies — that shape is both the most
-  common typo and the least informative citation), compares whole path
-  *segments* rather than raw string suffixes (so `os.html` cannot match
-  `macos.html`), and only exempts the citation when exactly one indexed
-  file matches that suffix *and* the specific path that match names still
-  actually exists (or, for a citation ending in `/`, is still actually a
-  directory) at the moment of checking — zero or multiple matches both
-  still report `dangling-citation`, and so does a unique match whose
-  target has since disappeared or was never real to begin with (a broken
-  symlink that `os.walk` lists in `filenames` without following it, or an
-  index entry for a file deleted after the index was built but before this
-  citation was checked; TH-0008 REWORK: `broken_symlink`,
-  `stale_index_after_delete`).
+  (after locator-stripping), Rule B **does not** treat it as resolved just
+  because it happens to match exactly one indexed file as a path *suffix*
+  (see `build_suffix_index` / `suffix_unique_match`). It never did before
+  T-064 without carrying a real risk: a suffix match, by construction,
+  proves only "exactly one indexed file's path happens to end in these
+  segments", never "this is the file the reviewer meant to cite" — and the
+  "exactly one" universe it is judged against is itself a moving boundary
+  (tracked-only, then tracked-plus-untracked-not-ignored, then a boundary
+  that still missed gitignored and stale-tracked entries; see T-063
+  MUST-FIX 1 and T-064 MUST-FIX A/B below) that a purely mechanical suffix
+  match can never make watertight, because "the real, currently-existing
+  files a reviewer could plausibly mean" is not a closed, mechanically
+  enumerable set. **Decision (user-confirmed, T-064): suffix matching no
+  longer participates in pass/fail at all.** A citation whose only
+  potential resolution is a suffix hit is reported as `dangling-citation`
+  exactly like a citation with zero hits. What the fallback still does is
+  attach a *display-only hint* to that violation's `detail` when the
+  suffix match is unique and its target still actually exists: something
+  like `— a unique suffix match exists at <project-relative path>; if that
+  is the intended file, cite it by a resolvable path or mark the line
+  <!-- verify:ignore -->`. No hint is attached when the suffix has zero or
+  multiple hits. The hint is counted in the `citations_suffix_hinted`
+  coverage field (see `_empty_coverage`) so how much of the dangling
+  surface is suffix-diagnosable is visible in coverage, exactly like
+  `citations_exempt_external` makes the absolute-path exemption visible.
+  This is a real behavior change, not a paper one: this fallback used to
+  be able to turn a `dangling-citation` into a pass (a false negative
+  whenever the suffix happened to be wrong); it no longer can, under any
+  circumstance — **the false-negative surface this fallback can create is
+  now exactly zero**, because it can no longer change any verdict, only
+  annotate one. This is also the entirety of what this rework closes: it
+  does *not* mean the underlying "what does 'genuinely exists' even mean"
+  question (T-063 MUST-FIX 1, T-064 MUST-FIX A/B below) has been "solved" —
+  that question determines only whether a hint is offered and how
+  accurately, never whether the citation passes. The hint keeps the same
+  conservative shape as the fallback always had: it requires at least two
+  path segments (a single bare filename never qualifies), compares whole
+  path *segments* rather than raw string suffixes (so `os.html` cannot
+  match `macos.html`), and only fires when exactly one indexed file matches
+  that suffix *and* the specific path that match names still actually
+  exists (or, for a citation ending in `/`, is still actually a directory)
+  at the moment of checking (see `suffix_unique_match` /
+  `suffix_hint_target`).
 
-  The index backing this fallback is built from every file that genuinely
+  The index backing this hint is built from every file that genuinely
   exists in the project's worktree and is not gitignored — tracked *and*
   untracked-but-not-ignored (`git ls-files -z --cached --recurse-submodules`
   plus `git ls-files -z --others --exclude-standard`, the latter extended
@@ -115,12 +150,35 @@ This script enforces only machine-checkable rules:
   blind spot below but opened a new one — a round's own freshly-produced
   evidence/review files are untracked by construction, so a genuine
   same-suffix collision between a tracked file and such a fresh untracked
-  one was invisible to the ambiguity check, making a citation that should
-  have been multiply-resolvable look uniquely resolved instead (T-063
-  MUST-FIX 1: `untracked_pseudo_unique`). A gitignored file colliding with a
+  one was invisible to the ambiguity check, making a hint fire as if the
+  match were unique when a real same-suffix file was invisible to it
+  (T-063 MUST-FIX 1: `untracked_pseudo_unique` — under the pre-T-064
+  resolving fallback this was a false-negative risk; under the current
+  hint-only fallback it is a hint-accuracy risk only). `git ls-files
+  --cached` additionally lists a tracked path the worktree no longer has —
+  deleted from disk but not yet `git rm`ed from the index — and, unlike a
+  broken symlink (which still has a real dirent, just a dangling target),
+  such an entry has nothing at all on disk; before T-064 it still
+  participated in uniqueness, so a genuinely-unique real file could be
+  wrongly reported as ambiguous by a ghost that is not "real" by any
+  definition this rule uses elsewhere (T-064 MUST-FIX B:
+  `stale_tracked_ghost_ambiguity`). The index build now drops any entry
+  that does not `os.path.lexists` on disk (a check that, unlike
+  `exists()`, still keeps a broken symlink — its dirent is real even though
+  its target is not — so this does not regress `broken_symlink` /
+  `stale_index_after_delete` above). A gitignored file colliding with a
   tracked/untracked file's suffix is still invisible to the index either
-  way (that generated-output exclusion is the point of `--exclude-standard`),
-  and — unlike the prior walk-based index — a real, non-ignored source
+  way (that generated-output exclusion is the point of `--exclude-standard`)
+  — a real, currently-existing, non-tracked file that a hint's "exactly
+  one" count simply never sees (T-064 MUST-FIX A:
+  `ignored_pseudo_unique_hint` — same shape as MUST-FIX 1, but the boundary
+  moved from "untracked" to "ignored"; under the pre-T-064 resolving
+  fallback this made the fallback resolve a citation that a `git add -f`
+  of the very same on-disk file would immediately have turned dangling —
+  a false negative that tracked the index boundary wherever it was drawn,
+  not any one fixed edge case; under the current hint-only fallback it can
+  only make a hint fire, or fire inaccurately, never change pass/fail). And
+  — unlike the prior walk-based index — a real, non-ignored source
   directory that happens to share a name with an entry in `NOISE_DIR_NAMES`
   (e.g. a project that genuinely has a source directory named `build/`) is
   indexed and can correctly participate in an ambiguity instead of being
@@ -171,18 +229,29 @@ This script enforces only machine-checkable rules:
     pass or fail depending on which machine runs the check — this rule
     does not normalize case itself and cannot make that determinism
     project-wide.
-  - The suffix-unique fallback proves "exactly one indexed file has this
-    suffix", not "this is the file the reviewer meant to cite". A
-    reviewer who mistypes `mistyped/config.yaml` when they meant a
-    different file will still get a pass if `vendor/mistyped/config.yaml`
-    happens to be the tree's only file ending in `mistyped/config.yaml` —
-    the algorithm cannot distinguish a lucky coincidental match from the
-    intended one. This is inherent to any suffix-based fallback and is not
-    something this rework (or any purely mechanical suffix match) can
-    close; it is recorded here rather than fixed because fixing it would
-    require either dropping the fallback (reintroducing the false
-    positives it exists to remove) or requiring citations to be written
-    unambiguously (a review-authoring discipline change, not a Rule B one).
+  - The suffix-unique *hint* (T-064: no longer a resolution path, see
+    above) proves only "exactly one indexed file has this suffix", never
+    "this is the file the reviewer meant to cite". A reviewer who mistypes
+    `mistyped/config.yaml` when they meant a different file will still get
+    a hint pointing at `vendor/mistyped/config.yaml` if that happens to be
+    the tree's only file ending in `mistyped/config.yaml` — the algorithm
+    cannot distinguish a lucky coincidental match from the intended one.
+    Before T-064 this was a pass/fail problem (a coincidental match turned
+    a genuinely wrong citation green); since the downgrade it is a
+    hint-accuracy problem only — the citation is `dangling-citation`
+    either way, and the hint can at most point at the wrong file or fail
+    to fire. This residual imprecision is inherent to any suffix-based
+    matching and is not something this rework (or any purely mechanical
+    suffix match) can close; it is recorded here rather than "fixed"
+    because the only ways to close it further would be dropping the hint
+    entirely (losing a genuinely useful diagnostic for the common case) or
+    requiring citations to be written unambiguously (a review-authoring
+    discipline change, not a Rule B one). The same applies, for the same
+    reason, to T-064 MUST-FIX A (`ignored_pseudo_unique_hint`, a gitignored
+    same-suffix file invisible to the hint's uniqueness count) and to
+    whatever future boundary case resembles it: moving the index boundary
+    again would change which citations get a hint and how accurate it is,
+    never whether they pass.
 
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
@@ -505,10 +574,24 @@ def submodule_roots(project: Path) -> list[Path]:
     check is not sufficient here either: `path = link` where
     `<project>/link` is itself a symlink to somewhere outside the project
     passes a lexical `normpath` containment test (the symlink's own path is
-    inside the project) while its target is not, and `candidate.is_dir()`
-    below follows the symlink and reports it as a valid directory regardless
-    (T-063 MUST-FIX 2: `symlink_containment_escape`) — `_is_contained`
-    resolves the symlink before comparing, so this is rejected too.
+    inside the project) while its target is not (T-063 MUST-FIX 2:
+    `symlink_containment_escape`) — `_is_contained` resolves the symlink
+    before comparing, so this is rejected too. Containment is checked
+    against the *raw*, unfolded `project / rel` join, not a
+    `os.path.normpath`-collapsed copy of it: a `path = smod/../mod` entry
+    where `smod` is itself a project-internal symlink to somewhere outside
+    the project would have its `smod/..` lexically erased by `normpath`
+    *before* the symlink is ever resolved, landing containment-checked on
+    the lexical `project/mod` (which passes, since it never leaves the
+    project textually) while `candidate.is_dir()` below — which does follow
+    the symlink via the real filesystem — reports the actual, escaping
+    `smod/../mod` target as a valid directory; the two checks would then be
+    reasoning about two different paths and the escape slips through (T-064
+    MUST-FIX C: `symlink_dotdot_normpath_order`). Checking containment on
+    the same unfolded `candidate` that `is_dir()` below is evaluated against
+    closes that gap: `Path.resolve()` follows `smod` to its real target
+    first and applies the trailing `..` to *that*, so containment and
+    directory-check agree on what is actually being accepted.
     """
     gitmodules = project / ".gitmodules"
     if not gitmodules.is_file():
@@ -523,8 +606,7 @@ def submodule_roots(project: Path) -> list[Path]:
         if not rel:
             continue
         candidate = project / rel
-        normalized = Path(os.path.normpath(str(candidate)))
-        if not _is_contained(normalized, project):
+        if not _is_contained(candidate, project):
             continue
         if candidate.is_dir():
             roots.append(candidate)
@@ -565,6 +647,22 @@ def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None
     denylist (see module docstring: "unique" now means unique among every
     real, non-ignored file in the worktree, not literally "git-tracked" nor
     the whole tree including ignored output).
+
+    `git ls-files --cached` lists a tracked path exactly as the index last
+    recorded it, independent of whether that path still exists on disk: a
+    file deleted from the worktree (but not yet `git rm`ed, or `git rm
+    --cached`ed) is still listed. Such a ghost entry is not "real" by any
+    definition this module uses elsewhere in the index (it is not even a
+    broken symlink — there is no dirent there at all) yet, before T-064, it
+    still participated in the uniqueness count, so a genuinely unique real
+    file sharing its suffix could be wrongly reported as ambiguous (T-064
+    MUST-FIX B: `stale_tracked_ghost_ambiguity`). Each entry (from any of
+    the three sources above) is now dropped unless `os.path.lexists` is
+    true for it — `lexists` rather than `exists` deliberately, so a broken
+    symlink (real dirent, dangling target) is still indexed and still
+    re-verified at match time by `suffix_unique_match` / `suffix_hint_target`
+    exactly as before; only an entry with *nothing at all* on disk is
+    excluded here.
     """
     try:
         toplevel = subprocess.run(
@@ -644,6 +742,13 @@ def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None
         parts = tuple(p for p in rel.split("/") if p)
         if not parts:
             continue
+        if not os.path.lexists(project.joinpath(*parts)):
+            # T-064 MUST-FIX B: a tracked-but-deleted-from-worktree entry
+            # (or, in principle, any source above naming a path with
+            # nothing at all on disk) must not participate in the
+            # uniqueness count. `lexists` (not `exists`) so a broken
+            # symlink is still indexed -- see docstring.
+            continue
         index.setdefault(parts[-1], []).append(parts)
     return index
 
@@ -703,18 +808,24 @@ def _exists_as(path: Path, want_dir: bool) -> bool:
     return path.exists()
 
 
-def suffix_unique_match(
+def suffix_hint_target(
     cleaned: str, index: dict[str, list[tuple[str, ...]]], project: Path
-) -> bool:
-    """True if `cleaned` matches exactly one indexed file as a path
-    *suffix*, and that specific file still actually exists.
+) -> Path | None:
+    """Return the specific project-relative path `cleaned` matches as a
+    unique, still-real path *suffix*, or `None` if it does not.
 
-    Last-resort Rule B fallback (see module docstring) for a citation that
-    is correct but written relative to none of the explicit bases — e.g.
-    `harnessloop-setup/SKILL.md` for a file that actually lives at
-    `plugins/harnessloop/skills/harnessloop-setup/SKILL.md`. Deliberately
-    conservative in four ways, each guarding a specific false-negative
-    risk:
+    T-064: this is a *display-only hint*, not a resolution path — see the
+    module docstring's "Suffix hint" section. It is a fallback for a
+    citation that is correct but written relative to none of the explicit
+    bases — e.g. `harnessloop-setup/SKILL.md` for a file that actually
+    lives at `plugins/harnessloop/skills/harnessloop-setup/SKILL.md` — but
+    `verify_round` never treats finding one as a pass; it only attaches the
+    returned path to the `dangling-citation` violation's `detail` as a
+    hint, and only when this returns non-`None`. `suffix_unique_match`
+    (below) is `suffix_hint_target(...) is not None`, kept as a separate
+    boolean-returning name for callers (and existing tests) that only need
+    the predicate. Deliberately conservative in four ways, each guarding a
+    specific false-negative-in-what-the-hint-implies risk:
 
     - Comparison is by path *segment*, not raw string suffix — `os.html`
       must not match `.../macos.html` (string `endswith` would).
@@ -757,20 +868,33 @@ def suffix_unique_match(
     """
     parts = tuple(p for p in cleaned.split("/") if p)
     if len(parts) < 2:
-        return False
+        return None
     candidates = index.get(parts[-1], [])
     matches = [c for c in candidates if len(c) >= len(parts) and c[-len(parts) :] == parts]
     if len(matches) != 1:
-        return False
+        return None
     match_path = project.joinpath(*matches[0])
     if not _is_contained(match_path, project):
-        return False
-    return _exists_as(match_path, cleaned.endswith("/"))
+        return None
+    if not _exists_as(match_path, cleaned.endswith("/")):
+        return None
+    return match_path
+
+
+def suffix_unique_match(
+    cleaned: str, index: dict[str, list[tuple[str, ...]]], project: Path
+) -> bool:
+    """True if `cleaned` matches exactly one indexed file as a path
+    *suffix*, and that specific file still actually exists (see
+    `suffix_hint_target`, which this delegates to). T-064: a `True` result
+    means only "a hint can be offered", never "this citation resolves" —
+    see the module docstring."""
+    return suffix_hint_target(cleaned, index, project) is not None
 
 
 def _resolve_in_project(base: Path, cited: str, project: Path) -> Path | None:
-    """Join `base` and `cited`, normalize, and return the result only if it
-    stays within `project` under *canonical* containment — otherwise `None`.
+    """Join `base` and `cited` and return the result only if it stays within
+    `project` under *canonical* containment — otherwise `None`.
 
     Guards against a citation containing `../` segments walking the join
     outside the project tree, where `Path.exists()` would silently consult
@@ -781,15 +905,32 @@ def _resolve_in_project(base: Path, cited: str, project: Path) -> Path | None:
     every citation resolution). Lexical `normpath` containment alone is not
     enough for a project-internal symlink whose target lives outside the
     project (e.g. `<project>/link -> /outside`, cited as `link/pkg/x.py`):
-    the joined-and-normalized candidate's *path* is lexically inside the
-    project even though what it resolves to is not (T-063 MUST-FIX 2:
+    the joined candidate's lexical *path* is inside the project even though
+    what it resolves to is not (T-063 MUST-FIX 2:
     `symlink_containment_escape`) — `_is_contained` resolves both sides
-    before comparing, so this is rejected too. The returned `candidate` is
-    still the lexical (non-canonical) join, not the resolved path: callers
-    only need it for the subsequent `_exists_as` check, which itself
-    follows symlinks via `Path.exists()` / `is_dir()`.
+    before comparing, so this is rejected too.
+
+    The join is deliberately **not** pre-folded with `os.path.normpath`
+    before that containment check (T-064 MUST-FIX C:
+    `symlink_dotdot_normpath_order`): `normpath` collapses a `link/..`
+    round-trip purely lexically, with no awareness that `link` might be a
+    symlink — so a citation like `link/../escape.md`, where `link` is a
+    project-internal symlink pointing *outside* the project, would have its
+    `link/..` erased before `_is_contained` ever sees it, leaving a bare
+    `escape.md` that trivially resolves inside the project (and, if a
+    coincidentally same-named file exists there, silently accepts *that*
+    file — not the one the citation's traversal actually names). Passing
+    the raw, unfolded `base / cited` join to `_is_contained` instead means
+    `Path.resolve()` follows `link` to its real target *first*, then
+    applies the trailing `..` to that real target — exactly what the
+    filesystem itself would do — so an escape through a symlink-then-`..`
+    is caught the same way a plain escaping symlink already was. The
+    returned `candidate` is still the lexical (non-canonical, unfolded)
+    join, not the resolved path: callers only need it for the subsequent
+    `_exists_as` check, which itself follows symlinks via `Path.exists()` /
+    `is_dir()`.
     """
-    candidate = Path(os.path.normpath(str(base / cited)))
+    candidate = base / cited
     if not _is_contained(candidate, project):
         return None
     return candidate
@@ -891,14 +1032,30 @@ def verify_round(
                     stripped = strip_locator_suffix(cited)
                     if stripped != cited:
                         resolved = _any_base_resolves(stripped, citation_bases, project, want_dir)
+                # T-064: the suffix-unique fallback no longer resolves a
+                # citation (see module docstring, "Suffix hint" section) — a
+                # citation with no explicit-base resolution is
+                # `dangling-citation` unconditionally. What the fallback
+                # still contributes, when it finds a unique and still-real
+                # suffix hit, is a display-only pointer appended to this
+                # violation's `detail`, plus a `citations_suffix_hinted`
+                # coverage tick — neither changes whether this branch runs.
                 if not resolved:
-                    resolved = suffix_unique_match(stripped, suffix_index, project)
-                if not resolved:
+                    hint = ""
+                    hint_target = suffix_hint_target(stripped, suffix_index, project)
+                    if hint_target is not None:
+                        coverage["citations_suffix_hinted"] += 1
+                        hint_rel = hint_target.relative_to(project).as_posix()
+                        hint = (
+                            f" — a unique suffix match exists at {hint_rel}; if that is "
+                            "the intended file, cite it by a resolvable path or mark the "
+                            f"line {IGNORE_MARKER}"
+                        )
                     violations.append(
                         {
                             "round": str(round_dir),
                             "kind": "dangling-citation",
-                            "detail": f"{review} cites `{cited}` which does not exist",
+                            "detail": f"{review} cites `{cited}` which does not exist{hint}",
                         }
                     )
 
@@ -944,6 +1101,7 @@ def _empty_coverage() -> dict:
         "rule_b_files": 0,
         "citations_checked": 0,
         "citations_exempt_external": 0,
+        "citations_suffix_hinted": 0,
     }
 
 
@@ -981,17 +1139,20 @@ def main() -> int:
             "setup/data-sources.md), and the root of every git submodule (any depth) "
             "declared in the project's .gitmodules (canonical-containment-checked: a path "
             "or .gitmodules entry that would resolve outside the project — including via "
-            "a project-internal symlink — is never treated as resolved). A trailing "
-            ":<line>, :<start>-<end>, or ::<anchor> locator is stripped before checking. "
-            "If still unresolved, a citation with >=2 path "
-            "segments that matches exactly one file in the project's tracked-plus-"
-            "untracked-not-ignored worktree index "
-            "(or, outside a git working tree, the walked and noise-pruned tree) as a "
-            "path suffix, and whose matched path still actually exists, is also "
-            "accepted. A citation ending in / must resolve to a directory. Home-relative "
-            "(~/...), filesystem-absolute (/...), and Windows-absolute (C:/..., "
-            "\\\\server\\share...) citations are exempt (out of project scope; counted "
-            "in the citations_exempt_external coverage field)."
+            "a project-internal symlink or a symlink-then-'..' round-trip — is never "
+            "treated as resolved). A trailing :<line>, :<start>-<end>, or ::<anchor> "
+            "locator is stripped before checking. A citation still unresolved after all "
+            "of the above is reported as dangling-citation unconditionally (T-064: a "
+            "path-suffix match is no longer a resolution path); if that citation has "
+            ">=2 path segments and matches exactly one file in the project's "
+            "tracked-plus-untracked-not-ignored worktree index (or, outside a git "
+            "working tree, the walked and noise-pruned tree) as a path suffix, and that "
+            "matched path still actually exists, its detail carries a display-only hint "
+            "pointing at the match (counted in the citations_suffix_hinted coverage "
+            "field) — the citation still fails. A citation ending in / must resolve to "
+            "a directory. Home-relative (~/...), filesystem-absolute (/...), and "
+            "Windows-absolute (C:/..., \\\\server\\share...) citations are exempt (out "
+            "of project scope; counted in the citations_exempt_external coverage field)."
         )
     )
     parser.add_argument("--project", "-p", default=".", help="Target project directory. Defaults to current directory.")
@@ -1042,6 +1203,7 @@ def main() -> int:
             f"rounds={coverage['rounds']} rule_a_files={coverage['rule_a_files']} "
             f"rule_b_files={coverage['rule_b_files']} citations={coverage['citations_checked']} "
             f"citations_exempt_external={coverage['citations_exempt_external']} "
+            f"citations_suffix_hinted={coverage['citations_suffix_hinted']} "
             f"zero_inspected={coverage['rounds_zero_inspected']}"
         )
     return 1 if violations else 0

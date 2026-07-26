@@ -447,8 +447,9 @@ The mechanical gate's exit code decides less than it looks like it decides. What
 
 - `rounds` / `rounds_zero_inspected` — scope-lock existence (`missing-scope-lock`) and Allowed Changes parseability (`unparseable-allowed-changes`), checked unconditionally for every round regardless of whether that round has any evidence/review artifacts.
 - `rule_a_files` — whether files under a round's `evidence/` and `reviews/` fall inside a path the round's scope-lock allows (`scope-lock-violation`), checked only when the round has at least one such file and its scope-lock parses.
-- `rule_b_files` / `citations_checked` — whether backtick path-ish references inside that round's `reviews/*.md` resolve to files that exist (`dangling-citation`).
+- `rule_b_files` / `citations_checked` — whether backtick path-ish references inside that round's `reviews/*.md` resolve to files that exist (`dangling-citation`). A citation resolvable only via a suffix match against the project's file index is **not** resolved (T-064): it is reported `dangling-citation` regardless.
 - `citations_exempt_external` — how many of those citation spans were home-relative (`~/...`), filesystem-absolute (`/...`), or Windows-absolute (`C:/...`, UNC) and so were exempted from existence checking entirely (a real, uncovered gap — see `verify_protocol.py`'s module docstring — made visible in coverage rather than silently disappearing).
+- `citations_suffix_hinted` — how many `dangling-citation` violations carry a display-only hint because their citation uniquely (and still really) matches one file's path suffix elsewhere in the project (T-064: a hint only — it never turns a `dangling-citation` into a pass; see `verify_protocol.py`'s module docstring).
 
 What it does **not** decide (**OUT** — currently not decided by the mechanical gate, not "unmechanizable forever"):
 

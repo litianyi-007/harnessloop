@@ -1102,7 +1102,7 @@ def validate_protocol_gates() -> None:
             encoding="utf-8",
         )
 
-        violations, _coverage = verify_protocol.verify_project(th0008_root)
+        violations, coverage = verify_protocol.verify_project(th0008_root)
         details = " | ".join(v["detail"] for v in violations)
 
         check(
@@ -1117,9 +1117,45 @@ def validate_protocol_gates() -> None:
             "pkg/real_file.py" not in details,
             "verify resolves a citation relative to a nested (multi-segment) git submodule root",
         )
+        # T-064 downgrade (user-confirmed 2026-07-26): the suffix-unique fallback no
+        # longer turns a dangling citation into a pass -- these two citations (the
+        # ORIGINAL TH-0008 suffix-fallback motivating examples) now MUST be reported
+        # dangling, each carrying a display-only hint pointing at its unique suffix
+        # match, and each must tick citations_suffix_hinted. This assertion is the
+        # literal flip of what TH-0008 required and what this same fixture asserted
+        # before T-064 -- the flip itself is the strongest evidence the downgrade is
+        # real, not just a docstring claim.
+        skill_violation = next(
+            (v for v in violations if "harnessloop-setup/SKILL.md" in v["detail"] and "openai.yaml" not in v["detail"]),
+            None,
+        )
+        yaml_violation = next(
+            (v for v in violations if "harnessloop-setup/agents/openai.yaml" in v["detail"]),
+            None,
+        )
         check(
-            "harnessloop-setup/SKILL.md" not in details and "harnessloop-setup/agents/openai.yaml" not in details,
-            "verify resolves the TH-0008 original suffix-unique citations (harnessloop-setup/SKILL.md, harnessloop-setup/agents/openai.yaml)",
+            skill_violation is not None and yaml_violation is not None,
+            "T-064: the TH-0008 original suffix-unique citations (harnessloop-setup/SKILL.md, "
+            "harnessloop-setup/agents/openai.yaml) are now reported dangling instead of "
+            "resolved (suffix match no longer passes a citation)",
+        )
+        check(
+            skill_violation is not None
+            and "a unique suffix match exists at plugins/harnessloop/skills/harnessloop-setup/SKILL.md" in skill_violation["detail"]
+            and "verify:ignore" in skill_violation["detail"],
+            f"T-064: the dangling harnessloop-setup/SKILL.md violation carries a suffix hint "
+            f"pointing at the real match and the verify:ignore escape hatch (got: {skill_violation})",
+        )
+        check(
+            yaml_violation is not None
+            and "a unique suffix match exists at plugins/harnessloop/skills/harnessloop-setup/agents/openai.yaml" in yaml_violation["detail"],
+            f"T-064: the dangling harnessloop-setup/agents/openai.yaml violation carries a "
+            f"suffix hint pointing at the real match (got: {yaml_violation})",
+        )
+        check(
+            coverage.get("citations_suffix_hinted") == 2,
+            "T-064: citations_suffix_hinted counts exactly the 2 hinted dangling citations "
+            f"in this fixture (got {coverage.get('citations_suffix_hinted')})",
         )
         check(
             any("`agents/`" in v["detail"] for v in violations),
@@ -1537,6 +1573,340 @@ def validate_protocol_gates() -> None:
             shutil.rmtree(symlink_root, ignore_errors=True)
     else:
         print("  (skipped: os.symlink unavailable on this platform -- symlink_containment_escape counterexample)")
+
+    print("  T-064: suffix downgrade to hint-only + MUST-FIX B/C (final decision, user-confirmed 2026-07-26)")
+
+    # T-064 MUST-FIX C counterexample 1/2: symlink_dotdot_normpath_order, direct base.
+    # `link/../escape.md` where `link` is a project-internal symlink pointing OUTSIDE
+    # the project. Pre-fix, `_resolve_in_project` normpath-folded the join BEFORE
+    # containment-checking it, which lexically erases `link/..` without ever
+    # consulting the symlink -- landing on the bare `escape.md`, which happens to
+    # exist inside the project too (a different, coincidentally same-named file) and
+    # passes containment trivially. Codex T-064 repro: pre-fix this citation resolves
+    # (wrongly, and against the wrong file); post-fix it must be dangling.
+    if hasattr(os, "symlink"):
+        order_root = REPO_ROOT / ".tmp" / f"verify-fixture-order-{uuid.uuid4().hex}"
+        order_project = order_root / "project"
+        order_outside = order_root / "outside"
+        round_dir9 = order_project / ".harnessloop" / "goals" / "20260110-001-fixture" / "rounds" / "0001"
+        try:
+            (round_dir9 / "evidence").mkdir(parents=True)
+            (round_dir9 / "reviews").mkdir(parents=True)
+            (round_dir9 / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (order_outside / "sub").mkdir(parents=True)
+            (order_outside / "escape.md").write_text("outside the project\n", encoding="utf-8")
+            (order_project / "escape.md").write_text(
+                "coincidentally same-named file actually inside the project\n", encoding="utf-8"
+            )
+
+            symlinks_supported = True
+            try:
+                (order_project / "link").symlink_to(order_outside / "sub", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+
+            if symlinks_supported:
+                # Mutation control: reproduce the pre-fix order verbatim (normpath the
+                # join BEFORE containment-checking it) and confirm it WOULD wrongly
+                # land on, and accept, the coincidentally-named in-project file --
+                # proving the fix below (canonical-first) is load-bearing, not vacuous.
+                old_style_candidate = Path(
+                    os.path.normpath(str(order_project / "link/../escape.md"))
+                )
+                check(
+                    old_style_candidate == (order_project / "escape.md")
+                    and verify_protocol._is_contained(old_style_candidate, order_project),
+                    "mutation control: normpath-before-canonicalize (the pre-T-064 order) "
+                    "erases `link/..` and lands on the coincidentally-named in-project "
+                    "`escape.md`, reporting it contained (proves MUST-FIX C is load-bearing)",
+                )
+                resolved = verify_protocol._resolve_in_project(
+                    order_project, "link/../escape.md", order_project
+                )
+                check(
+                    resolved is None,
+                    "_resolve_in_project rejects `link/../escape.md`: canonical-first "
+                    "resolution follows `link` to its real (outside-the-project) target "
+                    "before applying `..`, instead of silently accepting a "
+                    "coincidentally-named in-project file (T-064 MUST-FIX C: "
+                    "symlink_dotdot_normpath_order, direct base)",
+                )
+
+                (round_dir9 / "reviews" / "order.md").write_text(
+                    "Citation escaping through a symlink-then-`..` round-trip, must NOT "
+                    "resolve (and must not silently land on the coincidentally-named "
+                    "in-project file of the same basename):\n"
+                    "- `link/../escape.md`\n",
+                    encoding="utf-8",
+                )
+                violations, _cov = verify_protocol.verify_project(order_project)
+                check(
+                    any("link/../escape.md" in v["detail"] for v in violations),
+                    "verify reports `link/../escape.md` as dangling instead of resolving "
+                    "it against the wrong coincidentally-named project-internal file "
+                    "(T-064 MUST-FIX C: symlink_dotdot_normpath_order, end-to-end direct base)",
+                )
+            else:
+                print("  (skipped: symlinks unsupported -- symlink_dotdot_normpath_order direct-base counterexample)")
+        finally:
+            shutil.rmtree(order_root, ignore_errors=True)
+    else:
+        print("  (skipped: os.symlink unavailable -- symlink_dotdot_normpath_order direct-base counterexample)")
+
+    # T-064 MUST-FIX C counterexample 2/2: symlink_dotdot_normpath_order, .gitmodules
+    # base. `path = smod/../mod` where `smod` is a project-internal symlink pointing
+    # outside the project, and the escaping target (`<outside>/mod`) genuinely exists
+    # as a directory. Pre-fix, `submodule_roots` containment-checked a normpath-folded
+    # copy (`project/mod`, always "inside") while accepting the directory via the RAW,
+    # unfolded `candidate.is_dir()` (which follows the symlink to the real, escaping
+    # target) -- the two checks disagreed about which path was in play, and the
+    # escaping root was accepted.
+    if hasattr(os, "symlink"):
+        gm_root = REPO_ROOT / ".tmp" / f"verify-fixture-gitmodules-order-{uuid.uuid4().hex}"
+        gm_project = gm_root / "project"
+        gm_outside = gm_root / "outside"
+        round_dir10 = gm_project / ".harnessloop" / "goals" / "20260111-001-fixture" / "rounds" / "0001"
+        try:
+            (round_dir10 / "evidence").mkdir(parents=True)
+            (round_dir10 / "reviews").mkdir(parents=True)
+            (round_dir10 / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (gm_outside / "sub").mkdir(parents=True)
+            (gm_outside / "mod" / "pkg").mkdir(parents=True)
+            (gm_outside / "mod" / "pkg" / "modghost.py").write_text("# outside the project\n", encoding="utf-8")
+
+            symlinks_supported = True
+            try:
+                (gm_project / "smod").symlink_to(gm_outside / "sub", target_is_directory=True)
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+
+            if symlinks_supported:
+                (gm_project / ".gitmodules").write_text(
+                    '[submodule "escaped"]\n\tpath = smod/../mod\n\turl = https://example.invalid/escaped.git\n',
+                    encoding="utf-8",
+                )
+
+                # Mutation control: reproduce the pre-fix order verbatim and confirm it
+                # WOULD accept this .gitmodules path as a resolution base.
+                old_style_candidate = Path(os.path.normpath(str(gm_project / "smod/../mod")))
+                raw_candidate = gm_project / "smod/../mod"
+                check(
+                    verify_protocol._is_contained(old_style_candidate, gm_project)
+                    and raw_candidate.is_dir()
+                    and verify_protocol._canonical(raw_candidate) == verify_protocol._canonical(gm_outside / "mod"),
+                    "mutation control: the pre-T-064 order containment-checks a "
+                    "normpath-folded (always 'inside') copy while accepting the RAW "
+                    "candidate's is_dir() (which follows the symlink to the real, "
+                    "escaping `outside/mod`) -- the two disagree, proving MUST-FIX C is "
+                    "load-bearing for the .gitmodules path too",
+                )
+
+                roots = verify_protocol.submodule_roots(gm_project)
+                check(
+                    all(
+                        verify_protocol._canonical(r) != verify_protocol._canonical(gm_outside / "mod")
+                        for r in roots
+                    ),
+                    "submodule_roots rejects a `.gitmodules` `path = smod/../mod` entry "
+                    "whose symlink-then-`..` round-trip resolves outside the project "
+                    "(T-064 MUST-FIX C: symlink_dotdot_normpath_order, .gitmodules base)",
+                )
+
+                (round_dir10 / "reviews" / "gitmodules-order.md").write_text(
+                    "Citation only resolvable via a `.gitmodules` path escaping through "
+                    "smod/../mod, must NOT resolve:\n"
+                    "- `pkg/modghost.py`\n",
+                    encoding="utf-8",
+                )
+                violations, _cov = verify_protocol.verify_project(gm_project)
+                check(
+                    any("pkg/modghost.py" in v["detail"] for v in violations),
+                    "verify reports `pkg/modghost.py` as dangling instead of resolving it "
+                    "through an escaping `.gitmodules` path (T-064 MUST-FIX C: "
+                    "symlink_dotdot_normpath_order, end-to-end .gitmodules base)",
+                )
+            else:
+                print("  (skipped: symlinks unsupported -- symlink_dotdot_normpath_order .gitmodules-base counterexample)")
+        finally:
+            shutil.rmtree(gm_root, ignore_errors=True)
+    else:
+        print("  (skipped: os.symlink unavailable -- symlink_dotdot_normpath_order .gitmodules-base counterexample)")
+
+    # T-064 MUST-FIX B counterexample: stale_tracked_ghost_ambiguity. `git ls-files
+    # --cached` lists a path the index still has even though it was deleted from the
+    # worktree without `git rm`. Such a ghost sharing a suffix with a genuinely unique
+    # real file must not suppress that file's hint by making it look ambiguous.
+    ghost_root = REPO_ROOT / ".tmp" / f"verify-fixture-ghost-{uuid.uuid4().hex}"
+    ghost_round = ghost_root / ".harnessloop" / "goals" / "20260112-001-fixture" / "rounds" / "0001"
+    try:
+        (ghost_round / "evidence").mkdir(parents=True)
+        (ghost_round / "reviews").mkdir(parents=True)
+        (ghost_round / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (ghost_root / "src" / "pkg").mkdir(parents=True)
+        (ghost_root / "src" / "pkg" / "real.md").write_text("real\n", encoding="utf-8")
+        (ghost_root / "gone" / "pkg").mkdir(parents=True)
+        (ghost_root / "gone" / "pkg" / "real.md").write_text("about to be deleted\n", encoding="utf-8")
+
+        (ghost_round / "reviews" / "ghost.md").write_text(
+            "Suffix-unique citation to a real, tracked file that shares its suffix with "
+            "a since-deleted (but still tracked) ghost entry -- must be dangling (no "
+            "explicit base resolves it) but its hint must still fire, unsuppressed by "
+            "the ghost:\n"
+            "- `pkg/real.md`\n",
+            encoding="utf-8",
+        )
+
+        git_available = shutil.which("git") is not None
+        if git_available:
+            init = subprocess.run(["git", "init", "-q"], cwd=ghost_root, capture_output=True)
+            add = subprocess.run(["git", "add", "-A"], cwd=ghost_root, capture_output=True)
+            git_available = init.returncode == 0 and add.returncode == 0
+
+        if git_available:
+            os.remove(ghost_root / "gone" / "pkg" / "real.md")
+
+            # Mutation control: `git ls-files --cached` (the raw source
+            # `_git_tracked_index` reads) still lists the deleted ghost entry --
+            # proving any fix must be applied in our own filtering, not something git
+            # already does for us.
+            cached = subprocess.run(
+                ["git", "-C", str(ghost_root), "ls-files", "-z", "--cached"],
+                capture_output=True,
+            )
+            cached_entries = {seg.decode("utf-8") for seg in cached.stdout.split(b"\0") if seg}
+            check(
+                "gone/pkg/real.md" in cached_entries and not (ghost_root / "gone" / "pkg" / "real.md").exists(),
+                "mutation control: `git ls-files --cached` still lists gone/pkg/real.md "
+                "even though it no longer exists on disk (proves the ghost must be "
+                "filtered by our own index-building code, not by git itself)",
+            )
+
+            ghost_index = verify_protocol.build_suffix_index(ghost_root)
+            check(
+                ("gone", "pkg", "real.md") not in ghost_index.get("real.md", []),
+                "build_suffix_index drops a tracked-but-deleted-from-worktree ghost "
+                "entry (T-064 MUST-FIX B: stale_tracked_ghost_ambiguity)",
+            )
+            check(
+                verify_protocol.suffix_unique_match("pkg/real.md", ghost_index, ghost_root) is True,
+                "suffix_unique_match sees `pkg/real.md` as unique once the ghost entry "
+                "is excluded, instead of falsely ambiguous against a file that no "
+                "longer exists (T-064 MUST-FIX B: stale_tracked_ghost_ambiguity)",
+            )
+
+            violations, coverage = verify_protocol.verify_project(ghost_root)
+            hit = next((v for v in violations if "pkg/real.md" in v["detail"]), None)
+            check(
+                hit is not None and "a unique suffix match exists at src/pkg/real.md" in hit["detail"],
+                f"T-064: `pkg/real.md` is dangling but carries a suffix hint unsuppressed "
+                f"by the deleted ghost entry (got: {hit})",
+            )
+            check(
+                coverage.get("citations_suffix_hinted") == 1,
+                "T-064: citations_suffix_hinted counts the ghost-unsuppressed hint "
+                f"(got {coverage.get('citations_suffix_hinted')})",
+            )
+        else:
+            print("  (skipped: git unavailable -- stale_tracked_ghost_ambiguity counterexample)")
+    finally:
+        shutil.rmtree(ghost_root, ignore_errors=True)
+
+    # T-064 MUST-FIX A counterexample: ignored_pseudo_unique_hint. A tracked file and a
+    # genuinely-existing, GITIGNORED file share a suffix. Before T-064, this made the
+    # suffix fallback wrongly resolve the citation as if the tracked file were the sole
+    # candidate (a false negative that tracked wherever `--exclude-standard`'s boundary
+    # was drawn -- the same shape as T-063 MUST-FIX 1, moved from "untracked" to
+    # "ignored"). The downgrade closes this false negative completely: the citation
+    # must be dangling BOTH before and after a `git add -f` of the ignored file, since
+    # suffix matching can no longer flip a verdict at all. Only the ignored file's
+    # visibility to the *hint* changes (informational only, not asserted precisely
+    # here, since accuracy of a hint is explicitly out of scope for pass/fail).
+    ignored_root = REPO_ROOT / ".tmp" / f"verify-fixture-ignored-{uuid.uuid4().hex}"
+    ignored_round = ignored_root / ".harnessloop" / "goals" / "20260113-001-fixture" / "rounds" / "0001"
+    try:
+        (ignored_round / "evidence").mkdir(parents=True)
+        (ignored_round / "reviews").mkdir(parents=True)
+        (ignored_round / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (ignored_root / "src" / "pkg").mkdir(parents=True)
+        (ignored_root / "src" / "pkg" / "real.md").write_text("tracked\n", encoding="utf-8")
+        (ignored_root / "scratch" / "pkg").mkdir(parents=True)
+        (ignored_root / "scratch" / "pkg" / "real.md").write_text("real, but gitignored\n", encoding="utf-8")
+
+        (ignored_round / "reviews" / "ignored.md").write_text(
+            "Ambiguous suffix -- one tracked file (src/pkg/real.md) and one genuinely "
+            "real, gitignored file (scratch/pkg/real.md) share this suffix; the "
+            "gitignored file is invisible to the index either way, but the citation "
+            "must NOT resolve regardless (T-064 downgrade: suffix matching cannot pass "
+            "a citation at all anymore):\n"
+            "- `pkg/real.md`\n",
+            encoding="utf-8",
+        )
+
+        git_available = shutil.which("git") is not None
+        if git_available:
+            init = subprocess.run(["git", "init", "-q"], cwd=ignored_root, capture_output=True)
+            (ignored_root / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+            add = subprocess.run(
+                ["git", "add", ".gitignore", "src/pkg/real.md"], cwd=ignored_root, capture_output=True
+            )
+            git_available = init.returncode == 0 and add.returncode == 0
+
+        if git_available:
+            check_ignore = subprocess.run(
+                ["git", "-C", str(ignored_root), "check-ignore", "scratch/pkg/real.md"],
+                capture_output=True,
+            )
+            check(
+                check_ignore.returncode == 0,
+                "sanity: scratch/pkg/real.md is genuinely gitignored in this fixture",
+            )
+
+            violations_before, _cov = verify_protocol.verify_project(ignored_root)
+            check(
+                any("pkg/real.md" in v["detail"] for v in violations_before),
+                "T-064: `pkg/real.md` is dangling while scratch/pkg/real.md is still "
+                "gitignored-and-invisible-to-the-index -- pre-T-064 this same state "
+                "would have made the suffix fallback wrongly RESOLVE the citation "
+                "(T-064 MUST-FIX A: ignored_pseudo_unique_hint, closed by the downgrade)",
+            )
+
+            add_ignored = subprocess.run(
+                ["git", "add", "-f", "scratch/pkg/real.md"], cwd=ignored_root, capture_output=True
+            )
+            if add_ignored.returncode == 0:
+                violations_after, _cov = verify_protocol.verify_project(ignored_root)
+                check(
+                    any("pkg/real.md" in v["detail"] for v in violations_after),
+                    "T-064: `pkg/real.md` is still dangling after `git add -f` makes the "
+                    "same on-disk file visible to the index too -- the verdict does not "
+                    "flip either way, since suffix matching can no longer resolve "
+                    "anything (zero false-negative surface, the entire point of the "
+                    "downgrade)",
+                )
+        else:
+            print("  (skipped: git unavailable -- ignored_pseudo_unique_hint counterexample)")
+    finally:
+        shutil.rmtree(ignored_root, ignore_errors=True)
 
 
 def validate_round_cost_smoke() -> None:
