@@ -1283,6 +1283,261 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(escape_root, ignore_errors=True)
 
+    print("  T-063: MUST-FIX regression guards (untracked pseudo-unique, symlink containment escape)")
+
+    # T-063 MUST-FIX 1 counterexample: untracked_pseudo_unique. A tracked file and a
+    # genuinely-existing, non-gitignored *untracked* file share the same suffix. The
+    # narrowed (tracked-only) index from the prior rework made the tracked file look
+    # like the *only* candidate -- a false uniqueness born from excluding real,
+    # non-ignored worktree files rather than from a hardcoded denylist this time.
+    # codex T-063 repro: before_add resolves (bug), after_add is dangling (accidental
+    # fix-by-git-add, not by design). Post-fix must be dangling in BOTH states, since
+    # the untracked file is a real, non-ignored worktree fact independent of whether
+    # it has been `git add`ed yet.
+    untracked_root = REPO_ROOT / ".tmp" / f"verify-fixture-untracked-{uuid.uuid4().hex}"
+    round_dir7 = untracked_root / ".harnessloop" / "goals" / "20260108-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir7 / "evidence").mkdir(parents=True)
+        (round_dir7 / "reviews").mkdir(parents=True)
+        (round_dir7 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (untracked_root / "src" / "pkg").mkdir(parents=True)
+        (untracked_root / "src" / "pkg" / "real.md").write_text("tracked\n", encoding="utf-8")
+        (untracked_root / "scratch" / "pkg").mkdir(parents=True)
+        (untracked_root / "scratch" / "pkg" / "real.md").write_text("untracked, not ignored\n", encoding="utf-8")
+
+        (round_dir7 / "reviews" / "untracked.md").write_text(
+            "Ambiguous suffix -- one tracked file (src/pkg/real.md) and one genuinely "
+            "real, non-ignored but untracked file (scratch/pkg/real.md) share this "
+            "suffix, must NOT resolve:\n"
+            "- `pkg/real.md`\n",
+            encoding="utf-8",
+        )
+
+        git_available = shutil.which("git") is not None
+        if git_available:
+            init = subprocess.run(["git", "init", "-q"], cwd=untracked_root, capture_output=True)
+            add_tracked = subprocess.run(
+                ["git", "add", "src/pkg/real.md"], cwd=untracked_root, capture_output=True
+            )
+            git_available = init.returncode == 0 and add_tracked.returncode == 0
+
+        if git_available:
+            # Sanity: the tracked-only index (the prior rework's universe) sees only
+            # ONE candidate for this suffix -- proving the ambiguity below is surfaced
+            # by including untracked-not-ignored files, not by some other mechanism.
+            tracked_only_listed = subprocess.run(
+                ["git", "-C", str(untracked_root), "ls-files", "-z", "--cached", "--recurse-submodules"],
+                capture_output=True,
+            )
+            tracked_only_index: dict[str, list[tuple]] = {}
+            for raw in tracked_only_listed.stdout.split(b"\0"):
+                if not raw:
+                    continue
+                rel = raw.decode("utf-8")
+                parts = tuple(p for p in rel.split("/") if p)
+                if parts:
+                    tracked_only_index.setdefault(parts[-1], []).append(parts)
+            tracked_only_matches = [
+                c for c in tracked_only_index.get("real.md", [])
+                if len(c) >= 2 and c[-2:] == ("pkg", "real.md")
+            ]
+            check(
+                len(tracked_only_matches) == 1,
+                "mutation control: a tracked-files-only index sees only one `pkg/real.md` "
+                "candidate before scratch/pkg/real.md is git-added (proves the untracked/"
+                "not-ignored inclusion, not something else, is what surfaces the ambiguity "
+                "below; T-063 MUST-FIX 1: untracked_pseudo_unique)",
+            )
+
+            violations_before, _cov = verify_protocol.verify_project(untracked_root)
+            check(
+                any("pkg/real.md" in v["detail"] for v in violations_before),
+                "verify reports `pkg/real.md` as dangling (multiply-resolvable) while "
+                "scratch/pkg/real.md is still untracked-but-not-ignored, instead of "
+                "treating the tracked file as a false-unique match (T-063 MUST-FIX 1: "
+                "untracked_pseudo_unique, codex T-063)",
+            )
+
+            add_untracked = subprocess.run(
+                ["git", "add", "scratch/pkg/real.md"], cwd=untracked_root, capture_output=True
+            )
+            if add_untracked.returncode == 0:
+                violations_after, _cov = verify_protocol.verify_project(untracked_root)
+                check(
+                    any("pkg/real.md" in v["detail"] for v in violations_after),
+                    "verify still reports `pkg/real.md` as dangling after scratch/pkg/real.md "
+                    "is git-added too -- the same worktree fact must not flip the verdict "
+                    "purely because of index status (no regression once both are tracked)",
+                )
+        else:
+            print("  (skipped: git unavailable -- untracked_pseudo_unique counterexample)")
+    finally:
+        shutil.rmtree(untracked_root, ignore_errors=True)
+
+    # T-063 MUST-FIX 2 counterexample: symlink_containment_escape. A project-internal
+    # symlink whose *path* is inside the project but whose *target* resolves outside
+    # it. Lexical `os.path.normpath` containment alone passes all three resolution
+    # paths (direct base, .gitmodules base, suffix-index hit); canonical
+    # (`Path.resolve`) containment on both sides must reject all three.
+    if hasattr(os, "symlink"):
+        symlink_root = REPO_ROOT / ".tmp" / f"verify-fixture-symlink-{uuid.uuid4().hex}"
+        symlink_project = symlink_root / "project"
+        symlink_outside = symlink_root / "outside"
+        round_dir8 = symlink_project / ".harnessloop" / "goals" / "20260109-001-fixture" / "rounds" / "0001"
+        try:
+            (round_dir8 / "evidence").mkdir(parents=True)
+            (round_dir8 / "reviews").mkdir(parents=True)
+            (round_dir8 / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (symlink_outside / "pkg").mkdir(parents=True)
+            (symlink_outside / "pkg" / "ghost.py").write_text("# outside the project\n", encoding="utf-8")
+            (symlink_outside / "pkg" / "external.md").write_text("# outside the project\n", encoding="utf-8")
+
+            symlinks_supported = True
+            try:
+                (symlink_project / "link").symlink_to(symlink_outside, target_is_directory=True)
+                (symlink_project / "deep" / "pkg").mkdir(parents=True)
+                (symlink_project / "deep" / "pkg" / "external.md").symlink_to(
+                    symlink_outside / "pkg" / "external.md"
+                )
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+
+            if symlinks_supported:
+                (symlink_project / ".gitmodules").write_text(
+                    '[submodule "x"]\n\tpath = link\n\turl = https://example.invalid/x.git\n',
+                    encoding="utf-8",
+                )
+                (round_dir8 / "reviews" / "symlink.md").write_text(
+                    "Direct base: project-internal symlink `link` points outside the project, "
+                    "must NOT resolve:\n"
+                    "- `link/pkg/ghost.py`\n"
+                    "\n"
+                    ".gitmodules base: `path = link` names the same escaping symlink, must "
+                    "also NOT resolve:\n"
+                    "- `pkg/ghost.py`\n"
+                    "\n"
+                    "Suffix fallback: a project-internal *file* symlink whose target lives "
+                    "outside the project, must NOT resolve:\n"
+                    "- `pkg/external.md`\n",
+                    encoding="utf-8",
+                )
+
+                git_available = shutil.which("git") is not None
+                if git_available:
+                    init = subprocess.run(["git", "init", "-q"], cwd=symlink_project, capture_output=True)
+                    add = subprocess.run(["git", "add", "-A"], cwd=symlink_project, capture_output=True)
+                    git_available = init.returncode == 0 and add.returncode == 0
+
+                if git_available:
+                    # -- direct base (1/3) --
+                    escaping_candidate = Path(
+                        os.path.normpath(str(symlink_project / "link/pkg/ghost.py"))
+                    )
+                    check(
+                        verify_protocol.is_under(escaping_candidate, symlink_project),
+                        "mutation control: lexical normpath containment alone WOULD accept "
+                        "`link/pkg/ghost.py` (its path is inside the project) -- proves the "
+                        "rejection below comes from canonical resolution, not lexical "
+                        "normpath (T-063 MUST-FIX 2: symlink_containment_escape, direct base)",
+                    )
+                    check(
+                        verify_protocol._resolve_in_project(
+                            symlink_project, "link/pkg/ghost.py", symlink_project
+                        )
+                        is None,
+                        "_resolve_in_project rejects a citation resolving through a "
+                        "project-internal symlink whose target is outside the project "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, direct base)",
+                    )
+
+                    # -- .gitmodules base (2/3) --
+                    roots = verify_protocol.submodule_roots(symlink_project)
+                    check(
+                        all(
+                            verify_protocol._canonical(r) != verify_protocol._canonical(symlink_outside)
+                            for r in roots
+                        ),
+                        "submodule_roots rejects a `.gitmodules` `path =` entry naming a "
+                        "project-internal symlink whose target is outside the project "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, .gitmodules base)",
+                    )
+
+                    # -- suffix fallback (3/3) --
+                    symlink_index = verify_protocol.build_suffix_index(symlink_project)
+                    escaping_match_path = symlink_project / "deep" / "pkg" / "external.md"
+                    check(
+                        verify_protocol.is_under(escaping_match_path, symlink_project),
+                        "mutation control: lexical normpath containment alone WOULD accept "
+                        "the suffix-index hit `deep/pkg/external.md` (its path is inside the "
+                        "project) -- proves the rejection below comes from canonical "
+                        "resolution (T-063 MUST-FIX 2: symlink_containment_escape, suffix "
+                        "fallback)",
+                    )
+                    check(
+                        verify_protocol.suffix_unique_match("pkg/external.md", symlink_index, symlink_project)
+                        is False,
+                        "suffix_unique_match rejects a unique suffix hit whose indexed file "
+                        "is a project-internal symlink pointing outside the project "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, suffix fallback)",
+                    )
+
+                    # -- end-to-end: all three citations dangling --
+                    violations, _cov = verify_protocol.verify_project(symlink_project)
+                    details = " | ".join(v["detail"] for v in violations)
+                    check(
+                        "link/pkg/ghost.py" in details,
+                        "verify reports `link/pkg/ghost.py` as dangling instead of resolving "
+                        "it through an escaping project-internal symlink base "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, end-to-end direct base)",
+                    )
+                    check(
+                        any(
+                            v["detail"].endswith("cites `pkg/ghost.py` which does not exist")
+                            for v in violations
+                        ),
+                        "verify reports `pkg/ghost.py` as dangling instead of resolving it "
+                        "through a `.gitmodules` base naming an escaping symlink "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, end-to-end .gitmodules base)",
+                    )
+                    check(
+                        any(
+                            v["detail"].endswith("cites `pkg/external.md` which does not exist")
+                            for v in violations
+                        ),
+                        "verify reports `pkg/external.md` as dangling instead of resolving it "
+                        "through the suffix fallback's escaping file symlink "
+                        "(T-063 MUST-FIX 2: symlink_containment_escape, end-to-end suffix fallback)",
+                    )
+
+                    # Mutation control: the escaping targets genuinely exist on disk via the
+                    # symlinks -- proving the rejections above come from containment, not
+                    # from the files being absent.
+                    check(
+                        (symlink_project / "link" / "pkg" / "ghost.py").resolve().is_file()
+                        and (symlink_project / "deep" / "pkg" / "external.md").resolve().is_file(),
+                        "mutation control: both escaping symlink targets genuinely resolve to "
+                        "real files on disk (proves containment, not absence, drives the "
+                        "rejections above)",
+                    )
+                else:
+                    print("  (skipped: git unavailable -- symlink_containment_escape counterexample)")
+            else:
+                print("  (skipped: symlinks unsupported on this filesystem -- symlink_containment_escape counterexample)")
+        finally:
+            shutil.rmtree(symlink_root, ignore_errors=True)
+    else:
+        print("  (skipped: os.symlink unavailable on this platform -- symlink_containment_escape counterexample)")
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")

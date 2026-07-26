@@ -50,13 +50,32 @@ This script enforces only machine-checkable rules:
   locator is not silently mis-resolved.
 
   Every base resolution (project root, goal/round dirs, `.harnessloop/`,
-  submodule roots, and the suffix fallback below) is *containment-checked*:
-  the resolved path is normalized and must land inside the project root.
-  A citation containing `../` that would otherwise walk outside the
-  project (e.g. `../outside/ghost.py`), or a `.gitmodules` `path =` entry
-  that points outside the project root, is never treated as resolved —
-  even if something of that name happens to exist on the host filesystem
-  just outside the project tree (TH-0008 REWORK: `submodule_parent_escape`).
+  submodule roots, and the suffix fallback below) is *containment-checked*
+  using canonical (symlink-resolved) paths on both sides, not merely a
+  lexical `normpath` comparison: the candidate and the project root are
+  each passed through `Path.resolve(strict=False)` before the containment
+  test, and the candidate must land inside the resolved project root (see
+  `_is_contained`). A citation containing `../` that would otherwise walk
+  outside the project (e.g. `../outside/ghost.py`), a `.gitmodules`
+  `path =` entry that points outside the project root, or a
+  project-internal symlink (a submodule-root path itself, an explicit-base
+  candidate, or a suffix-index hit) whose real target lives outside the
+  project tree, is never treated as resolved — even if something of that
+  name happens to exist on the host filesystem just outside the project
+  tree (TH-0008 REWORK: `submodule_parent_escape`; T-063 MUST-FIX 2:
+  `symlink_containment_escape` — lexical `normpath` containment alone
+  passes a symlink whose path is inside the project but whose target is
+  not, and that held across all three of the base-resolution, submodule-root,
+  and suffix-match paths, not just one). Resolving the project root too
+  (not only the candidate) matters even absent any project-authored
+  symlink: on macOS, e.g., `/tmp` is itself a symlink to `/private/tmp`, so
+  a project rooted under `/tmp` would otherwise be compared against an
+  unresolved parent and see spurious mismatches. A broken symlink's
+  `resolve(strict=False)` does not raise — it normalizes past the point the
+  target stops existing — so containment alone does not double as an
+  existence check; the existing match-time re-verification (`_exists_as`,
+  `broken_symlink` / `stale_index_after_delete`) still owns that job and is
+  always applied in addition to, not instead of, containment.
 
   If a citation still does not resolve against any of the bases above
   (after locator-stripping), it is tried once more as a path *suffix*
@@ -81,23 +100,34 @@ This script enforces only machine-checkable rules:
   citation was checked; TH-0008 REWORK: `broken_symlink`,
   `stale_index_after_delete`).
 
-  The index backing this fallback is built from the project's
-  git-tracked files (`git ls-files --recurse-submodules`, run from the
+  The index backing this fallback is built from every file that genuinely
+  exists in the project's worktree and is not gitignored — tracked *and*
+  untracked-but-not-ignored (`git ls-files -z --cached --recurse-submodules`
+  plus `git ls-files -z --others --exclude-standard`, the latter extended
+  into nested submodules via `git submodule foreach --recursive` since
+  `--others` itself has no `--recurse-submodules` mode — run from the
   project root, when the project root is itself a git working-tree top
-  level) — including files inside nested submodules — falling back to
-  walking the filesystem (pruning `NOISE_DIR_NAMES`) only when the project
-  is not a git working-tree root or `git` is unavailable. This means
-  "unique" means unique among the project's *git-tracked* files, not
-  literally "the whole project tree": a generated or gitignored file that
-  happens to collide with a tracked file's suffix is invisible to the
-  index either way, and — unlike the prior walk-based index — a real,
-  tracked source directory that happens to share a name with an entry in
-  `NOISE_DIR_NAMES` (e.g. a project that genuinely has a source directory
-  named `build/`) is indexed and can correctly participate in an
-  ambiguity instead of being silently pruned out of consideration
-  (TH-0008 REWORK: `noise_pruned_ambiguity`). The walk-based fallback,
-  when it is used, still prunes `NOISE_DIR_NAMES` and is subject to the
-  same pruning blind spot it always was.
+  level) — falling back to walking the filesystem (pruning
+  `NOISE_DIR_NAMES`) only when the project is not a git working-tree root or
+  `git` is unavailable. "Unique" means unique among this real-worktree,
+  non-ignored surface, not literally "git-tracked": an earlier rework
+  narrowed the index to tracked files only, which closed the noise-pruning
+  blind spot below but opened a new one — a round's own freshly-produced
+  evidence/review files are untracked by construction, so a genuine
+  same-suffix collision between a tracked file and such a fresh untracked
+  one was invisible to the ambiguity check, making a citation that should
+  have been multiply-resolvable look uniquely resolved instead (T-063
+  MUST-FIX 1: `untracked_pseudo_unique`). A gitignored file colliding with a
+  tracked/untracked file's suffix is still invisible to the index either
+  way (that generated-output exclusion is the point of `--exclude-standard`),
+  and — unlike the prior walk-based index — a real, non-ignored source
+  directory that happens to share a name with an entry in `NOISE_DIR_NAMES`
+  (e.g. a project that genuinely has a source directory named `build/`) is
+  indexed and can correctly participate in an ambiguity instead of being
+  silently pruned out of consideration (TH-0008 REWORK:
+  `noise_pruned_ambiguity`). The walk-based fallback, when it is used, still
+  prunes `NOISE_DIR_NAMES` and is subject to the same pruning blind spot it
+  always was.
 
   A citation ending in `/` names a directory, not a file: it only resolves
   when the matched filesystem entry is actually a directory (`is_dir()`),
@@ -242,6 +272,41 @@ def norm(path: Path) -> str:
 def is_under(child: Path, parent: Path) -> bool:
     child_s, parent_s = norm(child), norm(parent)
     return child_s == parent_s or child_s.startswith(parent_s + os.sep)
+
+
+def _canonical(path: Path) -> Path:
+    """Resolve `path` to its canonical (symlink-following) form.
+
+    `strict=False` normalizes past a broken symlink or a nonexistent
+    component instead of raising — existence is a separate concern, owned
+    by `_exists_as` at the point a match is actually accepted, not by this
+    resolution step (T-063 MUST-FIX 2: canonical containment and match-time
+    existence re-verification must not be conflated with each other).
+    """
+    return path.resolve(strict=False)
+
+
+def _is_contained(candidate: Path, project: Path) -> bool:
+    """True if `candidate` lands inside `project` under *canonical*
+    (symlink-resolved) comparison of both sides.
+
+    Lexical `normpath` containment (`is_under` alone) is not enough: a
+    project-internal symlink whose path is inside the project but whose
+    target is not (e.g. `<project>/link -> /outside`, or a `.gitmodules`
+    `path =` entry naming such a symlink) passes a lexical check while
+    actually resolving outside the project entirely (T-063 MUST-FIX 2:
+    `symlink_containment_escape`). `project` itself is resolved too, not
+    just `candidate` — on macOS `/tmp` is a symlink to `/private/tmp`, so a
+    project rooted there would otherwise be compared against an unresolved
+    parent and see a spurious mismatch (or, worse, a spurious escape) for
+    every candidate. Used by every containment check that guards Rule B
+    citation resolution: `_resolve_in_project` (explicit-base and suffix
+    resolution), `submodule_roots` (`.gitmodules` `path =` acceptance), and
+    `suffix_unique_match` (the unique-hit's specific path) — all three must
+    share this one definition so a symlink escape cannot slip through
+    whichever path is not updated.
+    """
+    return is_under(_canonical(candidate), _canonical(project))
 
 
 def extract_allowed_spans(scope_lock_text: str) -> list[str]:
@@ -428,14 +493,22 @@ def submodule_roots(project: Path) -> list[Path]:
     checked out directly under the project root. Projects without a
     .gitmodules file get an empty list and behavior is unchanged.
 
-    A `path =` value is *containment-checked* before being accepted: if it
-    (after normalizing) does not resolve inside `project`, it is dropped
-    rather than followed. `.gitmodules` is ordinary tracked text a review
-    (or an adversarial one) could contain a `path = ../outside` entry, and
-    without this check a sibling directory outside the project — reachable
-    on the host filesystem but not part of it — would become a citation
-    resolution base, letting an otherwise-dangling citation resolve against
-    something outside the project (TH-0008 REWORK: `submodule_parent_escape`).
+    A `path =` value is *canonical-containment-checked* before being
+    accepted: if it does not resolve inside `project` under symlink-following
+    comparison (`_is_contained`), it is dropped rather than followed.
+    `.gitmodules` is ordinary tracked text a review (or an adversarial one)
+    could contain a `path = ../outside` entry, and without this check a
+    sibling directory outside the project — reachable on the host filesystem
+    but not part of it — would become a citation resolution base, letting an
+    otherwise-dangling citation resolve against something outside the
+    project (TH-0008 REWORK: `submodule_parent_escape`). A lexical-only
+    check is not sufficient here either: `path = link` where
+    `<project>/link` is itself a symlink to somewhere outside the project
+    passes a lexical `normpath` containment test (the symlink's own path is
+    inside the project) while its target is not, and `candidate.is_dir()`
+    below follows the symlink and reports it as a valid directory regardless
+    (T-063 MUST-FIX 2: `symlink_containment_escape`) — `_is_contained`
+    resolves the symlink before comparing, so this is rejected too.
     """
     gitmodules = project / ".gitmodules"
     if not gitmodules.is_file():
@@ -451,7 +524,7 @@ def submodule_roots(project: Path) -> list[Path]:
             continue
         candidate = project / rel
         normalized = Path(os.path.normpath(str(candidate)))
-        if not is_under(normalized, project):
+        if not _is_contained(normalized, project):
             continue
         if candidate.is_dir():
             roots.append(candidate)
@@ -459,7 +532,7 @@ def submodule_roots(project: Path) -> list[Path]:
 
 
 def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None:
-    """Git-tracked-file index for `build_suffix_index`, or `None` if
+    """Git worktree-file index for `build_suffix_index`, or `None` if
     `project` is not itself a git working-tree root (or `git` is
     unavailable).
 
@@ -470,13 +543,28 @@ def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None
     of silently seeing zero tracked files and treating every suffix lookup
     as absent.
 
-    Uses `git ls-files --recurse-submodules`, which lists tracked files in
-    `project` and inside every nested submodule (any depth) without ever
-    walking into gitignored output (`node_modules/`, `dist/`, `build/`
-    artifacts, `.venv/`, ...) — so the resulting uniqueness universe is the
-    project's real tracked-source surface, not an approximation of it via a
-    hardcoded noise-directory denylist (see module docstring: "unique"
-    means unique among git-tracked files, not literally the whole tree).
+    The uniqueness universe is every file that genuinely exists in the
+    worktree and is not gitignored — tracked *and* untracked-but-not-ignored
+    — not merely `git ls-files`'s tracked set. `git ls-files -z --cached
+    --recurse-submodules` supplies the tracked half (including nested
+    submodules, any depth); `git ls-files -z --others --exclude-standard`
+    supplies untracked-but-not-ignored files in the top-level project (`git`
+    has no `--recurse-submodules` support for `--others` — see `git
+    help ls-files` — so nested submodules' own untracked files are collected
+    separately via `git submodule foreach --recursive`, prefixed with each
+    submodule's path). Restricting to tracked files alone (TH-0008 REWORK
+    original fix) traded one false-negative for another: a round's just-produced
+    evidence/review files are untracked by construction (nothing has `git
+    add`ed them yet), so a genuine same-suffix collision between a tracked
+    file and such a fresh untracked one was invisible to the ambiguity check
+    and a citation that should have been flagged as multiply-resolvable
+    instead looked uniquely resolved (T-063 MUST-FIX 1:
+    `untracked_pseudo_unique`). Gitignored output (`node_modules/`, `dist/`,
+    `build/` artifacts, `.venv/`, ...) is still excluded by `--exclude-standard`,
+    so this keeps the benefit of not needing a hardcoded noise-directory
+    denylist (see module docstring: "unique" now means unique among every
+    real, non-ignored file in the worktree, not literally "git-tracked" nor
+    the whole tree including ignored output).
     """
     try:
         toplevel = subprocess.run(
@@ -499,24 +587,60 @@ def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None
         return None
 
     try:
-        listed = subprocess.run(
-            ["git", "-C", str(project), "ls-files", "-z", "--recurse-submodules"],
+        tracked = subprocess.run(
+            ["git", "-C", str(project), "ls-files", "-z", "--cached", "--recurse-submodules"],
             capture_output=True,
             timeout=60,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
-    if listed.returncode != 0:
+    if tracked.returncode != 0:
         return None
 
+    raw_entries: list[bytes] = [seg for seg in tracked.stdout.split(b"\0") if seg]
+
+    try:
+        untracked = subprocess.run(
+            ["git", "-C", str(project), "ls-files", "-z", "--others", "--exclude-standard"],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        untracked = None
+    if untracked is not None and untracked.returncode == 0:
+        raw_entries.extend(seg for seg in untracked.stdout.split(b"\0") if seg)
+
+    # Nested submodules' own untracked-but-not-ignored files: `--others` has no
+    # `--recurse-submodules` mode, so shell out to `submodule foreach --recursive`
+    # and run the same lookup inside each, prefixing with $displaypath (the
+    # submodule's path relative to `project`). A read loop keyed on NUL, not
+    # newline, keeps this safe for filenames containing embedded newlines, and
+    # `printf ... \0` re-delimits with NUL so the outer split below still works.
+    try:
+        nested = subprocess.run(
+            [
+                "git", "-C", str(project), "submodule", "foreach", "--recursive", "-q",
+                'git ls-files -z --others --exclude-standard | '
+                'while IFS= read -r -d "" f; do printf "%s/%s\\0" "$displaypath" "$f"; done',
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        nested = None
+    if nested is not None and nested.returncode == 0:
+        raw_entries.extend(seg for seg in nested.stdout.split(b"\0") if seg)
+
     index: dict[str, list[tuple[str, ...]]] = {}
-    for raw in listed.stdout.split(b"\0"):
-        if not raw:
-            continue
+    seen: set[str] = set()
+    for raw in raw_entries:
         try:
             rel = raw.decode("utf-8")
         except UnicodeDecodeError:
             continue
+        if rel in seen:
+            continue
+        seen.add(rel)
         parts = tuple(p for p in rel.split("/") if p)
         if not parts:
             continue
@@ -535,8 +659,9 @@ def build_suffix_index(project: Path) -> dict[str, list[tuple[str, ...]]]:
     than walking the tree per citation) keeps that fallback from turning an
     O(citations) check into an O(citations * tree size) one.
 
-    Primary source is `git ls-files --recurse-submodules` (`_git_tracked_index`),
-    used whenever `project` is itself a git working-tree root. Falls back to
+    Primary source is the tracked-plus-untracked-not-ignored worktree index
+    (`_git_tracked_index`, see its docstring), used whenever `project` is
+    itself a git working-tree root. Falls back to
     walking the filesystem directly — `os.walk` with in-place `dirnames`
     pruning of `NOISE_DIR_NAMES` (`.git`, `node_modules`, build output,
     venvs, ...), not `Path.rglob("*")`, since a project with vendored
@@ -614,6 +739,21 @@ def suffix_unique_match(
       `broken_symlink`); either way, treating the indexed entry as
       sufficient proof of existence would accept a citation to something
       that, right now, does not resolve to a real file.
+
+    A fifth guard, added in T-063 MUST-FIX 2 (`symlink_containment_escape`):
+    the unique match's specific path is also *canonical-containment-checked*
+    (`_is_contained`) against `project` before being accepted, not merely
+    assumed safe because it came from the index. The index is built from
+    `git ls-files`, which lists a tracked symlink like any other tracked
+    entry — a citation ending in, say, `pkg/external.md` where
+    `<project>/deep/pkg/external.md` is itself a symlink pointing at a real
+    file *outside* the project would otherwise pass the existence check
+    (the symlink's target genuinely exists) while resolving to something
+    the project does not control. Containment is checked first and
+    existence second, deliberately not combined into one step: a broken
+    symlink still passes containment (its lexical path is inside the
+    project even though nothing exists at the far end) and is correctly
+    caught by the existence check that follows, exactly as before.
     """
     parts = tuple(p for p in cleaned.split("/") if p)
     if len(parts) < 2:
@@ -623,12 +763,14 @@ def suffix_unique_match(
     if len(matches) != 1:
         return False
     match_path = project.joinpath(*matches[0])
+    if not _is_contained(match_path, project):
+        return False
     return _exists_as(match_path, cleaned.endswith("/"))
 
 
 def _resolve_in_project(base: Path, cited: str, project: Path) -> Path | None:
     """Join `base` and `cited`, normalize, and return the result only if it
-    stays within `project` — otherwise `None`.
+    stays within `project` under *canonical* containment — otherwise `None`.
 
     Guards against a citation containing `../` segments walking the join
     outside the project tree, where `Path.exists()` would silently consult
@@ -636,10 +778,19 @@ def _resolve_in_project(base: Path, cited: str, project: Path) -> Path | None:
     name with something the review meant to cite (TH-0008 REWORK:
     `submodule_parent_escape` — the same containment discipline
     `submodule_roots` applies to `.gitmodules` entries, applied here to
-    every citation resolution).
+    every citation resolution). Lexical `normpath` containment alone is not
+    enough for a project-internal symlink whose target lives outside the
+    project (e.g. `<project>/link -> /outside`, cited as `link/pkg/x.py`):
+    the joined-and-normalized candidate's *path* is lexically inside the
+    project even though what it resolves to is not (T-063 MUST-FIX 2:
+    `symlink_containment_escape`) — `_is_contained` resolves both sides
+    before comparing, so this is rejected too. The returned `candidate` is
+    still the lexical (non-canonical) join, not the resolved path: callers
+    only need it for the subsequent `_exists_as` check, which itself
+    follows symlinks via `Path.exists()` / `is_dir()`.
     """
     candidate = Path(os.path.normpath(str(base / cited)))
-    if not is_under(candidate, project):
+    if not _is_contained(candidate, project):
         return None
     return candidate
 
@@ -828,11 +979,13 @@ def main() -> int:
             "round directories, the project's own .harnessloop/ directory (for "
             "citations using a PATHISH_PREFIXES prefix verbatim, e.g. "
             "setup/data-sources.md), and the root of every git submodule (any depth) "
-            "declared in the project's .gitmodules (containment-checked: a path or "
-            ".gitmodules entry that would resolve outside the project is never treated "
-            "as resolved). A trailing :<line>, :<start>-<end>, or ::<anchor> locator is "
-            "stripped before checking. If still unresolved, a citation with >=2 path "
-            "segments that matches exactly one file in the project's git-tracked index "
+            "declared in the project's .gitmodules (canonical-containment-checked: a path "
+            "or .gitmodules entry that would resolve outside the project — including via "
+            "a project-internal symlink — is never treated as resolved). A trailing "
+            ":<line>, :<start>-<end>, or ::<anchor> locator is stripped before checking. "
+            "If still unresolved, a citation with >=2 path "
+            "segments that matches exactly one file in the project's tracked-plus-"
+            "untracked-not-ignored worktree index "
             "(or, outside a git working tree, the walked and noise-pruned tree) as a "
             "path suffix, and whose matched path still actually exists, is also "
             "accepted. A citation ending in / must resolve to a directory. Home-relative "
