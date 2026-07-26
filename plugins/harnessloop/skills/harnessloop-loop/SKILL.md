@@ -448,6 +448,7 @@ The mechanical gate's exit code decides less than it looks like it decides. What
 - `rounds` / `rounds_zero_inspected` — scope-lock existence (`missing-scope-lock`) and Allowed Changes parseability (`unparseable-allowed-changes`), checked unconditionally for every round regardless of whether that round has any evidence/review artifacts.
 - `rule_a_files` — whether files under a round's `evidence/` and `reviews/` fall inside a path the round's scope-lock allows (`scope-lock-violation`), checked only when the round has at least one such file and its scope-lock parses.
 - `rule_b_files` / `citations_checked` — whether backtick path-ish references inside that round's `reviews/*.md` resolve to files that exist (`dangling-citation`).
+- `citations_exempt_external` — how many of those citation spans were home-relative (`~/...`), filesystem-absolute (`/...`), or Windows-absolute (`C:/...`, UNC) and so were exempted from existence checking entirely (a real, uncovered gap — see `verify_protocol.py`'s module docstring — made visible in coverage rather than silently disappearing).
 
 What it does **not** decide (**OUT** — currently not decided by the mechanical gate, not "unmechanizable forever"):
 

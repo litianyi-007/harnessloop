@@ -49,36 +49,110 @@ This script enforces only machine-checkable rules:
   citation that happens to end in something that is coincidentally not a
   locator is not silently mis-resolved.
 
+  Every base resolution (project root, goal/round dirs, `.harnessloop/`,
+  submodule roots, and the suffix fallback below) is *containment-checked*:
+  the resolved path is normalized and must land inside the project root.
+  A citation containing `../` that would otherwise walk outside the
+  project (e.g. `../outside/ghost.py`), or a `.gitmodules` `path =` entry
+  that points outside the project root, is never treated as resolved —
+  even if something of that name happens to exist on the host filesystem
+  just outside the project tree (TH-0008 REWORK: `submodule_parent_escape`).
+
   If a citation still does not resolve against any of the bases above
   (after locator-stripping), it is tried once more as a path *suffix*
-  against every file that actually exists anywhere under the project tree
-  (see `build_suffix_index` / `suffix_unique_match`): this is the fallback
-  for a citation that is correct but written relative to neither the
-  project root, the round/goal directory, `.harnessloop/`, nor any
-  submodule root — e.g. `harnessloop-setup/SKILL.md` for a file that
-  actually lives at `plugins/harnessloop/skills/harnessloop-setup/SKILL.md`.
-  This fallback is deliberately conservative: it requires at least two
-  path segments (a single bare filename never qualifies — that shape is
-  both the most common typo and the least informative citation), compares
-  whole path *segments* rather than raw string suffixes (so `os.html`
-  cannot match `macos.html`), excludes common build/vendor noise
-  directories, and only exempts the citation when exactly one file in the
-  whole project tree matches that suffix — zero or multiple matches both
-  still report `dangling-citation` (an ambiguous or absent suffix is not a
-  resolved citation).
+  against the project's indexed files (see `build_suffix_index` /
+  `suffix_unique_match`): this is the fallback for a citation that is
+  correct but written relative to neither the project root, the
+  round/goal directory, `.harnessloop/`, nor any submodule root — e.g.
+  `harnessloop-setup/SKILL.md` for a file that actually lives at
+  `plugins/harnessloop/skills/harnessloop-setup/SKILL.md`. This fallback is
+  deliberately conservative: it requires at least two path segments (a
+  single bare filename never qualifies — that shape is both the most
+  common typo and the least informative citation), compares whole path
+  *segments* rather than raw string suffixes (so `os.html` cannot match
+  `macos.html`), and only exempts the citation when exactly one indexed
+  file matches that suffix *and* the specific path that match names still
+  actually exists (or, for a citation ending in `/`, is still actually a
+  directory) at the moment of checking — zero or multiple matches both
+  still report `dangling-citation`, and so does a unique match whose
+  target has since disappeared or was never real to begin with (a broken
+  symlink that `os.walk` lists in `filenames` without following it, or an
+  index entry for a file deleted after the index was built but before this
+  citation was checked; TH-0008 REWORK: `broken_symlink`,
+  `stale_index_after_delete`).
 
-  A citation that starts with `~/` (home-relative) or `/` (filesystem
-  absolute) is exempt from existence checking entirely, for the same
-  reason a `scheme://` URL is exempt: it names a location outside the
-  project tree, and Rule B has no project-declared base to resolve it
-  against — inventing one (e.g. treating `/` as the OS root) would let the
-  check silently walk outside the project. This is a real, known gap: a
-  review that cites a path inside an external design wiki kept outside
-  this project (e.g. under a user's `~/.llm-wiki/...`) is never verified,
-  because harnessloop has no way to know where — or whether — that
-  external tree exists. Closing that gap requires a project to declare an
-  additional resolution base for such external stores; that is a
-  separate, project-level protocol decision and is out of scope here.
+  The index backing this fallback is built from the project's
+  git-tracked files (`git ls-files --recurse-submodules`, run from the
+  project root, when the project root is itself a git working-tree top
+  level) — including files inside nested submodules — falling back to
+  walking the filesystem (pruning `NOISE_DIR_NAMES`) only when the project
+  is not a git working-tree root or `git` is unavailable. This means
+  "unique" means unique among the project's *git-tracked* files, not
+  literally "the whole project tree": a generated or gitignored file that
+  happens to collide with a tracked file's suffix is invisible to the
+  index either way, and — unlike the prior walk-based index — a real,
+  tracked source directory that happens to share a name with an entry in
+  `NOISE_DIR_NAMES` (e.g. a project that genuinely has a source directory
+  named `build/`) is indexed and can correctly participate in an
+  ambiguity instead of being silently pruned out of consideration
+  (TH-0008 REWORK: `noise_pruned_ambiguity`). The walk-based fallback,
+  when it is used, still prunes `NOISE_DIR_NAMES` and is subject to the
+  same pruning blind spot it always was.
+
+  A citation ending in `/` names a directory, not a file: it only resolves
+  when the matched filesystem entry is actually a directory (`is_dir()`),
+  never when it merely shares a path with an existing file of the same
+  name (TH-0008 REWORK: `trailing_slash_file` — `pkg/real.md/` must not
+  resolve against the file `pkg/real.md`). This directory semantics is
+  applied uniformly to explicit-base resolution and to the suffix
+  fallback.
+
+  A citation that starts with `~/` (home-relative), `/` (POSIX filesystem
+  absolute), or a Windows-style absolute path — a drive letter
+  (`C:/...`, written `C:\\...` before backslashes are normalized to `/`)
+  or a UNC path (`\\\\server\\share\\...`, normalized to `//server/share/...`,
+  which already starts with `/` and so falls under the same check) — is
+  exempt from existence checking entirely, for the same reason a
+  `scheme://` URL is exempt: it names a location outside the project tree,
+  and Rule B has no project-declared base to resolve it against —
+  inventing one (e.g. treating `/` as the OS root, or `C:/` as a Windows
+  drive root) would let the check silently walk outside the project, or
+  behave differently depending on which OS the check happens to run on.
+  This is a real, known gap: a review that cites a path inside an external
+  design wiki kept outside this project (e.g. under a user's
+  `~/.llm-wiki/...`) is never verified, because harnessloop has no way to
+  know where — or whether — that external tree exists. Closing that gap
+  requires a project to declare an additional resolution base for such
+  external stores; that is a separate, project-level protocol decision and
+  is out of scope here. Unlike before, this exemption is no longer silent:
+  every span skipped for this reason is counted in the `coverage` dict's
+  `citations_exempt_external` field (see `_empty_coverage`), so a run's
+  coverage line makes visible how much of its citation surface was waved
+  through unchecked rather than hiding that number entirely.
+
+  Two honesty notes on what this rule cannot mechanically guarantee even
+  after the above:
+
+  - Case sensitivity of the final existence check is whatever the host
+    filesystem gives it, not a Rule B decision: `Path.exists()` /
+    `is_dir()` are case-sensitive on a typical Linux filesystem and
+    case-insensitive (but case-preserving) by default on macOS and
+    Windows. A citation with the wrong case for a real file can therefore
+    pass or fail depending on which machine runs the check — this rule
+    does not normalize case itself and cannot make that determinism
+    project-wide.
+  - The suffix-unique fallback proves "exactly one indexed file has this
+    suffix", not "this is the file the reviewer meant to cite". A
+    reviewer who mistypes `mistyped/config.yaml` when they meant a
+    different file will still get a pass if `vendor/mistyped/config.yaml`
+    happens to be the tree's only file ending in `mistyped/config.yaml` —
+    the algorithm cannot distinguish a lucky coincidental match from the
+    intended one. This is inherent to any suffix-based fallback and is not
+    something this rework (or any purely mechanical suffix match) can
+    close; it is recorded here rather than fixed because fixing it would
+    require either dropping the fallback (reintroducing the false
+    positives it exists to remove) or requiring citations to be written
+    unambiguously (a review-authoring discipline change, not a Rule B one).
 
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
@@ -89,6 +163,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -126,6 +201,12 @@ BARE_DOMAIN_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
     r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$"
 )
+
+# A Windows drive-letter absolute path, e.g. `C:/Users/x` -- checked after
+# `pathish_citations` has already normalized backslashes to `/`, so the
+# original `C:\Users\x` form is matched by this too. See
+# `_looks_like_out_of_project`.
+WINDOWS_DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:/")
 
 # Trailing locator suffixes stripped before existence checking: `::anchor`
 # (checked first, since it is the more specific shape) and `:line` /
@@ -232,8 +313,10 @@ def _looks_like_placeholder(cleaned: str) -> bool:
 
 
 def _looks_like_out_of_project(cleaned: str) -> bool:
-    """True if the span is home-relative (``~/...``) or filesystem-absolute
-    (``/...``).
+    """True if the span is home-relative (``~/...``), POSIX filesystem-
+    absolute (``/...``, which also covers a UNC path once
+    `pathish_citations` has normalized its backslashes to slashes, e.g.
+    ``//server/share/...``), or Windows drive-absolute (``C:/...``).
 
     These name a location outside the project tree, not a project-relative
     citation. Rule B has no project-declared base to resolve such a path
@@ -242,9 +325,15 @@ def _looks_like_out_of_project(cleaned: str) -> bool:
     discards `base` and re-checks the literal absolute path against the real
     filesystem, which is not what this rule is verifying). See the module
     docstring for the known-uncovered case this leaves (e.g. an external
-    `~/.llm-wiki/...` design-doc store).
+    `~/.llm-wiki/...` design-doc store) and for `citations_exempt_external`,
+    the coverage field that now counts how many spans this exemption
+    swallowed instead of doing so silently.
     """
-    return cleaned.startswith("~/") or cleaned.startswith("/")
+    return (
+        cleaned.startswith("~/")
+        or cleaned.startswith("/")
+        or bool(WINDOWS_DRIVE_ABS_RE.match(cleaned))
+    )
 
 
 def strip_locator_suffix(cleaned: str) -> str:
@@ -269,7 +358,7 @@ def strip_locator_suffix(cleaned: str) -> str:
     return cleaned
 
 
-def pathish_citations(markdown_text: str) -> list[str]:
+def pathish_citations(markdown_text: str) -> tuple[list[str], int]:
     """Extract citation spans that look like file paths.
 
     Beyond the protocol prefixes, any slash-containing span with a file
@@ -279,13 +368,22 @@ def pathish_citations(markdown_text: str) -> list[str]:
     regex/glob patterns (`_looks_like_pattern`), bare-domain URLs
     (`_looks_like_bare_domain`), templated paths containing an
     angle-bracket placeholder (`_looks_like_placeholder`, e.g.
-    `goals/<id>/data-contract.md`), and home-relative or absolute paths
-    naming a location outside the project (`_looks_like_out_of_project`,
-    e.g. `~/.llm-wiki/x.md` or `/etc/hosts`). A line carrying (or
-    immediately following a line that carries) the `<!-- verify:ignore -->`
-    marker has all of its citations skipped — see module docstring.
+    `goals/<id>/data-contract.md`), and home-relative, POSIX-absolute, or
+    Windows-absolute paths naming a location outside the project
+    (`_looks_like_out_of_project`, e.g. `~/.llm-wiki/x.md`, `/etc/hosts`, or
+    `C:/Users/x`). A line carrying (or immediately following a line that
+    carries) the `<!-- verify:ignore -->` marker has all of its citations
+    skipped — see module docstring.
+
+    Returns `(cited, exempt_external)`: `cited` is the list of spans to
+    existence-check, and `exempt_external` is a count of spans skipped
+    specifically by `_looks_like_out_of_project` (not any other exemption)
+    — the caller accumulates this into the `citations_exempt_external`
+    coverage field so that exemption is visible in coverage rather than
+    disappearing without a trace.
     """
     cited: list[str] = []
+    exempt_external = 0
     lines = markdown_text.splitlines()
     for i, line in enumerate(lines):
         if IGNORE_MARKER in line or (i > 0 and IGNORE_MARKER in lines[i - 1]):
@@ -303,6 +401,7 @@ def pathish_citations(markdown_text: str) -> list[str]:
             if _looks_like_placeholder(cleaned):
                 continue
             if _looks_like_out_of_project(cleaned):
+                exempt_external += 1
                 continue
             if cleaned.startswith(PATHISH_PREFIXES):
                 cited.append(cleaned)
@@ -311,7 +410,7 @@ def pathish_citations(markdown_text: str) -> list[str]:
                 tail = cleaned.rsplit("/", 1)[-1]
                 if Path(tail).suffix or cleaned.endswith("/") or ".." in cleaned:
                     cited.append(cleaned)
-    return cited
+    return cited, exempt_external
 
 
 def submodule_roots(project: Path) -> list[Path]:
@@ -328,6 +427,15 @@ def submodule_roots(project: Path) -> list[Path]:
     ones (e.g. `path = kernels/openclaw`) — a submodule need not be
     checked out directly under the project root. Projects without a
     .gitmodules file get an empty list and behavior is unchanged.
+
+    A `path =` value is *containment-checked* before being accepted: if it
+    (after normalizing) does not resolve inside `project`, it is dropped
+    rather than followed. `.gitmodules` is ordinary tracked text a review
+    (or an adversarial one) could contain a `path = ../outside` entry, and
+    without this check a sibling directory outside the project — reachable
+    on the host filesystem but not part of it — would become a citation
+    resolution base, letting an otherwise-dangling citation resolve against
+    something outside the project (TH-0008 REWORK: `submodule_parent_escape`).
     """
     gitmodules = project / ".gitmodules"
     if not gitmodules.is_file():
@@ -342,13 +450,82 @@ def submodule_roots(project: Path) -> list[Path]:
         if not rel:
             continue
         candidate = project / rel
+        normalized = Path(os.path.normpath(str(candidate)))
+        if not is_under(normalized, project):
+            continue
         if candidate.is_dir():
             roots.append(candidate)
     return roots
 
 
+def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None:
+    """Git-tracked-file index for `build_suffix_index`, or `None` if
+    `project` is not itself a git working-tree root (or `git` is
+    unavailable).
+
+    Only engages when `project` *is* the git top level — not merely inside
+    one — so a scratch directory nested under some ancestor repository
+    (e.g. a test fixture created under this repo's own working tree without
+    being `git add`ed) correctly falls back to the walk-based index instead
+    of silently seeing zero tracked files and treating every suffix lookup
+    as absent.
+
+    Uses `git ls-files --recurse-submodules`, which lists tracked files in
+    `project` and inside every nested submodule (any depth) without ever
+    walking into gitignored output (`node_modules/`, `dist/`, `build/`
+    artifacts, `.venv/`, ...) — so the resulting uniqueness universe is the
+    project's real tracked-source surface, not an approximation of it via a
+    hardcoded noise-directory denylist (see module docstring: "unique"
+    means unique among git-tracked files, not literally the whole tree).
+    """
+    try:
+        toplevel = subprocess.run(
+            ["git", "-C", str(project), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if toplevel.returncode != 0:
+        return None
+    top = toplevel.stdout.strip()
+    if not top:
+        return None
+    try:
+        if Path(top).resolve() != project.resolve():
+            return None
+    except OSError:
+        return None
+
+    try:
+        listed = subprocess.run(
+            ["git", "-C", str(project), "ls-files", "-z", "--recurse-submodules"],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if listed.returncode != 0:
+        return None
+
+    index: dict[str, list[tuple[str, ...]]] = {}
+    for raw in listed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            rel = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        parts = tuple(p for p in rel.split("/") if p)
+        if not parts:
+            continue
+        index.setdefault(parts[-1], []).append(parts)
+    return index
+
+
 def build_suffix_index(project: Path) -> dict[str, list[tuple[str, ...]]]:
-    """Index every real file under `project` by basename, once per run.
+    """Index files under `project` by basename, once per run.
 
     Backs the Rule B suffix-unique fallback (`suffix_unique_match`): after a
     citation fails to resolve against every explicit base (project root,
@@ -358,17 +535,24 @@ def build_suffix_index(project: Path) -> dict[str, list[tuple[str, ...]]]:
     than walking the tree per citation) keeps that fallback from turning an
     O(citations) check into an O(citations * tree size) one.
 
-    Noise directories (`NOISE_DIR_NAMES`: `.git`, `node_modules`, build
-    output, venvs, ...) are *pruned during the walk* rather than filtered
-    out afterwards — `os.walk` with in-place `dirnames` pruning, not
-    `Path.rglob("*")` — since a project with vendored dependencies
-    (`node_modules`, `.venv`, ...) can have orders of magnitude more files
-    inside those directories than in the whole rest of the tree; walking
-    into them just to discard every result made this index the dominant
-    cost of a `verify_protocol.py` run. Each entry maps a basename to the
-    list of path-segment tuples (relative to `project`) of every real file
-    with that basename anywhere in the (pruned) tree.
+    Primary source is `git ls-files --recurse-submodules` (`_git_tracked_index`),
+    used whenever `project` is itself a git working-tree root. Falls back to
+    walking the filesystem directly — `os.walk` with in-place `dirnames`
+    pruning of `NOISE_DIR_NAMES` (`.git`, `node_modules`, build output,
+    venvs, ...), not `Path.rglob("*")`, since a project with vendored
+    dependencies can have orders of magnitude more files inside those
+    directories than in the rest of the tree — when `project` is not a git
+    working-tree root or `git` is unavailable. Each entry maps a basename to
+    the list of path-segment tuples (relative to `project`) of every
+    indexed file with that basename. Note that an indexed entry is not, by
+    itself, proof the file still exists: `suffix_unique_match` re-verifies
+    the specific matched path against the real filesystem before accepting
+    it (see its docstring).
     """
+    tracked = _git_tracked_index(project)
+    if tracked is not None:
+        return tracked
+
     index: dict[str, list[tuple[str, ...]]] = {}
     for dirpath, dirnames, filenames in os.walk(project):
         dirnames[:] = [d for d in dirnames if d not in NOISE_DIR_NAMES]
@@ -380,14 +564,31 @@ def build_suffix_index(project: Path) -> dict[str, list[tuple[str, ...]]]:
     return index
 
 
-def suffix_unique_match(cleaned: str, index: dict[str, list[tuple[str, ...]]]) -> bool:
-    """True if `cleaned` matches exactly one real file as a path *suffix*.
+def _exists_as(path: Path, want_dir: bool) -> bool:
+    """Existence check honoring trailing-slash directory semantics.
+
+    A citation ending in `/` names a directory: it must resolve to an
+    actual directory (`is_dir()`), not merely to any filesystem entry of
+    the same name. Without this, `pkg/real.md/` would resolve against the
+    *file* `pkg/real.md` via plain `exists()` (TH-0008 REWORK:
+    `trailing_slash_file`).
+    """
+    if want_dir:
+        return path.is_dir()
+    return path.exists()
+
+
+def suffix_unique_match(
+    cleaned: str, index: dict[str, list[tuple[str, ...]]], project: Path
+) -> bool:
+    """True if `cleaned` matches exactly one indexed file as a path
+    *suffix*, and that specific file still actually exists.
 
     Last-resort Rule B fallback (see module docstring) for a citation that
     is correct but written relative to none of the explicit bases — e.g.
     `harnessloop-setup/SKILL.md` for a file that actually lives at
     `plugins/harnessloop/skills/harnessloop-setup/SKILL.md`. Deliberately
-    conservative in three ways, each guarding a specific false-negative
+    conservative in four ways, each guarding a specific false-negative
     risk:
 
     - Comparison is by path *segment*, not raw string suffix — `os.html`
@@ -397,17 +598,60 @@ def suffix_unique_match(cleaned: str, index: dict[str, list[tuple[str, ...]]]) -
       `verify_protocol.py`) is the shape most likely to be a typo and least
       likely to disambiguate anything, so it never qualifies here; it is
       still checked (and can still fail) against the explicit bases above.
-    - The match must be *unique* across the whole indexed tree — 0 hits is
-      still dangling (no such file), and >=2 hits is also still dangling
-      (an ambiguous suffix is not a resolved citation; picking one of
-      several candidates would silently paper over which file was meant).
+    - The match must be *unique* across the index — 0 hits is still
+      dangling (no such file), and >=2 hits is also still dangling (an
+      ambiguous suffix is not a resolved citation; picking one of several
+      candidates would silently paper over which file was meant).
+    - The unique match's specific path is re-checked against the real
+      filesystem before being accepted — `is_dir()` if `cleaned` ends in
+      `/`, otherwise `exists()` (`_exists_as`) — rather than trusted purely
+      because the index once recorded it. The index can otherwise be
+      stale (a file the index recorded can be deleted between
+      `build_suffix_index` and this call — TH-0008 REWORK:
+      `stale_index_after_delete`) or, when it was built by walking the
+      filesystem, can contain a broken symlink that `os.walk` lists in
+      `filenames` without ever following it (TH-0008 REWORK:
+      `broken_symlink`); either way, treating the indexed entry as
+      sufficient proof of existence would accept a citation to something
+      that, right now, does not resolve to a real file.
     """
     parts = tuple(p for p in cleaned.split("/") if p)
     if len(parts) < 2:
         return False
     candidates = index.get(parts[-1], [])
     matches = [c for c in candidates if len(c) >= len(parts) and c[-len(parts) :] == parts]
-    return len(matches) == 1
+    if len(matches) != 1:
+        return False
+    match_path = project.joinpath(*matches[0])
+    return _exists_as(match_path, cleaned.endswith("/"))
+
+
+def _resolve_in_project(base: Path, cited: str, project: Path) -> Path | None:
+    """Join `base` and `cited`, normalize, and return the result only if it
+    stays within `project` — otherwise `None`.
+
+    Guards against a citation containing `../` segments walking the join
+    outside the project tree, where `Path.exists()` would silently consult
+    the real host filesystem for an unrelated path that happens to share a
+    name with something the review meant to cite (TH-0008 REWORK:
+    `submodule_parent_escape` — the same containment discipline
+    `submodule_roots` applies to `.gitmodules` entries, applied here to
+    every citation resolution).
+    """
+    candidate = Path(os.path.normpath(str(base / cited)))
+    if not is_under(candidate, project):
+        return None
+    return candidate
+
+
+def _any_base_resolves(cited: str, bases: list[Path], project: Path, want_dir: bool) -> bool:
+    """True if `cited` resolves (containment-checked, directory-semantics-
+    aware) against any of `bases`."""
+    for base in bases:
+        resolved = _resolve_in_project(base, cited, project)
+        if resolved is not None and _exists_as(resolved, want_dir):
+            return True
+    return False
 
 
 def verify_round(
@@ -485,17 +729,19 @@ def verify_round(
     if reviews_dir.is_dir():
         for review in sorted(reviews_dir.rglob("*.md")):
             coverage["rule_b_files"] += 1
-            for cited in pathish_citations(review.read_text(encoding="utf-8")):
+            cited_list, exempt_external = pathish_citations(review.read_text(encoding="utf-8"))
+            coverage["citations_exempt_external"] += exempt_external
+            for cited in cited_list:
                 coverage["citations_checked"] += 1
-                resolved = any((base / cited).exists() for base in citation_bases)
+                want_dir = cited.endswith("/")
+                resolved = _any_base_resolves(cited, citation_bases, project, want_dir)
+                stripped = cited
                 if not resolved:
                     stripped = strip_locator_suffix(cited)
                     if stripped != cited:
-                        resolved = any((base / stripped).exists() for base in citation_bases)
-                    else:
-                        stripped = cited
+                        resolved = _any_base_resolves(stripped, citation_bases, project, want_dir)
                 if not resolved:
-                    resolved = suffix_unique_match(stripped, suffix_index)
+                    resolved = suffix_unique_match(stripped, suffix_index, project)
                 if not resolved:
                     violations.append(
                         {
@@ -546,6 +792,7 @@ def _empty_coverage() -> dict:
         "rule_a_files": 0,
         "rule_b_files": 0,
         "citations_checked": 0,
+        "citations_exempt_external": 0,
     }
 
 
@@ -581,11 +828,17 @@ def main() -> int:
             "round directories, the project's own .harnessloop/ directory (for "
             "citations using a PATHISH_PREFIXES prefix verbatim, e.g. "
             "setup/data-sources.md), and the root of every git submodule (any depth) "
-            "declared in the project's .gitmodules. A trailing :<line>, :<start>-<end>, "
-            "or ::<anchor> locator is stripped before checking. If still unresolved, a "
-            "citation with >=2 path segments that matches exactly one real file as a "
-            "path suffix anywhere in the project is also accepted. Home-relative (~/...) "
-            "and filesystem-absolute (/...) citations are exempt (out of project scope)."
+            "declared in the project's .gitmodules (containment-checked: a path or "
+            ".gitmodules entry that would resolve outside the project is never treated "
+            "as resolved). A trailing :<line>, :<start>-<end>, or ::<anchor> locator is "
+            "stripped before checking. If still unresolved, a citation with >=2 path "
+            "segments that matches exactly one file in the project's git-tracked index "
+            "(or, outside a git working tree, the walked and noise-pruned tree) as a "
+            "path suffix, and whose matched path still actually exists, is also "
+            "accepted. A citation ending in / must resolve to a directory. Home-relative "
+            "(~/...), filesystem-absolute (/...), and Windows-absolute (C:/..., "
+            "\\\\server\\share...) citations are exempt (out of project scope; counted "
+            "in the citations_exempt_external coverage field)."
         )
     )
     parser.add_argument("--project", "-p", default=".", help="Target project directory. Defaults to current directory.")
@@ -635,6 +888,7 @@ def main() -> int:
             "coverage: "
             f"rounds={coverage['rounds']} rule_a_files={coverage['rule_a_files']} "
             f"rule_b_files={coverage['rule_b_files']} citations={coverage['citations_checked']} "
+            f"citations_exempt_external={coverage['citations_exempt_external']} "
             f"zero_inspected={coverage['rounds_zero_inspected']}"
         )
     return 1 if violations else 0

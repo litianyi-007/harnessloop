@@ -873,44 +873,158 @@ def validate_protocol_gates() -> None:
         "strip_locator_suffix leaves a locator-free path unchanged",
     )
 
-    # -- suffix_unique_match: unit teeth (segment comparison, >=2 segments, uniqueness) --
-    unique_index = {
-        "SKILL.md": [("plugins", "harnessloop", "skills", "harnessloop-setup", "SKILL.md")],
-        "macos.html": [("app", "docs", "macos.html")],
-        "setup.md": [("docs", "guide", "setup.md"), ("other", "guide", "setup.md")],
-    }
-    check(
-        verify_protocol.suffix_unique_match("harnessloop-setup/SKILL.md", unique_index) is True,
-        "suffix_unique_match accepts a unique multi-segment suffix hit (TH-0008 original case)",
-    )
-    check(
-        verify_protocol.suffix_unique_match("SKILL.md", unique_index) is False,
-        "suffix_unique_match rejects a single (bare) segment even when the basename is indexed (false-negative guard: typo-prone, no context)",
-    )
-    check(
-        verify_protocol.suffix_unique_match("harnessloop-setup/SKIL.md", unique_index) is False,
-        "suffix_unique_match rejects a typo'd basename with zero index hits (false-negative guard)",
-    )
-    check(
-        verify_protocol.suffix_unique_match("component/os.html", unique_index) is False,
-        "suffix_unique_match does not let `os.html` match `.../macos.html` (segment comparison, not string endswith)",
-    )
-    check(
-        verify_protocol.suffix_unique_match("guide/setup.md", unique_index) is False,
-        "suffix_unique_match rejects an ambiguous suffix matching >=2 real files (false-negative guard: no false exemption from ambiguity)",
-    )
+    # -- suffix_unique_match: unit teeth (segment comparison, >=2 segments, uniqueness,
+    # and TH-0008 REWORK: match-time re-verification + trailing-slash directory semantics) --
+    # Real files on disk this time (not a hand-built fake index) -- suffix_unique_match
+    # now re-checks the specific matched path against the filesystem, so a fixture index
+    # entry that names nothing real would silently make every "must resolve" assertion
+    # below meaningless.
+    suffix_root = REPO_ROOT / ".tmp" / f"verify-fixture-suffixindex-{uuid.uuid4().hex}"
+    try:
+        (suffix_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup").mkdir(parents=True)
+        (suffix_root / "plugins" / "harnessloop" / "skills" / "harnessloop-setup" / "SKILL.md").write_text(
+            "# skill\n", encoding="utf-8"
+        )
+        (suffix_root / "app" / "docs").mkdir(parents=True)
+        (suffix_root / "app" / "docs" / "macos.html").write_text("<html></html>\n", encoding="utf-8")
+        (suffix_root / "docs" / "guide").mkdir(parents=True)
+        (suffix_root / "docs" / "guide" / "setup.md").write_text("# setup\n", encoding="utf-8")
+        (suffix_root / "other" / "guide").mkdir(parents=True)
+        (suffix_root / "other" / "guide" / "setup.md").write_text("# setup\n", encoding="utf-8")
+        (suffix_root / "deep" / "pkg").mkdir(parents=True)
+        (suffix_root / "deep" / "pkg" / "real.md").write_text("real\n", encoding="utf-8")
 
-    # -- _looks_like_out_of_project / pathish_citations: ~/ and absolute-path exemption --
+        unique_index = verify_protocol.build_suffix_index(suffix_root)
+        check(
+            verify_protocol.suffix_unique_match("harnessloop-setup/SKILL.md", unique_index, suffix_root) is True,
+            "suffix_unique_match accepts a unique multi-segment suffix hit (TH-0008 original case)",
+        )
+        check(
+            verify_protocol.suffix_unique_match("SKILL.md", unique_index, suffix_root) is False,
+            "suffix_unique_match rejects a single (bare) segment even when the basename is indexed (false-negative guard: typo-prone, no context)",
+        )
+        check(
+            verify_protocol.suffix_unique_match("harnessloop-setup/SKIL.md", unique_index, suffix_root) is False,
+            "suffix_unique_match rejects a typo'd basename with zero index hits (false-negative guard)",
+        )
+        check(
+            verify_protocol.suffix_unique_match("component/os.html", unique_index, suffix_root) is False,
+            "suffix_unique_match does not let `os.html` match `.../macos.html` (segment comparison, not string endswith)",
+        )
+        check(
+            verify_protocol.suffix_unique_match("guide/setup.md", unique_index, suffix_root) is False,
+            "suffix_unique_match rejects an ambiguous suffix matching >=2 real files (false-negative guard: no false exemption from ambiguity)",
+        )
+
+        # TH-0008 REWORK counterexample 1/5: trailing_slash_file. A citation ending in
+        # `/` names a directory; `pkg/real.md/` must not resolve against the *file*
+        # `pkg/real.md` merely because the trailing slash was discarded by segment-splitting.
+        # codex T-062 repro: dangling_count=0 pre-fix; must be >=1 (i.e. no match) post-fix.
+        check(
+            verify_protocol.suffix_unique_match("pkg/real.md/", unique_index, suffix_root) is False,
+            "suffix_unique_match honors trailing-slash directory semantics: a file must not "
+            "satisfy a directory-shaped citation (TH-0008 REWORK: trailing_slash_file, "
+            "codex T-062)",
+        )
+        # Mutation check: with the trailing-slash guard removed (i.e. calling
+        # `_exists_as` unconditionally with want_dir=False, as the pre-REWORK code did),
+        # this same citation *does* resolve -- confirming the assertion above has teeth.
+        check(
+            verify_protocol._exists_as(suffix_root / "deep" / "pkg" / "real.md", False) is True,
+            "mutation control: without directory-semantics enforcement the same path would "
+            "wrongly resolve (proves the guard above is load-bearing, not vacuous)",
+        )
+
+        # TH-0008 REWORK counterexample 2/5: stale_index_after_delete. Build the index,
+        # delete the file it recorded, then confirm suffix_unique_match no longer trusts
+        # the (now stale) index entry. codex T-062 repro: match_after_delete=True,
+        # target_exists=False pre-fix; must be False post-fix.
+        gone = suffix_root / "deep" / "pkg" / "gone.md"
+        gone.write_text("will be deleted\n", encoding="utf-8")
+        stale_index = verify_protocol.build_suffix_index(suffix_root)
+        check(
+            verify_protocol.suffix_unique_match("pkg/gone.md", stale_index, suffix_root) is True,
+            "sanity: suffix_unique_match matches pkg/gone.md while it still exists",
+        )
+        gone.unlink()
+        check(
+            verify_protocol.suffix_unique_match("pkg/gone.md", stale_index, suffix_root) is False,
+            "suffix_unique_match re-verifies existence at match time and rejects a stale "
+            "index entry for a since-deleted file (TH-0008 REWORK: stale_index_after_delete, "
+            "codex T-062)",
+        )
+        # Mutation check: the index itself still (wrongly, if untrusted) records the
+        # deleted file as if it were real -- proving the re-verification, not index
+        # rebuilding, is what makes the assertion above pass.
+        check(
+            ("pkg", "gone.md")[-1] in stale_index and any(
+                c[-2:] == ("pkg", "gone.md") for c in stale_index.get("gone.md", [])
+            ),
+            "mutation control: the stale index still lists the deleted file (proves "
+            "suffix_unique_match's own re-check, not a rebuilt index, catches the staleness)",
+        )
+
+        # TH-0008 REWORK counterexample 3/5: broken_symlink. os.walk() lists a symlink in
+        # `filenames` regardless of whether its target exists; without a match-time
+        # existence check a broken symlink is indexed exactly like a real file. codex
+        # T-062 repro: dangling_count=0 pre-fix; must be >=1 post-fix. This exercises the
+        # walk-based fallback specifically, so it is built and indexed on a non-git
+        # directory (a nested subdirectory of this fixture, still not its own git
+        # toplevel, so build_suffix_index falls back to the walk).
+        try:
+            (suffix_root / "deep" / "pkg" / "broken.md").symlink_to("missing-target.md")
+            symlinks_supported = True
+        except (OSError, NotImplementedError):
+            symlinks_supported = False
+        if symlinks_supported:
+            symlink_index = verify_protocol.build_suffix_index(suffix_root)
+            check(
+                verify_protocol.suffix_unique_match("pkg/broken.md", symlink_index, suffix_root) is False,
+                "suffix_unique_match re-verifies existence at match time and rejects a "
+                "broken symlink that os.walk indexed without following "
+                "(TH-0008 REWORK: broken_symlink, codex T-062)",
+            )
+            # Mutation check: the symlink is genuinely indexed (walk-based index has an
+            # entry for it) -- proving the rejection above comes from the match-time
+            # existence re-check, not from the symlink being absent from the index.
+            check(
+                any(c[-2:] == ("pkg", "broken.md") for c in symlink_index.get("broken.md", [])),
+                "mutation control: os.walk indexes the broken symlink like a real file "
+                "(proves the rejection above is the match-time re-check doing the work)",
+            )
+        else:
+            print("  (skipped: symlinks unsupported on this filesystem -- broken_symlink counterexample)")
+    finally:
+        shutil.rmtree(suffix_root, ignore_errors=True)
+
+    # -- _looks_like_out_of_project / pathish_citations: ~/, POSIX-absolute, and
+    # Windows-absolute exemption, now counted via citations_exempt_external --
     home_and_abs_text = (
         "External design wiki, home-relative, out of project scope:\n"
         "- `~/.llm-wiki/agent-app-design/kernel/kernel-ecosystem-facts.md`\n"
         "\n"
         "Filesystem-absolute, out of project scope:\n"
         "- `/etc/hosts`\n"
+        "\n"
+        "Windows drive-absolute, out of project scope:\n"
+        "- `C:/Users/x/file.py`\n"
+        "\n"
+        "Windows drive-absolute (backslash form before normalization), out of project scope:\n"
+        "- `C:\\Users\\x\\other.py`\n"
+        "\n"
+        "UNC path, out of project scope:\n"
+        "- `\\\\server\\share\\doc.md`\n"
+    )
+    cited_home_abs, exempt_external_count = verify_protocol.pathish_citations(home_and_abs_text)
+    check(
+        cited_home_abs == [],
+        "pathish_citations extracts none of ~/ home-relative, /-absolute, C:/-absolute, "
+        "or UNC spans as a citation",
     )
     check(
-        verify_protocol.pathish_citations(home_and_abs_text) == [],
-        "pathish_citations extracts neither a ~/ home-relative nor a /-absolute span as a citation",
+        exempt_external_count == 5,
+        f"pathish_citations counts every out-of-project span in citations_exempt_external "
+        f"(got {exempt_external_count}, expected 5)",
     )
 
     # -- end-to-end round fixture: locators, nested submodule, suffix fallback, ~//abs exemption --
@@ -1021,6 +1135,153 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(th0008_root, ignore_errors=True)
+
+    # TH-0008 REWORK counterexample 4/5: noise_pruned_ambiguity. Two real files
+    # share the cited suffix's last two segments -- one under an ordinary source
+    # directory (`src/`), one under a directory that happens to share a name with a
+    # NOISE_DIR_NAMES entry (`build/`) but is genuinely tracked source here. The
+    # pre-REWORK walk-based index pruned `build/` unconditionally, making
+    # `src/pkg/real.md` look like the *only* candidate -- a false uniqueness born
+    # from a hardcoded denylist with no protocol basis. codex T-062 repro:
+    # dangling_count=0 pre-fix; must be >=1 post-fix (git-tracked index sees both).
+    noise_root = REPO_ROOT / ".tmp" / f"verify-fixture-noise-{uuid.uuid4().hex}"
+    round_dir5 = noise_root / ".harnessloop" / "goals" / "20260106-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir5 / "evidence").mkdir(parents=True)
+        (round_dir5 / "reviews").mkdir(parents=True)
+        (round_dir5 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (noise_root / "src" / "pkg").mkdir(parents=True)
+        (noise_root / "src" / "pkg" / "real.md").write_text("src real\n", encoding="utf-8")
+        (noise_root / "build" / "pkg").mkdir(parents=True)
+        (noise_root / "build" / "pkg" / "real.md").write_text("build real\n", encoding="utf-8")
+
+        (round_dir5 / "reviews" / "noise.md").write_text(
+            "Ambiguous suffix -- two real, git-tracked files share this suffix "
+            "(src/pkg/real.md and build/pkg/real.md), must NOT resolve:\n"
+            "- `pkg/real.md`\n",
+            encoding="utf-8",
+        )
+
+        # Make this fixture its own git working-tree root so build_suffix_index takes
+        # the git-tracked-file path instead of the walk-based (NOISE_DIR_NAMES-pruning)
+        # fallback -- see build_suffix_index / _git_tracked_index docstrings. `git add`
+        # (not `commit`) is enough for `git ls-files` and needs no configured identity.
+        git_available = shutil.which("git") is not None
+        if git_available:
+            init = subprocess.run(["git", "init", "-q"], cwd=noise_root, capture_output=True)
+            add = subprocess.run(["git", "add", "-A"], cwd=noise_root, capture_output=True)
+            git_available = init.returncode == 0 and add.returncode == 0
+
+        if git_available:
+            violations, _coverage = verify_protocol.verify_project(noise_root)
+            check(
+                any("pkg/real.md" in v["detail"] for v in violations),
+                "verify (git-tracked index) reports the ambiguous `pkg/real.md` suffix as "
+                "dangling instead of resolving it via a noise-pruning false-uniqueness "
+                "(TH-0008 REWORK: noise_pruned_ambiguity, codex T-062)",
+            )
+
+            # Mutation control: reproduce the pre-REWORK walk-based index (NOISE_DIR_NAMES
+            # pruning, no git) directly and confirm it *would* have seen only one
+            # candidate -- proving the git-tracked-index switch, not something else, is
+            # what makes the assertion above hold.
+            pruned_index: dict[str, list[tuple]] = {}
+            for dirpath, dirnames, filenames in os.walk(noise_root):
+                dirnames[:] = [d for d in dirnames if d not in verify_protocol.NOISE_DIR_NAMES]
+                rel_dir = Path(dirpath).relative_to(noise_root)
+                dir_parts = () if str(rel_dir) == "." else rel_dir.parts
+                for filename in filenames:
+                    pruned_index.setdefault(filename, []).append(dir_parts + (filename,))
+            pruned_matches = [
+                c for c in pruned_index.get("real.md", [])
+                if len(c) >= 2 and c[-2:] == ("pkg", "real.md")
+            ]
+            check(
+                len(pruned_matches) == 1,
+                "mutation control: the walk-based NOISE_DIR_NAMES-pruned index sees only "
+                "one `pkg/real.md` candidate (proves the git-tracked-index switch, not "
+                "existence re-checking, is what surfaces this ambiguity)",
+            )
+        else:
+            print("  (skipped: git unavailable -- noise_pruned_ambiguity counterexample)")
+    finally:
+        shutil.rmtree(noise_root, ignore_errors=True)
+
+    # TH-0008 REWORK counterexample 5/5: submodule_parent_escape. A `.gitmodules`
+    # `path =` entry pointing outside the project root (`../outside`) must not become
+    # a citation resolution base, even though the sibling directory genuinely exists
+    # on the host filesystem. codex T-062 repro: dangling_count=0 pre-fix (the escaped
+    # base let `pkg/ghost.py` resolve).
+    escape_root = REPO_ROOT / ".tmp" / f"verify-fixture-escape-{uuid.uuid4().hex}"
+    escape_project = escape_root / "project"
+    escape_outside = escape_root / "outside"
+    round_dir6 = escape_project / ".harnessloop" / "goals" / "20260107-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir6 / "evidence").mkdir(parents=True)
+        (round_dir6 / "reviews").mkdir(parents=True)
+        (round_dir6 / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (escape_outside / "pkg").mkdir(parents=True)
+        (escape_outside / "pkg" / "ghost.py").write_text("# outside the project\n", encoding="utf-8")
+
+        (escape_project / ".gitmodules").write_text(
+            '[submodule "escaped"]\n\tpath = ../outside\n\turl = https://example.invalid/escaped.git\n',
+            encoding="utf-8",
+        )
+
+        (round_dir6 / "reviews" / "escape.md").write_text(
+            "Citation that only exists via a .gitmodules path escaping the project root, "
+            "must NOT resolve:\n"
+            "- `pkg/ghost.py`\n"
+            "\n"
+            "Citation containing a literal `../` that would walk the *project root* base "
+            "itself outside the project tree, must also NOT resolve (this is the general "
+            "containment check in `_resolve_in_project`, independent of submodule_roots):\n"
+            "- `../outside/pkg/ghost.py`\n",
+            encoding="utf-8",
+        )
+
+        roots = verify_protocol.submodule_roots(escape_project)
+        check(
+            all(r.resolve() != escape_outside.resolve() for r in roots),
+            "submodule_roots rejects a .gitmodules `path =` entry that resolves outside "
+            "the project root (TH-0008 REWORK: submodule_parent_escape containment, "
+            "codex T-062)",
+        )
+
+        violations, _coverage = verify_protocol.verify_project(escape_project)
+        check(
+            any("pkg/ghost.py" in v["detail"] and "../outside" not in v["detail"] for v in violations),
+            "verify reports `pkg/ghost.py` as dangling instead of resolving it through an "
+            "escaped .gitmodules submodule base (TH-0008 REWORK: submodule_parent_escape, "
+            "codex T-062)",
+        )
+        check(
+            any("../outside/pkg/ghost.py" in v["detail"] for v in violations),
+            "verify reports a literal `../`-escaping citation as dangling instead of "
+            "resolving it against the project root's parent directory (TH-0008 REWORK: "
+            "general containment in _resolve_in_project, codex T-062)",
+        )
+
+        # Mutation control: without containment, the escaped path still genuinely
+        # holds pkg/ghost.py on disk -- proving the rejection above comes from the
+        # containment check, not from the file being absent.
+        check(
+            (escape_project / ".." / "outside" / "pkg" / "ghost.py").resolve().is_file(),
+            "mutation control: the escaped path still genuinely holds pkg/ghost.py on "
+            "disk (proves containment, not absence, is what the check above relies on)",
+        )
+    finally:
+        shutil.rmtree(escape_root, ignore_errors=True)
 
 
 def validate_round_cost_smoke() -> None:
