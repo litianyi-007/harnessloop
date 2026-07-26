@@ -21,6 +21,8 @@
 | Check | Result | Evidence path | Notes |
 | --- | --- | --- | --- |
 | Goal alignment | unknown |  |  |
+| Scope-lock post-hoc edit | unknown | `git log -p -- <round>/scope-lock.md` | If this round's scope-lock was edited after its evidence existed, decision.md must already record why |
+| Mechanical gate record | unknown | `<round>/decision.md` | Must carry the `Mechanical gate` line, and its coverage numbers must match an actual run |
 | Scope-lock compliance | unknown |  |  |
 | Data thresholds | unknown |  |  |
 | Verification thresholds | unknown |  |  |

@@ -46,6 +46,7 @@ Harnessloop status:
 - active goal:
 - active round:
 - current feedback:
+- verdict mix: <pass>/<pass-with-residual>/<fail>/<inconclusive> across this goal's decisions (drift signal only, not a control)
 - blocker type:
 - recovery eligible:
 - open handoffs:

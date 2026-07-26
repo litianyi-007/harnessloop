@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import tempfile
 import subprocess
 import sys
 import uuid
@@ -534,7 +536,7 @@ def top_level(rel: str) -> str:
 def validate_protocol_gates() -> None:
     print("[6/8] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
-    violations = verify_protocol.verify_project(mock_project)
+    violations, _coverage = verify_protocol.verify_project(mock_project)
     check(not violations, f"examples/mock-project passes verify ({len(violations)} violation(s))")
     for violation in violations:
         print(f"    {violation['kind']}: {violation['detail']}")
@@ -555,7 +557,7 @@ def validate_protocol_gates() -> None:
             "and source file `src/app/missing_module.py`\n",
             encoding="utf-8",
         )
-        violations = verify_protocol.verify_project(fixture_root)
+        violations, _coverage = verify_protocol.verify_project(fixture_root)
         kinds = {v["kind"] for v in violations}
         check("dangling-citation" in kinds, "verify catches dangling citations (negative fixture)")
         check("scope-lock-violation" in kinds, "verify catches out-of-scope writes (negative fixture)")
@@ -575,7 +577,7 @@ def validate_protocol_gates() -> None:
             encoding="utf-8",
         )
         (round_dir / "reviews" / "review.md").write_text("table-format scope lock round\n", encoding="utf-8")
-        violations = verify_protocol.verify_project(fixture_root)
+        violations, _coverage = verify_protocol.verify_project(fixture_root)
         kinds = {v["kind"] for v in violations}
         check(
             "unparseable-allowed-changes" not in kinds and "scope-lock-violation" not in kinds,
@@ -583,6 +585,127 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
+
+    # E2(a) positive-must-fail fixture: a round with NO scope-lock.md and NO
+    # evidence/ or reviews/ directories at all -- i.e., truly nothing on
+    # disk to inspect. Before this round's fix, the missing-scope-lock check
+    # was gated behind `if checked_files:`, so a round like this always
+    # exited clean regardless of whether it had a scope-lock (the m7 gap,
+    # harnessloop/adversarial-review-p0.md:101). This is the "unconditional"
+    # half of the fix: scope-lock existence is now checked for every round
+    # independent of whether it has artifacts, so this bare round must fail.
+    # This also closes the existing-fixture blind spot noted in E2's plan:
+    # every other fixture in this file pre-creates evidence/ and reviews/
+    # before writing a scope-lock, so none of them could ever have exercised
+    # this path.
+    empty_root = REPO_ROOT / ".tmp" / f"verify-fixture-empty-{uuid.uuid4().hex}"
+    empty_round_dir = empty_root / ".harnessloop" / "goals" / "20260104-001-fixture" / "rounds" / "0001"
+    try:
+        empty_round_dir.mkdir(parents=True)
+        violations, coverage = verify_protocol.verify_project(empty_root)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "missing-scope-lock" in kinds,
+            "verify catches a round with no scope-lock.md and no evidence/reviews at all (E2(a) unconditional check)",
+        )
+        check(
+            coverage.get("rounds") == 1 and coverage.get("rounds_zero_inspected") == 1,
+            f"coverage counts the empty round as rounds=1, rounds_zero_inspected=1 (got {coverage})",
+        )
+        check(
+            coverage.get("rule_a_files") == 0 and coverage.get("rule_b_files") == 0,
+            f"coverage attributes zero rule_a_files/rule_b_files to a round with no artifacts (got {coverage})",
+        )
+    finally:
+        shutil.rmtree(empty_root, ignore_errors=True)
+
+    # E4 teeth（双向 mutation）：Verdict/Residuals 同文件枚举矛盾必须两个方向
+    # 都翻转，且缺字段绝不违规（这是 14 个既有 round 零迁移的保证）。
+    e4_root = Path(tempfile.mkdtemp(prefix="harnessloop-e4-"))
+    e4_round = e4_root / ".harnessloop" / "goals" / "20260104-001-fixture" / "rounds" / "0001"
+    try:
+        e4_round.mkdir(parents=True)
+        (e4_round / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n| Path | Action | Limit |\n"
+            "| --- | --- | --- |\n| `.harnessloop/` | write | fixture |\n",
+            encoding="utf-8",
+        )
+        contradiction = (
+            "# Decision\n\n- Feedback: positive\n- Verdict: pass\n"
+            "- Residuals: L2 layer never ran in CI\n- Accepted: yes\n"
+        )
+        (e4_round / "decision.md").write_text(contradiction, encoding="utf-8")
+        violations, _ = verify_protocol.verify_project(e4_root)
+        check(
+            "verdict-residual-contradiction" in {v["kind"] for v in violations},
+            "verify catches `Verdict: pass` alongside a non-none `Residuals` (E4)",
+        )
+
+        (e4_round / "decision.md").write_text(
+            contradiction.replace("- Verdict: pass", "- Verdict: pass-with-residual"),
+            encoding="utf-8",
+        )
+        violations, _ = verify_protocol.verify_project(e4_root)
+        check(
+            "verdict-residual-contradiction" not in {v["kind"] for v in violations},
+            "`pass-with-residual` with the same residual text is accepted (E4 reverse mutation)",
+        )
+
+        (e4_round / "decision.md").write_text(
+            "# Decision\n\n- Feedback: positive\n- Accepted: yes\n", encoding="utf-8"
+        )
+        violations, _ = verify_protocol.verify_project(e4_root)
+        check(
+            "verdict-residual-contradiction" not in {v["kind"] for v in violations},
+            "a decision.md with neither field is not a violation (E4 zero-migration guarantee)",
+        )
+    finally:
+        shutil.rmtree(e4_root, ignore_errors=True)
+
+    # E5(a) 反僵化护栏：协议不得要求任何人「声明自己做过 teeth / 证伪」。
+    # 任何这类字段只能退化成一句自报套话——那是保证产生假绿的写法，正是本轮
+    # 裁定 teeth 只进插件 CI、不进协议正文的理由。这条断言让该裁定可被机械守住。
+    ossify_pat = re.compile(
+        r"(state|declare|record|assert|confirm)[^.\n]{0,60}"
+        r"(falsification|teeth|破坏性反证|证伪)[^.\n]{0,60}(was|were|has been|performed|done|executed)",
+        re.IGNORECASE,
+    )
+    ossify_hits = []
+    for scan_root in ((REPO_ROOT / "plugins" / "harnessloop" / "skills"), (REPO_ROOT / "scripts")):
+        if not scan_root.exists():
+            continue
+        for f in scan_root.rglob("*"):
+            if f.is_file() and f.suffix in {".md", ".py"} and f.name != "validate.py":
+                if ossify_pat.search(f.read_text(encoding="utf-8", errors="ignore")):
+                    ossify_hits.append(str(f.relative_to(REPO_ROOT)))
+    check(
+        not ossify_hits,
+        "no skill or script requires a round to *declare* that falsification/teeth "
+        f"was performed — such a field can only degrade into boilerplate (found: {ossify_hits})",
+    )
+
+    # E1<->E2 一致性（teeth #4）：SKILL.md 的 Mechanical Gate Boundary "IN" 列
+    # 逐字声称与 coverage 字段一一对应。若两边漂移，那份边界声明就在撒谎——
+    # 而它是一份没有机械牙的纪律文档，唯一可测的一点就是这个对应关系。
+    skill_md = (
+        REPO_ROOT / "plugins" / "harnessloop" / "skills" / "harnessloop-loop" / "SKILL.md"
+    )
+    if skill_md.exists():
+        skill_text = skill_md.read_text(encoding="utf-8")
+        boundary_start = skill_text.find("### Mechanical Gate Boundary")
+        check(
+            boundary_start != -1,
+            "harnessloop-loop/SKILL.md declares the Mechanical Gate Boundary section (E1)",
+        )
+        if boundary_start != -1:
+            boundary = skill_text[boundary_start : boundary_start + 4000]
+            _, sample_coverage = verify_protocol.verify_project(REPO_ROOT.parent)
+            missing = [f for f in sample_coverage if f"`{f}`" not in boundary]
+            check(
+                not missing,
+                "every coverage field is named in the SKILL.md IN column "
+                f"(missing: {missing})",
+            )
 
     # Rule B pathish false-positive fixtures (evolution issue TH-0006): a
     # real project run turned up six false-positive dangling-citation hits
@@ -636,7 +759,7 @@ def validate_protocol_gates() -> None:
             encoding="utf-8",
         )
 
-        violations = verify_protocol.verify_project(exempt_root)
+        violations, _coverage = verify_protocol.verify_project(exempt_root)
         details = " | ".join(v["detail"] for v in violations)
 
         check(
@@ -704,7 +827,7 @@ def validate_protocol_gates() -> None:
             encoding="utf-8",
         )
 
-        violations = verify_protocol.verify_project(harnessloop_base_root)
+        violations, _coverage = verify_protocol.verify_project(harnessloop_base_root)
         details = " | ".join(v["detail"] for v in violations)
 
         check(

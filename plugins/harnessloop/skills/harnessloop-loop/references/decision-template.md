@@ -4,9 +4,12 @@
 # Decision
 
 - Feedback: positive | negative | neutral | blocked
+- Verdict: pass | pass-with-residual | fail | inconclusive
+- Residuals: none | <one per line: what was claimed / which part is uncovered / where it is deferred>
 - Blocker type: none | runtime-recoverable | access-missing | write-safety-required | human-decision-required | contract-insufficient | external-system-unsafe | unknown
 - Recovery eligible: yes | no | unknown
 - Accepted: yes | no
+- Mechanical gate: <exit-code> / <the coverage line printed by verify_protocol.py, verbatim> / <when it was run>
 - Active goal:
 - Active round:
 - Decision maker:

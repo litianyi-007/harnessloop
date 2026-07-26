@@ -237,7 +237,7 @@ def submodule_roots(project: Path) -> list[Path]:
     return roots
 
 
-def verify_round(project: Path, round_dir: Path) -> list[dict]:
+def verify_round(project: Path, round_dir: Path) -> tuple[list[dict], dict]:
     violations: list[dict] = []
     goal_dir = round_dir.parent.parent
     bases = [project, goal_dir, round_dir]
@@ -256,46 +256,62 @@ def verify_round(project: Path, round_dir: Path) -> list[dict]:
         if path.is_file()
     ]
 
+    coverage = _empty_coverage()
+    coverage["rounds"] = 1
+    if not checked_files:
+        coverage["rounds_zero_inspected"] = 1
+
+    # E2(a): scope-lock existence and Allowed-Changes parseability are
+    # checked unconditionally for every round, independent of whether the
+    # round has any evidence/review files. Before this change both checks
+    # lived behind `if checked_files:`, so a round with nothing under
+    # evidence/ or reviews/ never had its scope-lock inspected at all (the
+    # historical "9 rounds zero-inspected, still exit 0" gap). Containment
+    # (below) still requires artifacts to check, so it stays guarded.
     scope_lock = round_dir / "scope-lock.md"
-    if checked_files:
-        if not scope_lock.exists():
+    spans: list[str] = []
+    if not scope_lock.exists():
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "missing-scope-lock",
+                "detail": f"{scope_lock} does not exist",
+            }
+        )
+    else:
+        spans = extract_allowed_spans(scope_lock.read_text(encoding="utf-8"))
+        if not spans:
             violations.append(
                 {
                     "round": str(round_dir),
-                    "kind": "missing-scope-lock",
-                    "detail": f"{scope_lock} does not exist but evidence/review files do",
+                    "kind": "unparseable-allowed-changes",
+                    "detail": f"no backtick path spans found under '## Allowed Changes' in {scope_lock}",
                 }
             )
-        else:
-            spans = extract_allowed_spans(scope_lock.read_text(encoding="utf-8"))
-            if not spans:
+
+    if checked_files and spans:
+        coverage["rule_a_files"] = len(checked_files)
+        for file_path in checked_files:
+            allowed = any(
+                is_under(file_path, base / span)
+                for base in bases
+                for span in spans
+            )
+            if not allowed:
                 violations.append(
                     {
                         "round": str(round_dir),
-                        "kind": "unparseable-allowed-changes",
-                        "detail": f"no backtick path spans found under '## Allowed Changes' in {scope_lock}",
+                        "kind": "scope-lock-violation",
+                        "detail": f"{file_path} is outside every allowed path in {scope_lock}",
                     }
                 )
-            else:
-                for file_path in checked_files:
-                    allowed = any(
-                        is_under(file_path, base / span)
-                        for base in bases
-                        for span in spans
-                    )
-                    if not allowed:
-                        violations.append(
-                            {
-                                "round": str(round_dir),
-                                "kind": "scope-lock-violation",
-                                "detail": f"{file_path} is outside every allowed path in {scope_lock}",
-                            }
-                        )
 
     reviews_dir = round_dir / "reviews"
     if reviews_dir.is_dir():
         for review in sorted(reviews_dir.rglob("*.md")):
+            coverage["rule_b_files"] += 1
             for cited in pathish_citations(review.read_text(encoding="utf-8")):
+                coverage["citations_checked"] += 1
                 if not any((base / cited).exists() for base in citation_bases):
                     violations.append(
                         {
@@ -305,18 +321,63 @@ def verify_round(project: Path, round_dir: Path) -> list[dict]:
                         }
                     )
 
-    return violations
+    # E4: same-file enum contradiction in decision.md. Deliberately the
+    # narrowest possible check — two enum lines in one file, compared after
+    # strip().lower(). No prose parsing, no path resolution, no cross-file
+    # join, no value normalization: those are exactly what produced six of
+    # this repo's ten evolution issues. Absent fields are never a violation,
+    # so existing rounds need no migration.
+    decision = round_dir / "decision.md"
+    if decision.exists():
+        verdict = residuals = None
+        for line in decision.read_text(encoding="utf-8", errors="ignore").splitlines():
+            stripped = line.strip()
+            if verdict is None and stripped.lower().startswith("- verdict:"):
+                verdict = stripped.split(":", 1)[1].strip().lower()
+            elif residuals is None and stripped.lower().startswith("- residuals:"):
+                residuals = stripped.split(":", 1)[1].strip().lower()
+        if verdict == "pass" and residuals not in (None, "", "none"):
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "verdict-residual-contradiction",
+                    "detail": (
+                        f"{decision} declares `Verdict: pass` while `Residuals` is "
+                        f"non-none — use `pass-with-residual` when part of the claim "
+                        f"is uncovered or deferred"
+                    ),
+                }
+            )
+
+    return violations, coverage
 
 
-def verify_project(project: Path) -> list[dict]:
+def _empty_coverage() -> dict:
+    """Zeroed coverage accumulator. Keys match the `### Mechanical Gate
+    Boundary` IN column in harnessloop-loop/SKILL.md one-to-one; a rename on
+    either side must update the other."""
+    return {
+        "rounds": 0,
+        "rounds_zero_inspected": 0,
+        "rule_a_files": 0,
+        "rule_b_files": 0,
+        "citations_checked": 0,
+    }
+
+
+def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
+    coverage = _empty_coverage()
     if not goals_dir.is_dir():
-        return []
+        return [], coverage
     violations: list[dict] = []
     for round_dir in sorted(goals_dir.glob("*/rounds/*")):
         if round_dir.is_dir():
-            violations.extend(verify_round(project, round_dir))
-    return violations
+            round_violations, round_coverage = verify_round(project, round_dir)
+            violations.extend(round_violations)
+            for key in coverage:
+                coverage[key] += round_coverage[key]
+    return violations, coverage
 
 
 def main() -> int:
@@ -345,17 +406,46 @@ def main() -> int:
         print(f"Project directory not found: {project}", file=sys.stderr)
         return 2
 
-    violations = verify_project(project)
+    violations, coverage = verify_project(project)
     if args.json:
-        print(json.dumps({"project": str(project), "violations": violations}, indent=2, ensure_ascii=False))
+        print(
+            json.dumps(
+                {"project": str(project), "violations": violations, "coverage": coverage},
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
     else:
         print(f"Harnessloop verify: {project}")
         if violations:
             for violation in violations:
                 print(f"  [{violation['kind']}] {violation['detail']}")
             print(f"{len(violations)} violation(s) found.")
+        elif coverage["rounds_zero_inspected"] > 0:
+            # E2(b): a clean exit is not a blanket "all clear" when some
+            # rounds had nothing under evidence/ or reviews/ to check in the
+            # first place. Print the qualified form instead of the
+            # unqualified banner below so a clean exit for those rounds
+            # cannot be misread as "checked and clean".
+            print(
+                "passed, but not a clean sweep: "
+                f"{coverage['rounds_zero_inspected']} of {coverage['rounds']} round(s) had "
+                "nothing under evidence/ or reviews/ to inspect — a clean exit for those "
+                'rounds means "nothing to check", not "checked and clean".'
+            )
         else:
             print("All mechanical protocol gates passed.")
+        # Unconditional coverage line (E2(b)): printed regardless of pass/fail
+        # so "was this gate actually run over anything" is always visible,
+        # not just inferable from exit code. Field names here are the short
+        # print-form of the `coverage` dict keys (see `_empty_coverage`);
+        # the --json output uses the full dict verbatim.
+        print(
+            "coverage: "
+            f"rounds={coverage['rounds']} rule_a_files={coverage['rule_a_files']} "
+            f"rule_b_files={coverage['rule_b_files']} citations={coverage['citations_checked']} "
+            f"zero_inspected={coverage['rounds_zero_inspected']}"
+        )
     return 1 if violations else 0
 
 

@@ -441,6 +441,26 @@ Do not delegate:
 
 Two gates operate at different layers, and both must pass before a round is accepted. `<skill-dir>/scripts/verify_protocol.py` is a mechanical gate: it enforces only machine-checkable rules (scope-lock containment, dangling evidence citations) and is run in Loop Continuation step 1. Adversarial review below is a separate model-judgment gate: it checks whether the evidence actually supports the claim. A mechanical pass is not a protocol pass — a round that exits `verify_protocol.py` clean still fails if adversarial review, thresholds, or feedback classification are not satisfied.
 
+### Mechanical Gate Boundary
+
+The mechanical gate's exit code decides less than it looks like it decides. What it currently checks (**IN** — field names below match `verify_protocol.py`'s `coverage` object, printed on every run and included under the `coverage` key of `--json` output, one-to-one):
+
+- `rounds` / `rounds_zero_inspected` — scope-lock existence (`missing-scope-lock`) and Allowed Changes parseability (`unparseable-allowed-changes`), checked unconditionally for every round regardless of whether that round has any evidence/review artifacts.
+- `rule_a_files` — whether files under a round's `evidence/` and `reviews/` fall inside a path the round's scope-lock allows (`scope-lock-violation`), checked only when the round has at least one such file and its scope-lock parses.
+- `rule_b_files` / `citations_checked` — whether backtick path-ish references inside that round's `reviews/*.md` resolve to files that exist (`dangling-citation`).
+
+What it does **not** decide (**OUT** — currently not decided by the mechanical gate, not "unmechanizable forever"):
+
+- Whether the cited evidence actually supports the round's conclusion.
+- Whether a stated threshold was met.
+- Whether a test genuinely asserts anything, versus asserting nothing and passing vacuously.
+- Whether `pass` / `positive` wording is honest about what happened.
+- Whether a business-code change stayed inside scope.
+
+Coverage fact: Rule A only inspects `evidence/` and `reviews/`; Rule B only inspects that round's `reviews/*.md`. Neither rule reads the business-code change itself, and neither reads `.harnessloop/state/`. **An exit 0 must not be read as "every artifact this round produced was inspected"** — only that the files under those two directories were. A round with nothing under `evidence/` or `reviews/` still exits 0 and is counted in `rounds_zero_inspected`, which means "nothing to check", not "checked and clean".
+
+Discipline: when the mechanical gate fails, do not make it pass by editing the checked artifact unless that artifact is genuinely wrong — the correct fix is `$harnessloop-issue` plus an explicit, recorded exemption. If a round's `scope-lock.md` is edited after that round's `evidence/` already exists, `decision.md` must record one line explaining why.
+
 Do not accept a round with a generic engineering review alone.
 
 Assign adversarial review that checks the work against:
@@ -492,7 +512,7 @@ The eval matrix is not a runtime gate by itself. It informs setup hardening, tem
 
 After each completed round:
 
-1. Run the mechanical protocol gate: `python <skill-dir>/scripts/verify_protocol.py --project <target-project>`. If it exits non-zero, this round must not be marked `positive`; record the violation in `decision.md` and classify the blocker as `contract-insufficient` until it is repaired. A clean exit here does not by itself accept the round — steps 2-8 below still apply.
+1. Run the mechanical protocol gate: `python <skill-dir>/scripts/verify_protocol.py --project <target-project>`. If it exits non-zero, this round must not be marked `positive`; record the violation in `decision.md` and classify the blocker as `contract-insufficient` until it is repaired. A clean exit here does not by itself accept the round — steps 2-8 below still apply. Record the gate's exit code and its `coverage:` line verbatim in `decision.md`'s `Mechanical gate` field. A round whose `decision.md` lacks that line has not completed step 1 — the record is what makes "was the gate actually run, and how much did it inspect" answerable later without rerunning it.
 2. Update `round-summary.md`, including its `## Cost` section: in a `claude-code` environment (see `state/environment.md`), run `python <skill-dir>/scripts/round_cost.py --project <target-project>` and paste its markdown output. The script settles token usage since the last settlement from local session transcripts; never read transcript files into the session. In any other environment, record cost as `unavailable: no local transcript source` — `round_cost.py` only reads Claude Code session transcripts. If the script is run and exits non-zero, record cost as unavailable with the reason.
 3. Write `decision.md` with positive, negative, neutral, or blocked.
 4. Archive closed handoffs.
