@@ -1,0 +1,56 @@
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_2577140d599899 4
+plugins/harnessloop/skills/harnessloop-loop/references/reference-roots-template.json
+  s_c587ecf7bbc3e2::t_ab05a2b6262b13 1-12
+.claude-plugin/marketplace.json
+  s_c587ecf7bbc3e2::t_beae3b77b79fc4 13
+package.json
+  s_c587ecf7bbc3e2::t_4694073ce1d9e5 3
+plugins/harnessloop/skills/harnessloop-loop/references/reference-roots-local-template.json
+  s_c587ecf7bbc3e2::t_ce4e50ef97cd8d 1-6
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_c587ecf7bbc3e2::t_a39f5966e59464 2348-2351
+  s_c587ecf7bbc3e2::t_bc6602c91611fe 2397,2401-2409
+  s_c587ecf7bbc3e2::t_8be026dc18f9fe 2061-2085
+  s_c587ecf7bbc3e2::t_b4eb4e017cdedf 2453-2471
+  s_c587ecf7bbc3e2::t_2b24f30b3f0397 2526-2533,2535-2547
+  s_c587ecf7bbc3e2::t_a46552c7446012 663-672
+  s_c587ecf7bbc3e2::t_4394dccbb2f941 736-1278
+  s_c587ecf7bbc3e2::t_f4eb292e085bfe 480-505
+  s_c587ecf7bbc3e2::t_b59f18c3204f5f 385-427
+  s_c587ecf7bbc3e2::t_dbe7310a869c1c 698-714
+  s_c587ecf7bbc3e2::t_a200ace642f67a 2307-2322,2356-2377
+  s_c587ecf7bbc3e2::t_4517d1a3bec05d 1987-1990
+  s_c587ecf7bbc3e2::t_01ac09065a5040 2136-2194,2221-2230
+  s_c587ecf7bbc3e2::t_32c5ce41c0906e 2378
+plugins/harnessloop/skills/harnessloop-loop/references/local-gitignore-template.txt
+  s_c587ecf7bbc3e2::t_ae0394e71577ea 3-4
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_ada8bf7a295cd8 468-475
+  s_c587ecf7bbc3e2::t_1476e989ace8bf 481-499
+  s_c587ecf7bbc3e2::t_0de9b54aa2733e 456-457
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_0d0314aa8f3626 1292-1310
+  s_c587ecf7bbc3e2::t_edee1067b42108 624-634,640
+  s_c587ecf7bbc3e2::t_0aebfb19070186 1350
+  s_c587ecf7bbc3e2::t_4014cfefbe5d73 3047-3941
+  s_c587ecf7bbc3e2::t_6c5b66b2d66dbe 24
+  s_c587ecf7bbc3e2::t_100e2f1e5e589f 576-623,635-639,641-657
+  s_c587ecf7bbc3e2::t_c6e9f22d8007e2 1253
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "d8157463f09d2db8383b62af4940a3cce3b3b22a",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
