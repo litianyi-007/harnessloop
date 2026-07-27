@@ -253,12 +253,27 @@ This script enforces only machine-checkable rules:
     again would change which citations get a hint and how accurate it is,
     never whether they pass.
 
+- B2a review declaration (see `check_review_declaration`): a round's
+  `decision.md`, when present, must declare `Review:` (a project-contained
+  path, or `none — <non-empty reason>`), `Reviewer:`, and `Review verdict:`
+  (`Review digest:` is optional). This is deliberately the "account for
+  it, do not grow the tree" half of what the T-066 handoff
+  (`.hopper/handoffs/T-066-output.md` §4) calls B2a: the declared review
+  file's own prose is never scanned, and it is never folded into Rule A's
+  `rule_a_files` or Rule B's `rule_b_files` / `citations_checked` counters
+  — those stay exactly what they were before this rule existed. See
+  `check_review_declaration`'s docstring for the precise checks and
+  `harnessloop-loop/SKILL.md`'s Mechanical Gate Boundary for what this
+  still does not decide (whether the review's content is any good, or
+  whether a `none — <reason>` reason is adequate).
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -312,6 +327,19 @@ WINDOWS_DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:/")
 # `:start-end`. See `strip_locator_suffix`.
 ANCHOR_SUFFIX_RE = re.compile(r"::[^:]+$")
 LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+
+# B2a review-declaration gate (see `check_review_declaration`): `Review:
+# none — <reason>` — the "none" token, an optional dash-like separator
+# (hyphen, en dash, or em dash), and whatever remains is the reason to be
+# checked for non-emptiness. `re.match` anchors at the start only, so a
+# `Review:` value that merely *starts* with "none" as a path segment (there
+# is no such real path shape, but be precise regardless) still requires a
+# word boundary after it.
+REVIEW_NONE_RE = re.compile(r"(?i)^none\b\s*(?:[-–—]+\s*)?(.*)$")
+
+# A `Review digest:` value: exactly 64 hex characters (sha256), so a
+# case-preserved comparison against a computed hexdigest is meaningful.
+REVIEW_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 # Noise directories excluded from the Rule B suffix-unique fallback index
 # (`build_suffix_index`): build output, vendored/installed dependencies, and
@@ -946,6 +974,219 @@ def _any_base_resolves(cited: str, bases: list[Path], project: Path, want_dir: b
     return False
 
 
+def parse_review_fields(decision_text: str) -> dict[str, str | None]:
+    """Extract the four B2a review-declaration fields from a decision.md.
+
+    Same narrow convention as the existing Verdict/Residuals (E4) check:
+    a case-insensitive `- <label>:` line prefix, matched against
+    `.strip().lower()`, first occurrence wins, no prose parsing anywhere
+    else in the file is consulted. A key's value is `None` when the field
+    was never written at all — this is how `check_review_declaration`
+    tells "field absent" (a `review-declaration-missing` violation) apart
+    from "field present but its value turns out to be invalid" (a
+    different, more specific violation kind).
+
+    `- Review verdict:` and `- Review digest:` are checked before
+    `- Review:` for readability, but the ordering does not affect
+    correctness: `"- review verdict:".startswith("- review:")` and
+    `"- review digest:".startswith("- review:")` are both false (the
+    character right after "review" differs: a space, not a colon), so
+    none of these four prefixes can ever shadow another.
+    """
+    fields: dict[str, str | None] = {
+        "review": None,
+        "reviewer": None,
+        "review_verdict": None,
+        "review_digest": None,
+    }
+    for line in decision_text.splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        if fields["review_verdict"] is None and low.startswith("- review verdict:"):
+            fields["review_verdict"] = stripped.split(":", 1)[1].strip()
+        elif fields["review_digest"] is None and low.startswith("- review digest:"):
+            fields["review_digest"] = stripped.split(":", 1)[1].strip()
+        elif fields["reviewer"] is None and low.startswith("- reviewer:"):
+            fields["reviewer"] = stripped.split(":", 1)[1].strip()
+        elif fields["review"] is None and low.startswith("- review:"):
+            fields["review"] = stripped.split(":", 1)[1].strip()
+    return fields
+
+
+def check_review_declaration(
+    round_dir: Path, project: Path, decision_text: str
+) -> tuple[list[dict], dict]:
+    """B2a mechanical gate: account for review, do not grow the tree.
+
+    Per the T-066 handoff (`.hopper/handoffs/T-066-output.md` §4, "B2a: 只
+    入账、不入树"), `decision.md` must declare:
+
+    - `Review: <project-contained path>` or `Review: none — <reason>`
+    - `Reviewer: <identity>`
+    - `Review verdict: <enum>` (this rule does not constrain the enum's
+      vocabulary — see `decision-template.md` and `harnessloop-loop/
+      SKILL.md` for the recommended values; a machine-checkable enum
+      dictionary is not this rule's job)
+    - `Review digest: <sha256>` (optional)
+
+    This function checks only:
+
+    1. That all three required fields are present at all (same-file
+       enumeration, exactly like E4 above — never a violation for a round
+       that predates this rule, since "absent" and "written but empty" are
+       distinguished by `parse_review_fields`).
+    2. When `Review:` names a path (i.e. it is not `none — ...`):
+       canonical project containment — reusing `_is_contained`, the same
+       symlink-safe, both-sides-resolved check `_resolve_in_project` and
+       `submodule_roots` use for Rule B, so a symlink escape is caught
+       exactly the same way here (T-063 MUST-FIX 2's `symlink_containment_escape`
+       shape) — on-disk existence, and that the leaf is a plain file: not a
+       directory, and not a symlink even when the symlink's *target*
+       legitimately resolves inside the project. The spec calls for "an
+       ordinary, non-symlink file", not merely "nothing that escapes the
+       project" — those are different properties, and this checks the
+       stricter one.
+    3. When `Review:` is `none — <reason>`: only that `<reason>` is
+       non-empty (or non-whitespace) after the `none` token and its
+       separator are stripped. This is a presence check, not a judgment
+       of the reason's quality — a machine cannot tell a genuine reason
+       from a placeholder string, and this rule does not pretend to.
+    4. When `Review digest:` is declared (and `Review:` names a path that
+       passed check 2): the file's sha256 matches, byte for byte.
+
+    What this deliberately never does — the "not into treesourcing"
+    half of the boundary: read the review file's own prose (no citation
+    extraction, no Rule B run against it), or fold this round into the
+    `rule_a_files` / `rule_b_files` / `citations_checked` coverage
+    counters Rule A/B own. A declared review file, however dense with its
+    own dangling-looking citations, produces zero `dangling-citation`
+    violations from this rule — B2b (pilot-gated, not yet built) is where
+    that would happen, deliberately not here.
+
+    Returns `(violations, review_state)`, where `review_state` has keys
+    `missing_fields` (list[str], the human-readable labels of any required
+    field absent from `decision_text`), `mode` (`"path"` | `"none"` |
+    `None` when `Review:` itself was never written), and `digest_declared`
+    (bool) — the caller (`verify_round`) folds these into the module's
+    `coverage` dict; this function stays a pure, coverage-agnostic helper
+    so it can be unit-tested (and mutation-tested) directly against a
+    decision.md string without needing a round directory on disk for every
+    case.
+    """
+    violations: list[dict] = []
+    fields = parse_review_fields(decision_text)
+    decision_path = round_dir / "decision.md"
+
+    required = (("Review", "review"), ("Reviewer", "reviewer"), ("Review verdict", "review_verdict"))
+    missing_fields = [label for label, key in required if fields[key] is None]
+    review_state = {
+        "missing_fields": missing_fields,
+        "mode": None,
+        "digest_declared": fields["review_digest"] is not None,
+    }
+    if missing_fields:
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "review-declaration-missing",
+                "detail": (
+                    f"{decision_path} is missing required review-declaration field(s): "
+                    f"{', '.join(missing_fields)} (B2a: decision.md must declare Review, "
+                    "Reviewer, and Review verdict — see harnessloop-loop/SKILL.md Mechanical "
+                    "Gate Boundary)"
+                ),
+            }
+        )
+        return violations, review_state
+
+    review_value = fields["review"].strip()
+    none_match = REVIEW_NONE_RE.match(review_value)
+    if none_match:
+        review_state["mode"] = "none"
+        reason = none_match.group(1).strip()
+        if not reason:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "review-none-reason-empty",
+                    "detail": (
+                        f"{decision_path} declares `Review: none` with no non-empty reason "
+                        "after it — use `Review: none — <why no review was done>` "
+                        "(this check only verifies the reason is non-empty, not that it is "
+                        "adequate)"
+                    ),
+                }
+            )
+        return violations, review_state
+
+    review_state["mode"] = "path"
+    cleaned = review_value.strip("`").strip()
+    candidate = project / cleaned
+    if not _is_contained(candidate, project):
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "review-path-escapes-project",
+                "detail": (
+                    f"{decision_path} declares `Review: {review_value}`, which resolves "
+                    "outside the project under canonical (symlink-resolved) containment"
+                ),
+            }
+        )
+        return violations, review_state
+    if not os.path.lexists(candidate):
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "review-path-not-found",
+                "detail": f"{decision_path} declares `Review: {review_value}`, which does not exist",
+            }
+        )
+        return violations, review_state
+    if candidate.is_symlink():
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "review-path-is-symlink",
+                "detail": (
+                    f"{decision_path} declares `Review: {review_value}`, which is a symlink — "
+                    "B2a requires an ordinary file, even when the symlink's target legitimately "
+                    "resolves inside the project"
+                ),
+            }
+        )
+        return violations, review_state
+    if not candidate.is_file():
+        violations.append(
+            {
+                "round": str(round_dir),
+                "kind": "review-path-not-file",
+                "detail": f"{decision_path} declares `Review: {review_value}`, which is not a regular file",
+            }
+        )
+        return violations, review_state
+
+    if fields["review_digest"] is not None:
+        declared_digest = fields["review_digest"].strip()
+        actual_digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        if not (
+            REVIEW_DIGEST_RE.match(declared_digest)
+            and declared_digest.lower() == actual_digest.lower()
+        ):
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "review-digest-mismatch",
+                    "detail": (
+                        f"{decision_path} declares `Review digest: {declared_digest}` which "
+                        f"does not match the sha256 of {candidate} ({actual_digest})"
+                    ),
+                }
+            )
+
+    return violations, review_state
+
+
 def verify_round(
     project: Path, round_dir: Path, suffix_index: dict[str, list[tuple[str, ...]]]
 ) -> tuple[list[dict], dict]:
@@ -1087,6 +1328,24 @@ def verify_round(
                 }
             )
 
+        # B2a (T-066 §4 "只入账、不入树"): decision.md must declare
+        # Review/Reviewer/Review verdict (Review digest optional). See
+        # `check_review_declaration` for exactly what is and is not
+        # checked; deliberately never touches rule_a_files, rule_b_files,
+        # or citations_checked — a declared review file is accounted for,
+        # not scanned.
+        decision_text = decision.read_text(encoding="utf-8", errors="ignore")
+        review_violations, review_state = check_review_declaration(round_dir, project, decision_text)
+        violations.extend(review_violations)
+        if review_state["missing_fields"]:
+            coverage["rounds_review_missing_fields"] += 1
+        elif review_state["mode"] == "none":
+            coverage["rounds_review_none"] += 1
+        elif review_state["mode"] == "path":
+            coverage["rounds_review_declared"] += 1
+        if review_state["digest_declared"]:
+            coverage["rounds_review_digest_declared"] += 1
+
     return violations, coverage
 
 
@@ -1102,6 +1361,10 @@ def _empty_coverage() -> dict:
         "citations_checked": 0,
         "citations_exempt_external": 0,
         "citations_suffix_hinted": 0,
+        "rounds_review_declared": 0,
+        "rounds_review_none": 0,
+        "rounds_review_missing_fields": 0,
+        "rounds_review_digest_declared": 0,
     }
 
 
@@ -1204,7 +1467,11 @@ def main() -> int:
             f"rule_b_files={coverage['rule_b_files']} citations={coverage['citations_checked']} "
             f"citations_exempt_external={coverage['citations_exempt_external']} "
             f"citations_suffix_hinted={coverage['citations_suffix_hinted']} "
-            f"zero_inspected={coverage['rounds_zero_inspected']}"
+            f"zero_inspected={coverage['rounds_zero_inspected']} "
+            f"review_declared={coverage['rounds_review_declared']} "
+            f"review_none={coverage['rounds_review_none']} "
+            f"review_missing_fields={coverage['rounds_review_missing_fields']} "
+            f"review_digest_declared={coverage['rounds_review_digest_declared']}"
         )
     return 1 if violations else 0
 

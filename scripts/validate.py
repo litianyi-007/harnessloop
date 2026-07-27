@@ -20,6 +20,7 @@ Exit code 0 = all passed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1907,6 +1908,453 @@ def validate_protocol_gates() -> None:
             print("  (skipped: git unavailable -- ignored_pseudo_unique_hint counterexample)")
     finally:
         shutil.rmtree(ignored_root, ignore_errors=True)
+
+    print("  T-066 B2a: decision.md review-declaration gate (account for review, don't grow the tree)")
+
+    def _b2a_round(root: Path) -> Path:
+        round_dir = root / ".harnessloop" / "goals" / "20260112-001-fixture" / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        return round_dir
+
+    def _b2a_violations(root: Path) -> tuple[list[dict], dict]:
+        return verify_protocol.verify_project(root)
+
+    # -- unit teeth: parse_review_fields / check_review_declaration as pure helpers --
+    fields = verify_protocol.parse_review_fields(
+        "# Decision\n\n- Review: rounds/0001/reviews/r.md\n- Reviewer: codex\n"
+        "- Review verdict: pass\n- Review digest: " + "a" * 64 + "\n"
+    )
+    check(
+        fields == {
+            "review": "rounds/0001/reviews/r.md",
+            "reviewer": "codex",
+            "review_verdict": "pass",
+            "review_digest": "a" * 64,
+        },
+        f"parse_review_fields extracts all four B2a fields verbatim (got {fields})",
+    )
+    check(
+        verify_protocol.parse_review_fields("# Decision\n\n- Feedback: positive\n")
+        == {"review": None, "reviewer": None, "review_verdict": None, "review_digest": None},
+        "parse_review_fields returns None for every field absent from decision.md "
+        "(distinguishes 'never written' from 'written empty')",
+    )
+    # Prefix-collision guard: "- Reviewer:" must not be captured by the "- Review:"
+    # prefix, and "- Review verdict:"/"- Review digest:" must not be captured by
+    # "- Review:" either -- this is the load-bearing property that lets all four
+    # fields share the "- Review" prefix without one shadowing another.
+    collision_fields = verify_protocol.parse_review_fields(
+        "# Decision\n\n- Reviewer: codex\n- Review verdict: pass\n- Review digest: "
+        + "b" * 64
+        + "\n- Review: rounds/0001/reviews/r.md\n"
+    )
+    check(
+        collision_fields["reviewer"] == "codex"
+        and collision_fields["review_verdict"] == "pass"
+        and collision_fields["review_digest"] == "b" * 64
+        and collision_fields["review"] == "rounds/0001/reviews/r.md",
+        f"parse_review_fields: no '- Review*' field shadows another regardless of line "
+        f"order (got {collision_fields})",
+    )
+    # Mutation control: a naive single `startswith(\"- review:\")` check (the bug this
+    # ordering guards against) WOULD wrongly capture the "- Reviewer:" line's value as
+    # the "review" field -- proving the four-way branching above is load-bearing, not
+    # vacuous (no real code path does this naive check; this recomputes it directly to
+    # show what the bug would look like).
+    naive_review_value = next(
+        (
+            line.strip().split(":", 1)[1].strip()
+            for line in "# Decision\n\n- Reviewer: codex\n".splitlines()
+            if line.strip().lower().startswith("- review:")
+        ),
+        None,
+    )
+    check(
+        naive_review_value is None,
+        "sanity: '- Reviewer: codex'.strip().lower() does not start with '- review:' "
+        "(confirms the four fields' prefixes are genuinely disjoint, not merely handled "
+        "by branch ordering)",
+    )
+
+    # -- teeth 1/5: missing required field(s) -- bidirectional --
+    missing_root = REPO_ROOT / ".tmp" / f"verify-fixture-b2a-missing-{uuid.uuid4().hex}"
+    try:
+        round_dir = _b2a_round(missing_root)
+        (round_dir / "decision.md").write_text("# Decision\n\n- Feedback: positive\n", encoding="utf-8")
+        violations, coverage = _b2a_violations(missing_root)
+        missing_v = [v for v in violations if v["kind"] == "review-declaration-missing"]
+        check(len(missing_v) == 1, f"missing Review/Reviewer/Review verdict -> review-declaration-missing (got {[v['kind'] for v in violations]})")
+        check(
+            missing_v and all(label in missing_v[0]["detail"] for label in ("Review", "Reviewer", "Review verdict")),
+            f"review-declaration-missing names all three absent fields (got {missing_v[0]['detail'] if missing_v else None})",
+        )
+        check(coverage.get("rounds_review_missing_fields") == 1, f"coverage counts rounds_review_missing_fields=1 (got {coverage})")
+        check(
+            not any(v["kind"] in ("rule-a", "rule-b", "dangling-citation", "scope-lock-violation") for v in missing_v),
+            "review-declaration-missing does not masquerade as a Rule A/B kind",
+        )
+
+        # Reverse mutation: partially fill (Review + Reviewer, still missing verdict)
+        # must still violate, but name only the one still-missing field.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: none — no review pilot yet\n- Reviewer: codex\n", encoding="utf-8"
+        )
+        violations, _coverage = _b2a_violations(missing_root)
+        partial_v = [v for v in violations if v["kind"] == "review-declaration-missing"]
+        check(
+            len(partial_v) == 1 and "Review verdict" in partial_v[0]["detail"]
+            and "Reviewer" not in partial_v[0]["detail"].split("field(s): ", 1)[1].split(" (B2a")[0],
+            f"partially-filled declaration still violates, naming only the field(s) still "
+            f"absent (got {partial_v[0]['detail'] if partial_v else None})",
+        )
+
+        # Full reverse mutation: all three present -> no review-declaration-missing.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: none — no review pilot yet\n- Reviewer: codex\n"
+            "- Review verdict: not-applicable\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(missing_root)
+        check(
+            not any(v["kind"] == "review-declaration-missing" for v in violations),
+            "all three required fields present -> review-declaration-missing clears (reverse mutation)",
+        )
+        check(coverage.get("rounds_review_none") == 1, f"coverage counts rounds_review_none=1 (got {coverage})")
+
+        # A round with no decision.md at all must never trip this rule (zero-migration
+        # for rounds that have not reached the decision step yet, same discipline E4 uses).
+        (round_dir / "decision.md").unlink()
+        violations, coverage = _b2a_violations(missing_root)
+        check(
+            not any(v["kind"].startswith("review-") for v in violations),
+            "a round with no decision.md at all triggers no review-declaration violation",
+        )
+        check(
+            coverage.get("rounds_review_missing_fields") == 0
+            and coverage.get("rounds_review_none") == 0
+            and coverage.get("rounds_review_declared") == 0,
+            f"coverage stays zero for a round with no decision.md (got {coverage})",
+        )
+    finally:
+        shutil.rmtree(missing_root, ignore_errors=True)
+
+    # -- teeth 2/5: Review: none — <reason> -- empty vs non-empty, bidirectional --
+    none_root = REPO_ROOT / ".tmp" / f"verify-fixture-b2a-none-{uuid.uuid4().hex}"
+    try:
+        round_dir = _b2a_round(none_root)
+        for empty_reason in ("none", "none —", "none -", "none —   ", "none-"):
+            (round_dir / "decision.md").write_text(
+                f"# Decision\n\n- Review: {empty_reason}\n- Reviewer: codex\n- Review verdict: not-applicable\n",
+                encoding="utf-8",
+            )
+            violations, _coverage = _b2a_violations(none_root)
+            check(
+                any(v["kind"] == "review-none-reason-empty" for v in violations),
+                f"`Review: {empty_reason!r}` (empty/whitespace-only reason) -> "
+                f"review-none-reason-empty (got {[v['kind'] for v in violations]})",
+            )
+        # Reverse mutation: same shape, non-empty reason -> passes.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: none — B1 not yet closed for this round's language\n"
+            "- Reviewer: codex\n- Review verdict: not-applicable\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(none_root)
+        check(
+            not any(v["kind"] == "review-none-reason-empty" for v in violations),
+            "`Review: none — <non-empty reason>` clears review-none-reason-empty (reverse mutation)",
+        )
+        check(coverage.get("rounds_review_none") == 1, f"coverage counts rounds_review_none=1 (got {coverage})")
+        # Mechanical-only guard (explicit non-goal): this rule must not reject a
+        # transparently-weak reason -- it can only check non-emptiness, never adequacy.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: none — x\n- Reviewer: codex\n- Review verdict: not-applicable\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = _b2a_violations(none_root)
+        check(
+            not any(v["kind"].startswith("review-") for v in violations),
+            "a minimal but non-empty reason ('x') passes -- this rule mechanically checks "
+            "non-emptiness only, never reason adequacy (see check_review_declaration docstring)",
+        )
+    finally:
+        shutil.rmtree(none_root, ignore_errors=True)
+
+    # -- teeth 3/5: Review: <path> -- not-found / escapes-project / symlink / directory
+    # / plain-file, bidirectional --
+    path_root = REPO_ROOT / ".tmp" / f"verify-fixture-b2a-path-{uuid.uuid4().hex}"
+    try:
+        round_dir = _b2a_round(path_root)
+        review_file = round_dir / "reviews" / "r1.md"
+        review_file.write_text("adversarial review body\n", encoding="utf-8")
+        review_rel = review_file.relative_to(path_root).as_posix()
+
+        # not-found
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: "
+            + round_dir.relative_to(path_root).as_posix()
+            + "/reviews/does-not-exist.md\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = _b2a_violations(path_root)
+        check(
+            any(v["kind"] == "review-path-not-found" for v in violations),
+            f"nonexistent Review path -> review-path-not-found (got {[v['kind'] for v in violations]})",
+        )
+
+        # escapes project (literal ../ walk)
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: ../../../../../../../../etc/hosts\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = _b2a_violations(path_root)
+        check(
+            any(v["kind"] == "review-path-escapes-project" for v in violations),
+            f"Review path escaping the project via literal '../' -> review-path-escapes-project "
+            f"(got {[v['kind'] for v in violations]})",
+        )
+
+        # is a directory, not a file
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: "
+            + round_dir.relative_to(path_root).as_posix()
+            + "/reviews\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = _b2a_violations(path_root)
+        check(
+            any(v["kind"] == "review-path-not-file" for v in violations),
+            f"Review path naming a directory -> review-path-not-file (got {[v['kind'] for v in violations]})",
+        )
+
+        # symlink (even one whose target legitimately resolves inside the project)
+        if hasattr(os, "symlink"):
+            link = round_dir / "reviews" / "link.md"
+            symlinks_supported = True
+            try:
+                link.symlink_to(review_file)
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+            if symlinks_supported:
+                (round_dir / "decision.md").write_text(
+                    "# Decision\n\n- Review: "
+                    + link.relative_to(path_root).as_posix()
+                    + "\n- Reviewer: codex\n- Review verdict: pass\n",
+                    encoding="utf-8",
+                )
+                violations, _coverage = _b2a_violations(path_root)
+                check(
+                    any(v["kind"] == "review-path-is-symlink" for v in violations),
+                    f"Review path naming a symlink (target legitimately inside the project) -> "
+                    f"review-path-is-symlink (got {[v['kind'] for v in violations]})",
+                )
+                # Mutation control: the symlink's target genuinely exists and is a plain
+                # file -- proving the rejection above is the leaf-is-symlink check firing,
+                # not existence or containment (which both pass for this target).
+                check(
+                    verify_protocol._is_contained(link, path_root) and review_file.is_file(),
+                    "mutation control: the symlink's own path is project-contained and its "
+                    "target is a real plain file -- proves review-path-is-symlink fires "
+                    "specifically because the leaf is a symlink, not because of containment "
+                    "or existence",
+                )
+                link.unlink()
+            else:
+                print("  (skipped: symlinks unsupported -- review-path-is-symlink case)")
+        else:
+            print("  (skipped: os.symlink unavailable -- review-path-is-symlink case)")
+
+        # T-063/T-064-style symlink escape: a project-internal symlink whose target is
+        # OUTSIDE the project must fail containment, not merely "is a symlink" -- reusing
+        # the same _is_contained discipline Rule B's citation resolution relies on.
+        if hasattr(os, "symlink"):
+            outside_dir = path_root.parent / f"b2a-outside-{uuid.uuid4().hex}"
+            (outside_dir).mkdir(parents=True)
+            (outside_dir / "external-review.md").write_text("outside the project\n", encoding="utf-8")
+            escape_link = round_dir / "reviews" / "escape-link.md"
+            symlinks_supported = True
+            try:
+                escape_link.symlink_to(outside_dir / "external-review.md")
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+            if symlinks_supported:
+                (round_dir / "decision.md").write_text(
+                    "# Decision\n\n- Review: "
+                    + escape_link.relative_to(path_root).as_posix()
+                    + "\n- Reviewer: codex\n- Review verdict: pass\n",
+                    encoding="utf-8",
+                )
+                violations, _coverage = _b2a_violations(path_root)
+                kinds = {v["kind"] for v in violations}
+                check(
+                    "review-path-escapes-project" in kinds,
+                    f"Review path naming a project-internal symlink whose TARGET is outside "
+                    f"the project -> review-path-escapes-project, same discipline as Rule B's "
+                    f"symlink_containment_escape (got {kinds})",
+                )
+                # Mutation control: lexical normpath containment alone WOULD accept this --
+                # the symlink's own path is inside the project even though its target is not.
+                check(
+                    verify_protocol.is_under(escape_link, path_root)
+                    and not verify_protocol._is_contained(escape_link, path_root),
+                    "mutation control: lexical containment passes this symlink while canonical "
+                    "(_is_contained) containment correctly rejects it -- proves the escape is "
+                    "caught by symlink resolution, not merely by chance",
+                )
+                escape_link.unlink()
+            else:
+                print("  (skipped: symlinks unsupported -- Review symlink-escape counterexample)")
+            shutil.rmtree(outside_dir, ignore_errors=True)
+
+        # Reverse mutation: an ordinary, project-contained, non-symlink, existing file ->
+        # no review-path-* violation at all, and coverage counts it as declared.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: " + review_rel + "\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(path_root)
+        check(
+            not any(v["kind"].startswith("review-path") for v in violations),
+            f"an ordinary project-contained non-symlink existing file -> no review-path-* "
+            f"violation (reverse mutation; got {[v['kind'] for v in violations]})",
+        )
+        check(coverage.get("rounds_review_declared") == 1, f"coverage counts rounds_review_declared=1 (got {coverage})")
+    finally:
+        shutil.rmtree(path_root, ignore_errors=True)
+
+    # -- teeth 4/5: Review digest -- mismatch / match / undeclared, bidirectional --
+    digest_root = REPO_ROOT / ".tmp" / f"verify-fixture-b2a-digest-{uuid.uuid4().hex}"
+    try:
+        round_dir = _b2a_round(digest_root)
+        review_file = round_dir / "reviews" / "r1.md"
+        review_file.write_text("adversarial review body for digest test\n", encoding="utf-8")
+        review_rel = review_file.relative_to(digest_root).as_posix()
+        real_digest = hashlib.sha256(review_file.read_bytes()).hexdigest()
+
+        # mismatch
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: " + review_rel + "\n- Reviewer: codex\n- Review verdict: pass\n"
+            "- Review digest: " + ("f" * 64) + "\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(digest_root)
+        check(
+            any(v["kind"] == "review-digest-mismatch" for v in violations),
+            f"wrong Review digest -> review-digest-mismatch (got {[v['kind'] for v in violations]})",
+        )
+        check(coverage.get("rounds_review_digest_declared") == 1, f"coverage counts a declared (even mismatching) digest (got {coverage})")
+
+        # reverse mutation: correct digest -> clears
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: " + review_rel + "\n- Reviewer: codex\n- Review verdict: pass\n"
+            "- Review digest: " + real_digest + "\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(digest_root)
+        check(
+            not any(v["kind"] == "review-digest-mismatch" for v in violations),
+            "correct Review digest clears review-digest-mismatch (reverse mutation)",
+        )
+        check(coverage.get("rounds_review_digest_declared") == 1, f"coverage counts the matching declared digest too (got {coverage})")
+
+        # undeclared digest is never a violation and never counted
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: " + review_rel + "\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(digest_root)
+        check(
+            not any(v["kind"] == "review-digest-mismatch" for v in violations),
+            "Review digest is optional -- omitting it entirely is never a violation",
+        )
+        check(coverage.get("rounds_review_digest_declared") == 0, f"coverage counts 0 when no digest is declared (got {coverage})")
+
+        # Mutation control: the review file genuinely changed content since the digest
+        # would have been computed for the original body -- proving the mismatch above
+        # is a real content check, not a string-format check.
+        check(
+            hashlib.sha256(review_file.read_bytes()).hexdigest() == real_digest,
+            "mutation control: the review file's live sha256 still matches real_digest at "
+            "this point (proves the earlier mismatch used a wrong-but-well-formed digest, "
+            "not a file that had actually changed)",
+        )
+    finally:
+        shutil.rmtree(digest_root, ignore_errors=True)
+
+    # -- teeth 5/5: B2a explicitly does NOT fold a declared review file into Rule A/B --
+    # this is the actual meaning of "account for it, don't grow the tree": B2a places no
+    # requirement that Review: point *into* reviews/ (that would be B2b), and a review
+    # dense with dangling-looking citations, declared from OUTSIDE round_dir/reviews/ (so
+    # Rule B's own, pre-existing, unconditional reviews/*.md walk cannot independently
+    # trip over it either), must still produce zero dangling-citation violations and
+    # leave rule_b_files/citations_checked untouched -- proving B2a's own logic never
+    # reads the file's prose or invokes Rule B's citation extraction on it.
+    notree_root = REPO_ROOT / ".tmp" / f"verify-fixture-b2a-notree-{uuid.uuid4().hex}"
+    try:
+        round_dir = _b2a_round(notree_root)
+        review_file = notree_root / "external-reviews" / "dense.md"
+        review_file.parent.mkdir(parents=True)
+        review_file.write_text(
+            "This review cites many things that do not exist:\n"
+            "- `totally/made/up/path/one.md`\n"
+            "- `another/totally/made/up/path.py`\n"
+            "- `yet/another/nonexistent/reference.md`\n",
+            encoding="utf-8",
+        )
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Review: "
+            + review_file.relative_to(notree_root).as_posix()
+            + "\n- Reviewer: codex\n- Review verdict: pass\n",
+            encoding="utf-8",
+        )
+        violations, coverage = _b2a_violations(notree_root)
+        check(
+            not any(v["kind"] == "dangling-citation" for v in violations),
+            f"a declared Review file's own dangling-looking citations never produce "
+            f"dangling-citation violations -- B2a accounts for the file, it does not scan "
+            f"it (got {[v['kind'] for v in violations]})",
+        )
+        check(
+            coverage.get("rule_b_files") == 0 and coverage.get("citations_checked") == 0,
+            f"a Review file declared outside round_dir/reviews/ is invisible to both Rule "
+            f"B's own independent reviews/*.md walk AND B2a's own logic -- rule_b_files "
+            f"and citations_checked both stay 0 (got {coverage})",
+        )
+        check(
+            coverage.get("rounds_review_declared") == 1,
+            f"the round is still counted once in rounds_review_declared even though the "
+            f"declared file lives outside reviews/ -- B2a does not require Review: to "
+            f"point into reviews/ (that requirement, if any, belongs to the not-yet-built "
+            f"B2b) (got {coverage})",
+        )
+
+        # Reverse half of the same point: the identical dense-citation file, this time
+        # actually placed under round_dir/reviews/, IS picked up by Rule B's own
+        # pre-existing, unconditional walk (unrelated to B2a) and DOES produce
+        # dangling-citation violations -- proving the zero-violations result above comes
+        # from B2a genuinely not scanning the file, not from the citations being
+        # unreachable in principle.
+        in_tree_review = round_dir / "reviews" / "dense.md"
+        in_tree_review.write_text(review_file.read_text(encoding="utf-8"), encoding="utf-8")
+        violations, coverage = _b2a_violations(notree_root)
+        check(
+            any(v["kind"] == "dangling-citation" for v in violations),
+            "mutation control: the same dense-citation content, once placed under "
+            "round_dir/reviews/, IS caught by Rule B's own independent walk -- proving "
+            "Rule B's citation checker genuinely can (and does) fire on this content; "
+            "B2a's silence on the out-of-tree copy above is not because the citations "
+            "are unreachable in principle",
+        )
+        in_tree_review.unlink()
+    finally:
+        shutil.rmtree(notree_root, ignore_errors=True)
 
 
 def validate_round_cost_smoke() -> None:

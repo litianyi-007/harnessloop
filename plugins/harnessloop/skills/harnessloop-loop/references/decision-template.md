@@ -9,6 +9,10 @@
 - Blocker type: none | runtime-recoverable | access-missing | write-safety-required | human-decision-required | contract-insufficient | external-system-unsafe | unknown
 - Recovery eligible: yes | no | unknown
 - Accepted: yes | no
+- Review: <project-contained path to the review artifact> | none — <non-empty reason no review was done>
+- Reviewer: <identity of who/what performed the review, e.g. a vendor name or "main-session">
+- Review verdict: pass | pass-with-note | rework | fail | not-applicable
+- Review digest: <sha256 of the Review file, optional>
 - Mechanical gate: <exit-code> / <the coverage line printed by verify_protocol.py, verbatim> / <when it was run>
 - Active goal:
 - Active round:
