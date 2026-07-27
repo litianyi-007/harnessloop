@@ -520,7 +520,7 @@ def strip_locator_suffix(cleaned: str) -> str:
     return cleaned
 
 
-def pathish_citations(markdown_text: str) -> tuple[list[str], int]:
+def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, bool]:
     """Extract citation spans that look like file paths.
 
     Beyond the protocol prefixes, any slash-containing span with a file
@@ -537,18 +537,48 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int]:
     carries) the `<!-- verify:ignore -->` marker has all of its citations
     skipped — see module docstring.
 
-    Returns `(cited, exempt_external)`: `cited` is the list of spans to
-    existence-check, and `exempt_external` is a count of spans skipped
-    specifically by `_looks_like_out_of_project` (not any other exemption)
-    — the caller accumulates this into the `citations_exempt_external`
-    coverage field so that exemption is visible in coverage rather than
-    disappearing without a trace.
+    Two ignore-marker coverage fields close a real blind spot (T-066 §1
+    judgment criterion 2, "ignore-marker misuse must not go unmonitored"):
+    before this, the ignore branch below `continue`d without counting
+    anything, so a review could sprinkle `<!-- verify:ignore -->` over
+    genuinely dangling citations and empty Rule B out while `coverage` /
+    exit code / `--json` all kept reporting clean — the exact same shape of
+    silent exemption `citations_exempt_external` closed for the `~/...`
+    absolute-path gap, just for a different escape hatch. `ignored_explicit`
+    counts every backtick span found on a line the marker exempts (deliberately
+    every span on that line, not only ones that would otherwise have looked
+    pathish — the marker is documented to exempt "every citation on it", and
+    a conservative over-count here is the correct bias for a misuse monitor).
+    `has_ignore_marker` is a whole-file boolean (the marker occurs anywhere in
+    `markdown_text`), which the caller accumulates into the file-level
+    `review_files_with_ignore` coverage field rather than per-span.
+
+    `shape_dropped` counts a third, previously-invisible exit: a span that
+    contains `/` (so it is clearly meant as a path) but whose tail has no
+    file extension, no trailing `/`, and no `..` segment — e.g.
+    `@@wiki/kernel` or `src/pkgdir` — falls through the shape branch below
+    without ever being appended to `cited`, and before this field existed
+    that drop was silent. This is also the cheapest way to turn a real
+    dangling citation green: delete the file extension from an already-red
+    span and it vanishes from every coverage field, not just this one.
+
+    Returns `(cited, exempt_external, ignored_explicit, shape_dropped,
+    has_ignore_marker)`: `cited` is the list of spans to existence-check,
+    `exempt_external` is a count of spans skipped specifically by
+    `_looks_like_out_of_project` (not any other exemption) — the caller
+    accumulates this into the `citations_exempt_external` coverage field —
+    and the remaining three back `citations_ignored_explicit`,
+    `citations_shape_dropped`, and `review_files_with_ignore` respectively
+    (see `_empty_coverage`).
     """
     cited: list[str] = []
     exempt_external = 0
+    ignored_explicit = 0
+    shape_dropped = 0
     lines = markdown_text.splitlines()
     for i, line in enumerate(lines):
         if IGNORE_MARKER in line or (i > 0 and IGNORE_MARKER in lines[i - 1]):
+            ignored_explicit += len(CODE_SPAN.findall(line))
             continue
         for span in CODE_SPAN.findall(line):
             cleaned = span.strip().replace("\\", "/")
@@ -572,7 +602,9 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int]:
                 tail = cleaned.rsplit("/", 1)[-1]
                 if Path(tail).suffix or cleaned.endswith("/") or ".." in cleaned:
                     cited.append(cleaned)
-    return cited, exempt_external
+                else:
+                    shape_dropped += 1
+    return cited, exempt_external, ignored_explicit, shape_dropped, IGNORE_MARKER in markdown_text
 
 
 def submodule_roots(project: Path) -> list[Path]:
@@ -1262,8 +1294,14 @@ def verify_round(
     if reviews_dir.is_dir():
         for review in sorted(reviews_dir.rglob("*.md")):
             coverage["rule_b_files"] += 1
-            cited_list, exempt_external = pathish_citations(review.read_text(encoding="utf-8"))
+            cited_list, exempt_external, ignored_explicit, shape_dropped, has_ignore = pathish_citations(
+                review.read_text(encoding="utf-8")
+            )
             coverage["citations_exempt_external"] += exempt_external
+            coverage["citations_ignored_explicit"] += ignored_explicit
+            coverage["citations_shape_dropped"] += shape_dropped
+            if has_ignore:
+                coverage["review_files_with_ignore"] += 1
             for cited in cited_list:
                 coverage["citations_checked"] += 1
                 want_dir = cited.endswith("/")
@@ -1361,6 +1399,9 @@ def _empty_coverage() -> dict:
         "citations_checked": 0,
         "citations_exempt_external": 0,
         "citations_suffix_hinted": 0,
+        "citations_ignored_explicit": 0,
+        "citations_shape_dropped": 0,
+        "review_files_with_ignore": 0,
         "rounds_review_declared": 0,
         "rounds_review_none": 0,
         "rounds_review_missing_fields": 0,
@@ -1395,7 +1436,12 @@ def main() -> int:
             "paths with an angle-bracket placeholder (goals/<id>/...) are exempt "
             "automatically; a citation known to be intentional prose rather than a "
             "real reference can be exempted explicitly by putting "
-            "'<!-- verify:ignore -->' on the same line or the line before it. "
+            "'<!-- verify:ignore -->' on the same line or the line before it "
+            "(counted in the citations_ignored_explicit / review_files_with_ignore "
+            "coverage fields, so ignore-marker use is monitorable rather than "
+            "silent). A pathish span containing '/' whose tail has no extension, "
+            "no trailing '/', and no '..' segment is silently dropped before "
+            "existence checking; counted in citations_shape_dropped. "
             "Citations are resolved against the project root, the round's goal and "
             "round directories, the project's own .harnessloop/ directory (for "
             "citations using a PATHISH_PREFIXES prefix verbatim, e.g. "
@@ -1467,6 +1513,9 @@ def main() -> int:
             f"rule_b_files={coverage['rule_b_files']} citations={coverage['citations_checked']} "
             f"citations_exempt_external={coverage['citations_exempt_external']} "
             f"citations_suffix_hinted={coverage['citations_suffix_hinted']} "
+            f"citations_ignored_explicit={coverage['citations_ignored_explicit']} "
+            f"citations_shape_dropped={coverage['citations_shape_dropped']} "
+            f"review_files_with_ignore={coverage['review_files_with_ignore']} "
             f"zero_inspected={coverage['rounds_zero_inspected']} "
             f"review_declared={coverage['rounds_review_declared']} "
             f"review_none={coverage['rounds_review_none']} "

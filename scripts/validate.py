@@ -428,6 +428,23 @@ def validate_check_setup_smoke() -> None:
     finally:
         shutil.rmtree(todo_root, ignore_errors=True)
 
+    # PR-0 future-guard (external-citation-base-spec-20260727.md §2.2/§7):
+    # a declared external reference-roots file must never enter check_setup.py's
+    # 5-file completeness gate -- that would silently make an optional,
+    # most-projects-don't-use-it capability inflate the wizard's headline
+    # N/total number and turn two artifacts (this gate + the reference-roots
+    # declaration) into a drift-prone pair. Welded assertion, not a behavior
+    # test: if a future change ever adds a reference-roots file to FILES_ORDER,
+    # `len(...) == 5` alone already goes red (and the "total=5" assertions
+    # above would too), independent of what the file happens to be named.
+    check(
+        len(check_setup.FILES_ORDER) == 5
+        and not any("reference" in rel.lower() for rel in check_setup.FILES_ORDER),
+        "check_setup.py's FILES_ORDER stays at exactly 5 files and never names a "
+        "reference-root file (external reference roots are declared in "
+        ".harnessloop/setup/, not gated by the setup-completeness wizard)",
+    )
+
 
 def validate_secrets_smoke() -> None:
     print("[4/8] Secrets smoke test")
@@ -534,13 +551,46 @@ def top_level(rel: str) -> str:
     return rel.split("/")[0] + "/"
 
 
+# G18 (PR-0, external-citation-base-spec-20260727.md §3/§5): the "IN" column
+# window inside harnessloop-loop/SKILL.md's "### Mechanical Gate Boundary"
+# section must be delimited by the section's own headings, never by a fixed
+# character offset. A magic-number window (the prior `+ 4000` slice) silently
+# stops reporting drift the moment the IN column grows past that offset --
+# exactly the kind of "docstring says one thing, machine checks another"
+# lie this repo's own E1/E18 checks exist to prevent. Returns `None` if either
+# heading is missing (start heading, or the "OUT" heading that bounds the end).
+OUT_HEADING_MARKER = "What it does **not** decide"
+
+
+def mechanical_gate_boundary_window(skill_text: str) -> str | None:
+    start = skill_text.find("### Mechanical Gate Boundary")
+    if start == -1:
+        return None
+    end = skill_text.find(OUT_HEADING_MARKER, start)
+    if end == -1:
+        return None
+    return skill_text[start:end]
+
+
 def validate_protocol_gates() -> None:
     print("[6/8] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
-    violations, _coverage = verify_protocol.verify_project(mock_project)
+    violations, mock_coverage = verify_protocol.verify_project(mock_project)
     check(not violations, f"examples/mock-project passes verify ({len(violations)} violation(s))")
     for violation in violations:
         print(f"    {violation['kind']}: {violation['detail']}")
+    # PR-0 zero-migration guard: examples/mock-project has no verify:ignore
+    # markers and no shape-dropped citations today -- the three new fields
+    # must read exactly 0 here, and violations must stay empty (already
+    # asserted above), proving the new counters are additive-only.
+    check(
+        mock_coverage.get("citations_ignored_explicit") == 0
+        and mock_coverage.get("citations_shape_dropped") == 0
+        and mock_coverage.get("review_files_with_ignore") == 0,
+        "PR-0 zero-migration: examples/mock-project (no ignore markers, no "
+        "shape-dropped spans) reports all three new fields as 0 "
+        f"(got {({k: mock_coverage.get(k) for k in ('citations_ignored_explicit', 'citations_shape_dropped', 'review_files_with_ignore')})})",
+    )
 
     # Negative fixtures: verify must FAIL when rules are broken.
     fixture_root = REPO_ROOT / ".tmp" / f"verify-fixture-{uuid.uuid4().hex}"
@@ -688,18 +738,20 @@ def validate_protocol_gates() -> None:
     # E1<->E2 一致性（teeth #4）：SKILL.md 的 Mechanical Gate Boundary "IN" 列
     # 逐字声称与 coverage 字段一一对应。若两边漂移，那份边界声明就在撒谎——
     # 而它是一份没有机械牙的纪律文档，唯一可测的一点就是这个对应关系。
+    # G18 (PR-0): the window is now heading-delimited (mechanical_gate_boundary_window),
+    # not the prior fixed `+ 4000` offset -- see that function's docstring comment.
     skill_md = (
         REPO_ROOT / "plugins" / "harnessloop" / "skills" / "harnessloop-loop" / "SKILL.md"
     )
     if skill_md.exists():
         skill_text = skill_md.read_text(encoding="utf-8")
-        boundary_start = skill_text.find("### Mechanical Gate Boundary")
+        boundary = mechanical_gate_boundary_window(skill_text)
         check(
-            boundary_start != -1,
-            "harnessloop-loop/SKILL.md declares the Mechanical Gate Boundary section (E1)",
+            boundary is not None,
+            "harnessloop-loop/SKILL.md declares the Mechanical Gate Boundary IN/OUT "
+            "headings (E1/G18)",
         )
-        if boundary_start != -1:
-            boundary = skill_text[boundary_start : boundary_start + 4000]
+        if boundary is not None:
             _, sample_coverage = verify_protocol.verify_project(REPO_ROOT.parent)
             missing = [f for f in sample_coverage if f"`{f}`" not in boundary]
             check(
@@ -707,6 +759,48 @@ def validate_protocol_gates() -> None:
                 "every coverage field is named in the SKILL.md IN column "
                 f"(missing: {missing})",
             )
+
+    # G18 sentinel-string teeth (PR-0): prove the window boundary is really
+    # heading-delimited, not a re-introduced magic number, without any manual
+    # step. Build a synthetic doc whose IN column is deliberately padded past
+    # 4000 characters before its last bullet (`zzz_g18_sentinel_field`), and
+    # whose OUT column carries its own field name that must never leak into
+    # the IN-column window.
+    print("  G18: coverage-key <-> SKILL.md IN-column window uses heading boundaries, not a magic number")
+    g18_filler = "- filler bullet padding the IN column past the old fixed offset.\n" * 120
+    g18_sentinel_in = "zzz_g18_sentinel_field"
+    g18_sentinel_out = "zzz_g18_out_only_field"
+    g18_synthetic = (
+        "### Mechanical Gate Boundary\n\n"
+        "What it currently checks (IN):\n\n"
+        f"{g18_filler}"
+        f"- `{g18_sentinel_in}` — placed past the 4000-character mark on purpose.\n\n"
+        "What it does **not** decide (OUT):\n\n"
+        f"- `{g18_sentinel_out}` — must never be visible to the IN-column window.\n"
+    )
+    g18_start = g18_synthetic.find("### Mechanical Gate Boundary")
+    check(
+        len(g18_synthetic) - g18_start > 4000,
+        "G18 fixture sanity: the synthetic doc's IN column genuinely exceeds "
+        "the old 4000-character offset (fixture would be vacuous otherwise)",
+    )
+    g18_window = mechanical_gate_boundary_window(g18_synthetic)
+    check(
+        g18_window is not None
+        and f"`{g18_sentinel_in}`" in g18_window
+        and f"`{g18_sentinel_out}`" not in g18_window,
+        "G18: heading-delimited window reaches a sentinel field placed past the "
+        "4000-character mark and stops before the OUT heading",
+    )
+    # Mutation control: the pre-G18 fixed-offset window would have missed the
+    # sentinel entirely -- proving the assertion above has real teeth, not a
+    # coincidental pass.
+    g18_old_style_window = g18_synthetic[g18_start : g18_start + 4000]
+    check(
+        f"`{g18_sentinel_in}`" not in g18_old_style_window,
+        "mutation control: a hardcoded `+ 4000` window would have missed the "
+        "sentinel field (proves the G18 fixture is load-bearing, not vacuous)",
+    )
 
     # Rule B pathish false-positive fixtures (evolution issue TH-0006): a
     # real project run turned up six false-positive dangling-citation hits
@@ -1016,7 +1110,13 @@ def validate_protocol_gates() -> None:
         "UNC path, out of project scope:\n"
         "- `\\\\server\\share\\doc.md`\n"
     )
-    cited_home_abs, exempt_external_count = verify_protocol.pathish_citations(home_and_abs_text)
+    (
+        cited_home_abs,
+        exempt_external_count,
+        ignored_explicit_count,
+        shape_dropped_count,
+        has_ignore_marker,
+    ) = verify_protocol.pathish_citations(home_and_abs_text)
     check(
         cited_home_abs == [],
         "pathish_citations extracts none of ~/ home-relative, /-absolute, C:/-absolute, "
@@ -1027,6 +1127,110 @@ def validate_protocol_gates() -> None:
         f"pathish_citations counts every out-of-project span in citations_exempt_external "
         f"(got {exempt_external_count}, expected 5)",
     )
+    check(
+        ignored_explicit_count == 0 and shape_dropped_count == 0 and has_ignore_marker is False,
+        "pathish_citations: a text with no verify:ignore marker and no shape-dropped span "
+        f"reports all three new PR-0 fields as zero/false (got ignored={ignored_explicit_count}, "
+        f"shape_dropped={shape_dropped_count}, has_ignore_marker={has_ignore_marker})",
+    )
+
+    # PR-0 (external-citation-base-spec-20260727.md §5, G-teeth "delete any counter
+    # -> fixture red"): precise-count fixtures for the three new coverage fields.
+    # citations_ignored_explicit / review_files_with_ignore close the "ignore-marker
+    # misuse is unmonitorable" gap (T-066 §1 judgment criterion 2); citations_shape_dropped
+    # closes the "delete the extension to go green" gap. Each assertion below is only
+    # satisfiable if the corresponding counter increment is present and wired through
+    # verify_round into `coverage` -- delete any one of the three increments in
+    # verify_protocol.py and the matching check here goes red.
+    print("  PR-0: citations_ignored_explicit / review_files_with_ignore / citations_shape_dropped")
+    pr0_ignore_shape_text = (
+        "Shape-dropped spans -- contain a slash but no extension, no trailing "
+        "slash, no dot-dot segment:\n"
+        "- `src/pkgdir`\n"
+        "- `@@wiki/kernel`\n"
+        "\n"
+        "Not shape-dropped -- has a file extension, still a real citation:\n"
+        "- `docs/genuinely_missing_file.md`\n"
+        "\n"
+        "<!-- verify:ignore -->\n"
+        "Ignored line citing `totally/made/up/ignored_prev_line.py` and a second "
+        "span on the same ignored line `another/ignored/span.py`\n"
+        "Ignored same-line citation `totally/made/up/ignored_same_line.py` <!-- verify:ignore -->\n"
+    )
+    (
+        pr0_cited,
+        pr0_exempt_external,
+        pr0_ignored_explicit,
+        pr0_shape_dropped,
+        pr0_has_ignore,
+    ) = verify_protocol.pathish_citations(pr0_ignore_shape_text)
+    check(
+        pr0_shape_dropped == 2,
+        f"citations_shape_dropped counts exactly the 2 extensionless, non-trailing-slash, "
+        f"no-'..' spans (got {pr0_shape_dropped}, expected 2)",
+    )
+    check(
+        pr0_ignored_explicit == 3,
+        "citations_ignored_explicit counts every backtick span on a verify:ignore-exempted "
+        "line: 2 (two spans on the prev-line-marker-exempted line) + 1 (one span on the "
+        f"same-line-marker line) = 3 (got {pr0_ignored_explicit})",
+    )
+    check(
+        pr0_has_ignore is True,
+        "pathish_citations reports has_ignore_marker=True for a file containing "
+        "<!-- verify:ignore --> (feeds review_files_with_ignore)",
+    )
+    check(
+        pr0_cited == ["docs/genuinely_missing_file.md"],
+        "shape-dropped and ignored spans are excluded from `cited`; the one genuine, "
+        f"non-ignored, extensioned span is still checked (got {pr0_cited})",
+    )
+
+    # End-to-end round fixture: same text as a real reviews/*.md file, confirming
+    # verify_round/verify_project wire ignored_explicit/shape_dropped/has_ignore
+    # through into the module's `coverage` dict (not just the pure-helper values above).
+    pr0_root = REPO_ROOT / ".tmp" / f"verify-fixture-pr0-{uuid.uuid4().hex}"
+    pr0_round_dir = pr0_root / ".harnessloop" / "goals" / "20260106-001-fixture" / "rounds" / "0001"
+    try:
+        (pr0_round_dir / "evidence").mkdir(parents=True)
+        (pr0_round_dir / "reviews").mkdir(parents=True)
+        (pr0_round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (pr0_round_dir / "reviews" / "pr0.md").write_text(pr0_ignore_shape_text, encoding="utf-8")
+        pr0_violations, pr0_coverage = verify_protocol.verify_project(pr0_root)
+        check(
+            pr0_coverage.get("citations_shape_dropped") == 2,
+            f"verify_project's coverage.citations_shape_dropped == 2 (got {pr0_coverage.get('citations_shape_dropped')})",
+        )
+        check(
+            pr0_coverage.get("citations_ignored_explicit") == 3,
+            f"verify_project's coverage.citations_ignored_explicit == 3 (got {pr0_coverage.get('citations_ignored_explicit')})",
+        )
+        check(
+            pr0_coverage.get("review_files_with_ignore") == 1,
+            f"verify_project's coverage.review_files_with_ignore == 1 for the one review "
+            f"file carrying the marker (got {pr0_coverage.get('review_files_with_ignore')})",
+        )
+        check(
+            any("docs/genuinely_missing_file.md" in v["detail"] for v in pr0_violations),
+            "the one genuine, non-ignored, non-shape-dropped citation is still reported "
+            "dangling-citation (no false negative introduced by the new counters)",
+        )
+        check(
+            not any("ignored_prev_line.py" in v["detail"] or "ignored_same_line.py" in v["detail"] for v in pr0_violations),
+            "ignored spans still never produce a dangling-citation violation",
+        )
+        check(
+            not any("src/pkgdir" in v["detail"] or "@@wiki/kernel" in v["detail"] for v in pr0_violations),
+            "shape-dropped spans still never produce a dangling-citation violation "
+            "(they never entered `cited` at all -- unchanged pre-existing behavior)",
+        )
+    finally:
+        shutil.rmtree(pr0_root, ignore_errors=True)
 
     # -- end-to-end round fixture: locators, nested submodule, suffix fallback, ~//abs exemption --
     th0008_root = REPO_ROOT / ".tmp" / f"verify-fixture-th0008-{uuid.uuid4().hex}"
