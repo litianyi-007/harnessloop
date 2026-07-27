@@ -7,6 +7,13 @@
       "expect_present": ["SCHEMA.md", "kernel/"],
       "subpaths": ["kernel", "research"],
       "approved_by": "user-confirmed <date>"
+    },
+    {
+      "alias": "wiki-kernel",
+      "purpose": "the kernel subtree alone, approved separately and more narrowly",
+      "expect_present": ["facts.md"],
+      "approved_by": "user-confirmed <date>",
+      "nested_under": "wiki"
     }
   ]
 }

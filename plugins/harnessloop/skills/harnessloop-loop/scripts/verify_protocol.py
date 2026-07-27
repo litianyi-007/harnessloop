@@ -422,7 +422,7 @@ _LOCAL_BINDING_FORBIDDEN_KEYS = frozenset({"identity", "available", "optional", 
 # §2.2: the exact key set a versioned root entry may declare. `subpaths` is
 # the only optional one.
 _VERSIONED_ROOT_ALLOWED_KEYS = frozenset(
-    {"alias", "purpose", "expect_present", "subpaths", "approved_by"}
+    {"alias", "purpose", "expect_present", "subpaths", "approved_by", "nested_under"}
 )
 
 
@@ -756,8 +756,9 @@ class ReferenceRoot:
     `canonical` is `None` unless `available` is `True` — every caller must
     check `available` before touching `canonical`, never the reverse.
     `unavailable_reason` is one of `"unbound"`, `"unresolvable"`,
-    `"rejected"`, `"identity-mismatch"`, `"shadow-alias"`, or `None` (only
-    when available) —
+    `"rejected"`, `"identity-mismatch"`, `"shadow-alias"`,
+    `"undeclared-nesting"`, `"nesting-mismatch"`, or `None` (only when
+    available) —
     deliberately a short enum string, never a path (G20: nothing derived
     from this object may leak an absolute path into a violation detail,
     coverage line, or default `--json` output).
@@ -769,6 +770,7 @@ class ReferenceRoot:
         "expect_present",
         "subpaths",
         "approved_by",
+        "nested_under",
         "canonical",
         "available",
         "unavailable_reason",
@@ -781,6 +783,7 @@ class ReferenceRoot:
         expect_present: tuple[str, ...],
         subpaths: tuple[str, ...] | None,
         approved_by: str,
+        nested_under: str | None,
         canonical: Path | None,
         available: bool,
         unavailable_reason: str | None,
@@ -790,6 +793,7 @@ class ReferenceRoot:
         self.expect_present = expect_present
         self.subpaths = subpaths
         self.approved_by = approved_by
+        self.nested_under = nested_under
         self.canonical = canonical
         self.available = available
         self.unavailable_reason = unavailable_reason
@@ -890,6 +894,17 @@ def _load_versioned_roots(path: Path) -> tuple[list[dict], str | None]:
         if not isinstance(approved_by, str) or not approved_by.strip():
             return [], f"{path}: roots[{i}].approved_by must be a non-empty string"
 
+        nested_under = raw.get("nested_under")
+        if nested_under is not None and (
+            not isinstance(nested_under, str) or not ALIAS_RE.match(nested_under)
+        ):
+            return [], (
+                f"{path}: roots[{i}].nested_under, if present, must be an alias matching "
+                f"{ALIAS_RE.pattern}"
+            )
+        if nested_under == alias:
+            return [], f"{path}: roots[{i}].nested_under names its own alias {alias!r}"
+
         entries.append(
             {
                 "alias": alias,
@@ -897,8 +912,30 @@ def _load_versioned_roots(path: Path) -> tuple[list[dict], str | None]:
                 "expect_present": tuple(expect_present),
                 "subpaths": tuple(subpaths) if subpaths is not None else None,
                 "approved_by": approved_by,
+                "nested_under": nested_under,
             }
         )
+
+    # `nested_under` is the one cross-entry reference in this schema, so it is
+    # resolved after every alias is known. A dangling target, or a cycle, is a
+    # whole-file schema error (all-or-nothing, like every other problem here) --
+    # a half-loaded declaration is exactly the ambiguity §2.2 exists to prevent.
+    declared_aliases = {e["alias"] for e in entries}
+    for e in entries:
+        target = e["nested_under"]
+        if target is not None and target not in declared_aliases:
+            return [], (
+                f"{path}: roots[?].nested_under names {target!r}, which is not a declared alias"
+            )
+    parent_of = {e["alias"]: e["nested_under"] for e in entries}
+    for start in parent_of:
+        seen_chain = {start}
+        cur = parent_of[start]
+        while cur is not None:
+            if cur in seen_chain:
+                return [], f"{path}: nested_under forms a cycle involving alias {start!r}"
+            seen_chain.add(cur)
+            cur = parent_of.get(cur)
     return entries, None
 
 
@@ -1155,6 +1192,7 @@ def _load_one_root(
         expect_present=entry["expect_present"],
         subpaths=entry["subpaths"],
         approved_by=entry["approved_by"],
+        nested_under=entry["nested_under"],
     )
 
     if raw_path is None:
@@ -1191,6 +1229,36 @@ def _load_one_root(
                 )
 
     return ReferenceRoot(canonical=canonical, available=True, unavailable_reason=None, **common)
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    """Whether two canonical paths name one directory on this filesystem.
+
+    `os.path.samefile` (st_dev, st_ino) rather than `==`: `Path.__eq__` is
+    string equality and `Path.resolve()` does not case-normalize, so on a
+    case-insensitive volume one directory has many unequal canonical
+    spellings. On OSError (a root that vanished mid-run, a permission
+    problem) this falls back to string equality, which can only ever
+    under-report sameness -- never invent it.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return a == b
+
+
+def _is_strict_descendant(child: Path, ancestor: Path) -> bool:
+    """Whether `child` sits strictly below `ancestor` on this filesystem.
+
+    Walks `child`'s parent chain comparing by `_same_dir`, not by string
+    prefix, for the same reason `_same_dir` exists: `/x/Wiki` is a prefix of
+    neither `/x/wiki/kernel` nor its `.parents` as strings, yet it is that
+    directory's parent. Strict: a directory is never its own descendant.
+    """
+    for parent in child.parents:
+        if _same_dir(parent, ancestor):
+            return True
+    return False
 
 
 def load_reference_roots(
@@ -1359,15 +1427,7 @@ def load_reference_roots(
         for alias_j, root_j in live[i + 1 :]:
             if alias_j in assigned:
                 continue
-            try:
-                same = os.path.samefile(root_i.canonical, root_j.canonical)
-            except OSError:
-                # A root that vanished between resolution and this check is
-                # not evidence of *distinctness*; fall back to canonical
-                # string equality, which can only under-report, never
-                # invent a collision.
-                same = root_i.canonical == root_j.canonical
-            if same:
+            if _same_dir(root_i.canonical, root_j.canonical):
                 groups[idx].append(alias_j)
                 assigned[alias_j] = idx
     for group in sorted(
@@ -1382,6 +1442,7 @@ def load_reference_roots(
                 expect_present=old.expect_present,
                 subpaths=old.subpaths,
                 approved_by=old.approved_by,
+                nested_under=old.nested_under,
                 canonical=None,
                 available=False,
                 unavailable_reason="shadow-alias",
@@ -1399,6 +1460,84 @@ def load_reference_roots(
                 ),
             }
         )
+
+    # Nesting is allowed, but never *silently*. §7 permits one root to sit
+    # inside another; §2.4 forbids shadow aliases because a second name for
+    # an already-declared tree lets a citation read it under a
+    # `purpose`/`approved_by` no reviewer approved for it. Undeclared nesting
+    # achieves exactly that bypass without two aliases ever naming the *same*
+    # directory, so the two clauses only cohere if the overlap is a declared,
+    # diff-reviewable fact: a root with a declared-root ancestor must name its
+    # nearest such ancestor in `nested_under`.
+    #
+    # Nearest, not every ancestor: in a 3-level chain a > b > c, `c` names `b`
+    # and `b` names `a`, which already makes the a-c overlap visible by
+    # transitivity. Requiring `c` to name both would need a list-valued key
+    # for no extra reviewable information.
+    #
+    # Fail-closed on the *descendant* only: the ancestor's own declaration is
+    # complete and correct, and once the descendant is unavailable no two
+    # aliases reach one file. Marking both would punish a correctly-declared
+    # root for a neighbour's omission.
+    live_after_shadow = sorted(
+        ((a, r) for a, r in roots.items() if r.available and r.canonical is not None),
+        key=lambda pair: pair[0],
+    )
+    for alias, root in live_after_shadow:
+        ancestors = [
+            other_alias
+            for other_alias, other in live_after_shadow
+            if other_alias != alias and _is_strict_descendant(root.canonical, other.canonical)
+        ]
+        nearest = None
+        if ancestors:
+            # Nearest = the ancestor that is itself below every other ancestor.
+            nearest = max(
+                ancestors,
+                key=lambda cand: sum(
+                    1
+                    for other in ancestors
+                    if other != cand
+                    and _is_strict_descendant(roots[cand].canonical, roots[other].canonical)
+                ),
+            )
+        declared = root.nested_under
+        problem = None
+        if nearest is not None and declared != nearest:
+            problem = (
+                "reference-root-undeclared-nesting",
+                (
+                    f"reference root '{alias}' resolves inside declared root '{nearest}' but "
+                    f"declares nested_under={declared!r}; nesting is allowed only when it is "
+                    "declared in the versioned file, naming the nearest declared ancestor"
+                ),
+            )
+        elif nearest is None and declared is not None:
+            problem = (
+                "reference-root-nesting-mismatch",
+                (
+                    f"reference root '{alias}' declares nested_under={declared!r} but does not "
+                    "resolve inside that root on this machine"
+                ),
+            )
+        if problem is not None:
+            kind, detail = problem
+            old_root = roots[alias]
+            roots[alias] = ReferenceRoot(
+                alias=old_root.alias,
+                purpose=old_root.purpose,
+                expect_present=old_root.expect_present,
+                subpaths=old_root.subpaths,
+                approved_by=old_root.approved_by,
+                nested_under=old_root.nested_under,
+                canonical=None,
+                available=False,
+                unavailable_reason="undeclared-nesting"
+                if kind == "reference-root-undeclared-nesting"
+                else "nesting-mismatch",
+            )
+            # G20: alias names only, never the host path either root lives at.
+            violations.append({"round": str(project), "kind": kind, "detail": detail})
     return roots, violations
 
 

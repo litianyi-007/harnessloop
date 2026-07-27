@@ -4279,6 +4279,116 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g22_root, ignore_errors=True)
 
+    print("  G23: nesting is allowed but never silent (user ruling 2026-07-27; T-069 F1.2)")
+    g23_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g23-"))
+    try:
+        project = _pr3_project(g23_root)
+        wiki = _pr3_wiki_root(g23_root)
+        (wiki / "kernel" / "deep").mkdir(parents=True, exist_ok=True)
+        (wiki / "kernel" / "deep" / "x.md").write_text("# x\n", encoding="utf-8")
+        base = _pr3_standard_declaration(wiki)["roots"][0]
+
+        def _g23(label: str, roots_spec: list[dict], bind: dict[str, Path]):
+            _pr3_declare(project, {"version": 1, "roots": roots_spec})
+            _pr3_bind(
+                project,
+                {"version": 1, "bindings": {a: {"path": str(p)} for a, p in bind.items()}},
+            )
+            return verify_protocol.load_reference_roots(project)
+
+        parent = {**base, "alias": "wiki", "expect_present": ["SCHEMA.md"]}
+        child = {**base, "alias": "kern", "expect_present": ["facts.md"], "approved_by": "other"}
+        grand = {**base, "alias": "dp", "expect_present": ["x.md"], "approved_by": "third"}
+        bind3 = {"wiki": wiki, "kern": wiki / "kernel", "dp": wiki / "kernel" / "deep"}
+
+        roots, violations = _g23("undeclared", [parent, child], {k: bind3[k] for k in ("wiki", "kern")})
+        check(
+            roots["wiki"].available
+            and roots["kern"].unavailable_reason == "undeclared-nesting"
+            and [v["kind"] for v in violations] == ["reference-root-undeclared-nesting"],
+            "G23a: an undeclared nested root is fail-closed while its correctly-declared ancestor "
+            "stays available -- the omission belongs to the descendant, not its neighbour",
+        )
+        roots, violations = _g23(
+            "declared", [parent, {**child, "nested_under": "wiki"}], {k: bind3[k] for k in ("wiki", "kern")}
+        )
+        check(
+            roots["wiki"].available and roots["kern"].available and violations == [],
+            "G23b: once the nesting is declared in the versioned file, both roots are available "
+            "and the gate is clean -- the ruling permits nesting, it only forbids hiding it",
+        )
+        roots, violations = _g23(
+            "3-level",
+            [parent, {**child, "nested_under": "wiki"}, {**grand, "nested_under": "kern"}],
+            bind3,
+        )
+        check(
+            all(roots[a].available for a in ("wiki", "kern", "dp")) and violations == [],
+            "G23c: a 3-level chain where each root names its NEAREST declared ancestor is clean -- "
+            "the a-c overlap is visible by transitivity, no list-valued key needed",
+        )
+        roots, violations = _g23(
+            "skip-nearest",
+            [parent, {**child, "nested_under": "wiki"}, {**grand, "nested_under": "wiki"}],
+            bind3,
+        )
+        check(
+            roots["dp"].unavailable_reason == "undeclared-nesting"
+            and any(v["kind"] == "reference-root-undeclared-nesting" for v in violations),
+            "G23d: naming a farther ancestor instead of the nearest one is still undeclared "
+            "nesting -- otherwise the kern-dp overlap would stay invisible",
+        )
+        sibling = g23_root / "sibling"
+        (sibling / "kernel").mkdir(parents=True, exist_ok=True)
+        (sibling / "SCHEMA.md").write_text("# s\n", encoding="utf-8")
+        roots, violations = _g23(
+            "mismatch",
+            [parent, {**child, "expect_present": ["SCHEMA.md"], "nested_under": "wiki"}],
+            {"wiki": wiki, "kern": sibling},
+        )
+        check(
+            roots["kern"].unavailable_reason == "nesting-mismatch"
+            and any(v["kind"] == "reference-root-nesting-mismatch" for v in violations),
+            "G23e: a root claiming nested_under a tree it does not actually sit inside on this "
+            "machine is fail-closed -- the declaration must be true, not merely present",
+        )
+        for label, spec in (
+            ("dangling target", [parent, {**child, "nested_under": "nope"}]),
+            (
+                "cycle",
+                [
+                    {**parent, "nested_under": "kern"},
+                    {**child, "expect_present": ["SCHEMA.md"], "nested_under": "wiki"},
+                ],
+            ),
+            ("self-reference", [parent, {**child, "nested_under": "kern"}]),
+        ):
+            roots, violations = _g23(label, spec, {k: bind3[k] for k in ("wiki", "kern")})
+            check(
+                roots == {} and any(v["kind"] == "reference-roots-invalid" for v in violations),
+                f"G23f ({label}): a structurally broken nested_under is a whole-file schema error "
+                "-- all-or-nothing, never a half-loaded declaration",
+            )
+
+        # The payoff of comparing by samefile rather than by string prefix.
+        alt_parent = wiki.parent / wiki.name.swapcase()
+        if alt_parent.exists() and str(alt_parent) != str(wiki):
+            roots, violations = _g23(
+                "case-variant ancestry",
+                [parent, child],
+                {"wiki": wiki, "kern": alt_parent / "kernel"},
+            )
+            check(
+                roots["kern"].unavailable_reason == "undeclared-nesting",
+                "G23g: ancestry is detected even when parent and child are spelled with different "
+                "case -- a string-prefix test would see two unrelated trees and pass (T-069 F1.1 "
+                "applied one layer up)",
+            )
+        else:
+            print("  (skipped G23g: case-sensitive volume)")
+    finally:
+        shutil.rmtree(g23_root, ignore_errors=True)
+
     print("  G19-strengthened: no escape knob, by shape rather than by three literal flag names")
     src = (LOOP_SCRIPTS / "verify_protocol.py").read_text(encoding="utf-8")
     parser_args = set(re.findall(r"add_argument\(\s*[\"'](--[a-z0-9-]+)[\"']", src))
