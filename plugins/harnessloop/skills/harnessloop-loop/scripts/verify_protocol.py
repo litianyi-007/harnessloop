@@ -756,7 +756,8 @@ class ReferenceRoot:
     `canonical` is `None` unless `available` is `True` — every caller must
     check `available` before touching `canonical`, never the reverse.
     `unavailable_reason` is one of `"unbound"`, `"unresolvable"`,
-    `"rejected"`, `"identity-mismatch"`, or `None` (only when available) —
+    `"rejected"`, `"identity-mismatch"`, `"shadow-alias"`, or `None` (only
+    when available) —
     deliberately a short enum string, never a path (G20: nothing derived
     from this object may leak an absolute path into a violation detail,
     coverage line, or default `--json` output).
@@ -1273,6 +1274,59 @@ def load_reference_roots(
         # "unbound" produces no G1-G6 violation here -- only the G7
         # `external-root-unavailable` violation the caller adds once,
         # project-wide, for every unavailable alias regardless of reason.
+
+    # G21 (shadow alias, §2.4 "禁止两 alias 指向同一 canonical root"): two
+    # aliases resolving to the same canonical root is an audit-bypass face,
+    # not a convenience. `reference-roots.json` is the tracked, reviewable
+    # record of *what external trees this project reads*; a second alias
+    # bound to an already-declared tree lets a citation read that tree under
+    # a name whose `purpose`/`approved_by` were never reviewed for it.
+    #
+    # This must run here rather than in `_load_versioned_roots`: the tracked
+    # file holds no paths at all (§2.2 zero-absolute-path), so "same root"
+    # is only knowable after local binding + canonical resolution. Comparing
+    # the declared strings would be the string-comparison mistake G4 already
+    # has teeth against -- two different literals (one a symlink to the
+    # other, `.` / `..` segments, a trailing slash) can name one directory.
+    #
+    # Fail-closed: every alias in a colliding group is marked unavailable,
+    # matching how `rejected`/`identity-mismatch` behave. Silently keeping
+    # one of them (say, the first) would make which alias survives depend on
+    # declaration order -- the same "shape decides the outcome at runtime"
+    # anti-pattern §2.4's last paragraph forbids.
+    by_canonical: dict[Path, list[str]] = {}
+    for alias, root in roots.items():
+        if root.available and root.canonical is not None:
+            by_canonical.setdefault(root.canonical, []).append(alias)
+    for group in sorted(
+        (sorted(a) for a in by_canonical.values() if len(a) > 1),
+        key=lambda g: g[0],
+    ):
+        for alias in group:
+            old = roots[alias]
+            roots[alias] = ReferenceRoot(
+                alias=old.alias,
+                purpose=old.purpose,
+                expect_present=old.expect_present,
+                subpaths=old.subpaths,
+                approved_by=old.approved_by,
+                canonical=None,
+                available=False,
+                unavailable_reason="shadow-alias",
+            )
+        violations.append(
+            {
+                "round": str(project),
+                "kind": "reference-root-shadow-alias",
+                # G20: aliases only -- naming the shared directory here would
+                # leak an absolute host path into a violation detail.
+                "detail": (
+                    f"reference roots {group} resolve to the same canonical root "
+                    "(shadow alias; forbidden by the one-alias-one-root rule); "
+                    "all of them are marked unavailable"
+                ),
+            }
+        )
     return roots, violations
 
 

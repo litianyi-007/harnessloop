@@ -3045,7 +3045,7 @@ def validate_protocol_gates() -> None:
     )
 
     # =========================================================================
-    # PR-3 (external-citation-base-spec-20260727.md §2-3, v0.21.0): external
+    # PR-3 (external-citation-base-spec-20260727.md §2-3, v0.21.0; §2.4 shadow-alias guard added v0.22.0): external
     # reference roots. G1-G16, G19, G20 below. Every fixture is a fresh
     # `tempfile.mkdtemp()` tree (never `~`, never a hardcoded real host
     # directory -- G4's own use of the live `Path.home()` value is the one
@@ -3938,6 +3938,115 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g0_root, ignore_errors=True)
+
+    print("  G21: two aliases resolving to one canonical root (shadow alias) -> both unavailable")
+    g21_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g21-"))
+    try:
+        project = _pr3_project(g21_root)
+        wiki = _pr3_wiki_root(g21_root)
+        base_decl = _pr3_standard_declaration(wiki)
+        two_alias_decl = {
+            "version": 1,
+            "roots": [
+                base_decl["roots"][0],
+                {**base_decl["roots"][0], "alias": "wiki2", "approved_by": "someone-else"},
+            ],
+        }
+        _pr3_declare(project, two_alias_decl)
+
+        # Control: two aliases at genuinely different roots stay available --
+        # G21 must key on collision, not on "more than one alias declared".
+        other = g21_root / "other-wiki"
+        (other / "kernel").mkdir(parents=True, exist_ok=True)
+        (other / "SCHEMA.md").write_text("# other\n", encoding="utf-8")
+        (other / "kernel" / "facts.md").write_text("# facts\n", encoding="utf-8")
+        _pr3_bind(
+            project,
+            {"version": 1, "bindings": {"wiki": {"path": str(wiki)}, "wiki2": {"path": str(other)}}},
+        )
+        roots, violations = verify_protocol.load_reference_roots(project)
+        check(
+            roots["wiki"].available
+            and roots["wiki2"].available
+            and not any(v["kind"] == "reference-root-shadow-alias" for v in violations),
+            "G21 control: two aliases bound to two distinct roots are both available "
+            "(the guard keys on canonical collision, not on alias count)",
+        )
+
+        def _g21_collision(label: str, second_path: str) -> None:
+            _pr3_bind(
+                project,
+                {
+                    "version": 1,
+                    "bindings": {"wiki": {"path": str(wiki)}, "wiki2": {"path": second_path}},
+                },
+            )
+            roots, violations = verify_protocol.load_reference_roots(project)
+            shadow = [v for v in violations if v["kind"] == "reference-root-shadow-alias"]
+            check(
+                roots["wiki"].unavailable_reason == "shadow-alias"
+                and roots["wiki2"].unavailable_reason == "shadow-alias"
+                and roots["wiki"].canonical is None
+                and roots["wiki2"].canonical is None
+                and len(shadow) == 1,
+                f"G21 ({label}): every alias in a colliding group is unavailable, with exactly "
+                "one violation for the group -- not one survivor decided by declaration order",
+            )
+            # `all(...)` over a possibly-empty list, not `shadow[0]`: when the
+            # guard is broken this sub-check must report a clean FAIL like the
+            # one above, not raise IndexError and abort every later check.
+            check(
+                bool(shadow)
+                and all(
+                    str(wiki) not in v["detail"] and str(g21_root) not in v["detail"]
+                    for v in shadow
+                ),
+                f"G21 ({label}) + G20: the shadow-alias detail names aliases only, never the "
+                "shared directory's host path",
+            )
+
+        _g21_collision("identical declared string", str(wiki))
+        _g21_collision("trailing slash", str(wiki) + "/")
+        _g21_collision("dot segment", str(wiki) + "/./")
+        _g21_collision("parent-then-back", str(wiki / "kernel" / ".." ))
+        if hasattr(os, "symlink"):
+            link = g21_root / "wiki-link"
+            if not link.exists():
+                link.symlink_to(wiki, target_is_directory=True)
+            _g21_collision("symlink to the same tree", str(link))
+            check(
+                str(link) != str(wiki),
+                "G21 mutation control: the two declared strings are literally different -- only "
+                "canonical resolution exposes the collision; a string comparison would miss it",
+            )
+        else:
+            print("  (skipped: os.symlink unavailable on this platform)")
+
+        # End-to-end: a shadowed alias must not silently keep resolving citations.
+        _pr3_bind(
+            project,
+            {"version": 1, "bindings": {"wiki": {"path": str(wiki)}, "wiki2": {"path": str(wiki)}}},
+        )
+        _pr3_write_review(project, "See `@@wiki/kernel/facts.md` for the fact.\n")
+        result = subprocess.run(
+            [sys.executable, str(LOOP_SCRIPTS / "verify_protocol.py"), "--project", str(project), "--json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        parsed = json.loads(result.stdout)
+        kinds = [v["kind"] for v in parsed["violations"]]
+        check(
+            result.returncode != 0
+            and "reference-root-shadow-alias" in kinds
+            and "external-citation-unverifiable" in kinds
+            and parsed["coverage"]["external_citations_resolved"] == 0,
+            "G21 end-to-end: a citation through a shadowed alias resolves nothing and the gate "
+            "fails -- shadowing is fail-closed, not a silently-tolerated duplicate declaration",
+        )
+    finally:
+        shutil.rmtree(g21_root, ignore_errors=True)
 
 
 def validate_round_cost_smoke() -> None:
