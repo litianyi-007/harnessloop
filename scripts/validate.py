@@ -4389,6 +4389,114 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g23_root, ignore_errors=True)
 
+    print("  G23h: G7 is emitted on both of verify_project's exits, not just the round-walking one")
+    g23h_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g23h-"))
+    try:
+        proj = _pr3_project(g23h_root)
+        _pr3_declare(proj, _pr3_standard_declaration(g23h_root / "wiki"))  # declared, never bound
+        results = {}
+        for label, keep_goals in (("with-goals", True), ("no-goals", False)):
+            if not keep_goals:
+                shutil.rmtree(proj / ".harnessloop" / "goals", ignore_errors=True)
+            out = subprocess.run(
+                [
+                    sys.executable,
+                    str(LOOP_SCRIPTS / "verify_protocol.py"),
+                    "--project",
+                    str(proj),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            parsed = json.loads(out.stdout)
+            results[label] = (
+                out.returncode,
+                sorted({v["kind"] for v in parsed["violations"]}),
+                parsed["coverage"]["external_roots_declared"],
+            )
+        check(
+            results["with-goals"] == results["no-goals"]
+            and results["no-goals"][0] != 0
+            and "external-root-unavailable" in results["no-goals"][1],
+            "G23h: an unbound declared root fails the gate identically whether or not a goals/ "
+            "directory exists -- exit code must not depend on a project having rounds yet "
+            "(T-070 residual)",
+        )
+    finally:
+        shutil.rmtree(g23h_root, ignore_errors=True)
+
+    print("  G24: identity predicates, tested portably (the case fixtures above skip on a case-sensitive volume)")
+    g24_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g24-"))
+    try:
+        # G22a and G23g reproduce the real hole, but only on a case-insensitive
+        # volume -- on case-sensitive CI they skip, leaving that hole unguarded
+        # there (T-070 residual). These checks test the same two predicates
+        # behaviorally on every platform, using a symlink to produce what a
+        # wrong-case spelling produces: two unequal strings naming one
+        # directory. They do not replace G22a/G23g (a symlink is not a
+        # case-fold), they make the predicates' contract non-skippable.
+        target = g24_root / "tree"
+        (target / "kernel").mkdir(parents=True)
+        if hasattr(os, "symlink"):
+            link = g24_root / "tree-link"
+            link.symlink_to(target, target_is_directory=True)
+            check(
+                str(link) != str(target) and Path(link) != Path(target),
+                "G24 premise: the two spellings are unequal as strings and as Path objects",
+            )
+            check(
+                verify_protocol._same_dir(link, target),
+                "G24a: _same_dir sees one directory through two unequal spellings -- this is the "
+                "predicate G22a exercises via case, tested here without needing a "
+                "case-insensitive volume",
+            )
+            check(
+                verify_protocol._is_strict_descendant(target / "kernel", link),
+                "G24b: ancestry holds through an unequal spelling of the ancestor -- the predicate "
+                "G23g exercises via case (a string-prefix test returns False here)",
+            )
+            check(
+                not str(target / "kernel").startswith(str(link)),
+                "G24b mutation control: a string-prefix implementation genuinely fails this "
+                "input -- G24b is not passing for an unrelated reason",
+            )
+        else:
+            print("  (skipped G24a/b: os.symlink unavailable)")
+        check(
+            verify_protocol._same_dir(g24_root / "gone-a", g24_root / "gone-b") is True,
+            "G24c: an unanswerable comparison resolves as *same* -- fail-closed. 'We could not "
+            "establish these are different directories' must never read as 'they are different' "
+            "(T-070 residual)",
+        )
+        check(
+            verify_protocol._same_dir(g24_root / "gone-a", g24_root / "gone-b", on_error=False)
+            is False,
+            "G24c control: the fail direction is a parameter, so G24c is asserting the callers' "
+            "chosen direction rather than the only direction the function can return",
+        )
+        # Platform-independent backstop for the call sites themselves. Weaker
+        # teeth than the fixtures above -- it asserts shape, so an equivalent
+        # rewrite could trip it -- but it is the only layer that still runs on
+        # a case-sensitive host, and its single job is to catch a refactor back
+        # to canonical-string comparison.
+        guard_src = inspect.getsource(verify_protocol.load_reference_roots)
+        desc_src = inspect.getsource(verify_protocol._is_strict_descendant)
+        check(
+            "_same_dir(" in guard_src and "_same_dir(" in desc_src,
+            "G24d (shape backstop): both the shadow-alias grouping and the ancestry walk go "
+            "through _same_dir rather than comparing canonical paths directly",
+        )
+        check(
+            "os.path.samefile" in inspect.getsource(verify_protocol._same_dir),
+            "G24d (shape backstop): _same_dir is implemented on filesystem identity, not on "
+            "string equality",
+        )
+    finally:
+        shutil.rmtree(g24_root, ignore_errors=True)
+
     print("  G19-strengthened: no escape knob, by shape rather than by three literal flag names")
     src = (LOOP_SCRIPTS / "verify_protocol.py").read_text(encoding="utf-8")
     parser_args = set(re.findall(r"add_argument\(\s*[\"'](--[a-z0-9-]+)[\"']", src))

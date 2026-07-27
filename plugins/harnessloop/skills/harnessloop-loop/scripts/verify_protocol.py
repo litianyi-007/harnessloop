@@ -1231,20 +1231,27 @@ def _load_one_root(
     return ReferenceRoot(canonical=canonical, available=True, unavailable_reason=None, **common)
 
 
-def _same_dir(a: Path, b: Path) -> bool:
+def _same_dir(a: Path, b: Path, *, on_error: bool = True) -> bool:
     """Whether two canonical paths name one directory on this filesystem.
 
     `os.path.samefile` (st_dev, st_ino) rather than `==`: `Path.__eq__` is
     string equality and `Path.resolve()` does not case-normalize, so on a
     case-insensitive volume one directory has many unequal canonical
-    spellings. On OSError (a root that vanished mid-run, a permission
-    problem) this falls back to string equality, which can only ever
-    under-report sameness -- never invent it.
+    spellings.
+
+    `on_error` is what an unanswerable comparison returns, and every caller
+    passes the *fail-closed* answer. An earlier version fell back to string
+    equality here, reasoning it "can only under-report sameness, never
+    invent it" -- but under-reporting sameness is precisely how a shadow
+    pair or an undeclared nesting slips through, so that fallback was
+    fail-open in a guard whose whole job is to fail closed (T-070 residual).
+    "We could not establish that these are different directories" must
+    never read as "they are different".
     """
     try:
         return os.path.samefile(a, b)
     except OSError:
-        return a == b
+        return on_error
 
 
 def _is_strict_descendant(child: Path, ancestor: Path) -> bool:
@@ -1258,6 +1265,21 @@ def _is_strict_descendant(child: Path, ancestor: Path) -> bool:
     for parent in child.parents:
         if _same_dir(parent, ancestor):
             return True
+    return False
+
+
+def _cannot_compare(a: Path, b: Path) -> bool:
+    """Whether `_same_dir(a, b)` had to guess rather than measure.
+
+    Used only to word the violation honestly: a fail-closed verdict reached
+    because one of the two directories could not be stat'ed this run is a
+    different fact from one reached because they genuinely share an inode,
+    and a reader chasing the violation deserves to know which.
+    """
+    try:
+        os.path.samefile(a, b)
+    except OSError:
+        return True
     return False
 
 
@@ -1454,9 +1476,21 @@ def load_reference_roots(
                 # G20: aliases only -- naming the shared directory here would
                 # leak an absolute host path into a violation detail.
                 "detail": (
-                    f"reference roots {group} resolve to the same canonical root "
+                    f"reference roots {group} resolve to the same root "
                     "(shadow alias; forbidden by the one-alias-one-root rule); "
                     "all of them are marked unavailable"
+                    + (
+                        " — note: at least one pair could not be compared "
+                        "(the directory could not be stat'ed this run), and an "
+                        "unanswerable comparison is resolved as a collision"
+                        if any(
+                            _cannot_compare(roots[x].canonical, roots[y].canonical)
+                            for x in group
+                            for y in group
+                            if x < y and roots[x].canonical and roots[y].canonical
+                        )
+                        else ""
+                    )
                 ),
             }
         )
@@ -2588,6 +2622,29 @@ def _empty_coverage() -> dict:
     }
 
 
+def _unavailable_root_violations(project: Path, roots: dict) -> list[dict]:
+    """G7, once per unavailable alias, project-wide.
+
+    A single implementation deliberately shared by both of `verify_project`'s
+    exits (the normal round-walking path and the no-`goals/` early return) so
+    the two can never drift into disagreeing about whether an unavailable
+    root is reportable -- the exact drift T-070 found.
+    """
+    return [
+        {
+            "round": str(project),
+            "kind": "external-root-unavailable",
+            "detail": (
+                f"reference root '{alias}' is unavailable "
+                f"({root.unavailable_reason}); every citation using this alias "
+                "will be reported external-citation-unverifiable"
+            ),
+        }
+        for alias, root in roots.items()
+        if not root.available
+    ]
+
+
 def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
     coverage = _empty_coverage()
@@ -2602,6 +2659,14 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         roots, root_violations = load_reference_roots(project)
         coverage["external_roots_declared"] = len(roots)
         coverage["external_roots_available"] = sum(1 for r in roots.values() if r.available)
+        # G7 too, on exactly the same terms as the round-walking path below.
+        # Emitting the declaration's own G1-G6 problems here but not its
+        # unavailable-root problems made the same project with the same
+        # declaration exit 0 or 1 depending only on whether a `goals/`
+        # directory happened to exist -- an unbound root passed silently in
+        # a fresh project, which is when it is most likely to be wrong
+        # (T-070 residual).
+        root_violations.extend(_unavailable_root_violations(project, roots))
         return root_violations, coverage
     violations: list[dict] = []
 
@@ -2637,19 +2702,7 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     # unavailable alias, also project-level, immediately below.
     roots, root_violations = load_reference_roots(project, verify_identity=True)
     violations.extend(root_violations)
-    for alias, root in roots.items():
-        if not root.available:
-            violations.append(
-                {
-                    "round": str(project),
-                    "kind": "external-root-unavailable",
-                    "detail": (
-                        f"reference root '{alias}' is unavailable "
-                        f"({root.unavailable_reason}); every citation using this alias "
-                        "will be reported external-citation-unverifiable"
-                    ),
-                }
-            )
+    violations.extend(_unavailable_root_violations(project, roots))
 
     # Built once per project run (not per round/citation) — see
     # `build_suffix_index` for why this matters for performance.
