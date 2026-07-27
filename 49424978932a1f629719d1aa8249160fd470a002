@@ -1,0 +1,79 @@
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  0000019fa35ed528 1-2688
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_ad22d3abdb4623 4051-4296
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  0000019fa35ed528 1-567
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "49424978932a1f629719d1aa8249160fd470a002",
+  "prompts": {
+    "s_c587ecf7bbc3e2::t_5487a13fb21b56": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "s_c587ecf7bbc3e2::t_1f280df16c9af0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "s_c587ecf7bbc3e2::t_ad22d3abdb4623": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 246,
+      "total_deletions": 0,
+      "accepted_lines": 246,
+      "overriden_lines": 0
+    },
+    "s_c587ecf7bbc3e2::t_d6d2c089296f7d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019fa35ed528": {
+      "agent_id": {
+        "tool": "claude",
+        "model": "claude-opus-5",
+        "id": "ai-thread-claude-claude-opus-5-1785152329000"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 3255,
+      "total_deletions": 0,
+      "accepted_lines": 3255,
+      "overriden_lines": 0
+    }
+  }
+}
