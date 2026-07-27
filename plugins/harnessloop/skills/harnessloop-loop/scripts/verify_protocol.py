@@ -40,8 +40,10 @@ This script enforces only machine-checkable rules:
   correctly instead of being flagged as dangling).
 
   Before existence is checked, a trailing locator suffix is stripped from
-  the citation: `:<line>`, `:<start>-<end>`, or `::<anchor>` (see
-  `strip_locator_suffix`). Reviewers routinely cite `path/to/file.py:123`
+  the citation: `:<line>`, `:<start>-<end>`, a comma-separated multi-range
+  (`:<start>-<end>,<start>-<end>,...`, e.g.
+  `app/kernel-client/swift/X.swift:44-46,443-507` — PR-1), or `::<anchor>`
+  (see `strip_locator_suffix`). Reviewers routinely cite `path/to/file.py:123`
   or `doc.md::some-anchor` — the locator addresses a position *within* an
   already-real file, it is not part of the file's path, and checking the
   literal locator-suffixed string against the filesystem always fails.
@@ -324,9 +326,14 @@ WINDOWS_DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:/")
 
 # Trailing locator suffixes stripped before existence checking: `::anchor`
 # (checked first, since it is the more specific shape) and `:line` /
-# `:start-end`. See `strip_locator_suffix`.
+# `:start-end`, optionally repeated as a comma-separated list of ranges
+# (`:44-46,443-507`) — reviewers commonly cite several disjoint spans in one
+# file this way. The comma-group is optional and repeatable
+# (`(?:,\d+(?:-\d+)?)*`), so a single `:123` or `:44-46` (zero repeats)
+# matches exactly as before this was added — this is a strict superset of
+# the prior pattern, not a replacement shape. See `strip_locator_suffix`.
 ANCHOR_SUFFIX_RE = re.compile(r"::[^:]+$")
-LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?$")
+LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$")
 
 # B2a review-declaration gate (see `check_review_declaration`): `Review:
 # none — <reason>` — the "none" token, an optional dash-like separator
@@ -499,17 +506,25 @@ def _looks_like_out_of_project(cleaned: str) -> bool:
 
 
 def strip_locator_suffix(cleaned: str) -> str:
-    """Strip a trailing `::<anchor>`, `:<line>`, or `:<start>-<end>` locator.
+    """Strip a trailing `::<anchor>`, `:<line>`, `:<start>-<end>`, or
+    comma-separated multi-range (`:<start>-<end>,<start>-<end>,...`) locator.
 
     Reviewers commonly cite a position *within* a file rather than just the
     file itself: `plugins/foo/scripts/check_setup.py:123` (a line number),
-    `docs/x.md:10-20` (a line range), or `.hopper/tasks/foo.md::root` (a
-    named anchor). The locator is not part of the path — checking the
-    literal locator-suffixed string against the filesystem always fails
-    even when the file plainly exists. The `::anchor` form is tried first
-    since it is the more specific shape (and would otherwise be partially
-    consumed by the line-number pattern if the anchor itself looked
-    numeric). Returns `cleaned` unchanged if neither suffix is present.
+    `docs/x.md:10-20` (a line range), `.hopper/tasks/foo.md::root` (a named
+    anchor), or `app/kernel-client/swift/X.swift:44-46,443-507` (several
+    disjoint ranges in one citation — PR-1, external-citation-base-spec-
+    20260727.md §5: measured against the fair proxy corpus, this comma-
+    separated extension alone resolves 10 previously-dangling citations, 7
+    of them in the implementation-era subset — the same implementation-era
+    count the entire external-reference-base protocol surface would have
+    resolved, at a cost of 3 characters instead of ~500 LOC and a new trust
+    domain). The locator is not part of the path — checking the literal
+    locator-suffixed string against the filesystem always fails even when
+    the file plainly exists. The `::anchor` form is tried first since it is
+    the more specific shape (and would otherwise be partially consumed by
+    the line-number pattern if the anchor itself looked numeric). Returns
+    `cleaned` unchanged if neither suffix is present.
     """
     match = ANCHOR_SUFFIX_RE.search(cleaned)
     if match:
@@ -1449,7 +1464,8 @@ def main() -> int:
             "declared in the project's .gitmodules (canonical-containment-checked: a path "
             "or .gitmodules entry that would resolve outside the project — including via "
             "a project-internal symlink or a symlink-then-'..' round-trip — is never "
-            "treated as resolved). A trailing :<line>, :<start>-<end>, or ::<anchor> "
+            "treated as resolved). A trailing :<line>, :<start>-<end> (optionally repeated "
+            "as a comma-separated multi-range, e.g. :44-46,443-507), or ::<anchor> "
             "locator is stripped before checking. A citation still unresolved after all "
             "of the above is reported as dangling-citation unconditionally (T-064: a "
             "path-suffix match is no longer a resolution path); if that citation has "

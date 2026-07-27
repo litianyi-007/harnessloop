@@ -968,6 +968,26 @@ def validate_protocol_gates() -> None:
         "strip_locator_suffix leaves a locator-free path unchanged",
     )
 
+    # PR-1 (external-citation-base-spec-20260727.md §5): LINE_SUFFIX_RE extended
+    # to a comma-separated multi-range locator, e.g. `:44-46,443-507`. The four
+    # checks above (single :<line>, :<start>-<end>, ::<anchor>, locator-free) are
+    # re-asserted unchanged immediately above this block -- this is a strict
+    # regex superset, not a replacement shape.
+    check(
+        verify_protocol.strip_locator_suffix(
+            "app/kernel-client/swift/X.swift:44-46,443-507"
+        )
+        == "app/kernel-client/swift/X.swift",
+        "strip_locator_suffix (PR-1) strips a comma-separated multi-range locator",
+    )
+    check(
+        verify_protocol.strip_locator_suffix(
+            "app/kernel-client/swift/X.swift:1,44-46,443-507,900"
+        )
+        == "app/kernel-client/swift/X.swift",
+        "strip_locator_suffix (PR-1) strips a 4-segment mix of bare lines and ranges",
+    )
+
     # -- suffix_unique_match: unit teeth (segment comparison, >=2 segments, uniqueness,
     # and TH-0008 REWORK: match-time re-verification + trailing-slash directory semantics) --
     # Real files on disk this time (not a hand-built fake index) -- suffix_unique_match
@@ -1376,6 +1396,49 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(th0008_root, ignore_errors=True)
+
+    # PR-1 (external-citation-base-spec-20260727.md §5): end-to-end round
+    # fixture for the comma-separated multi-range locator. Positive: after
+    # stripping `:44-46,443-507`, the bare path resolves to a real file ->
+    # not dangling. Negative: the same locator shape on a path that does not
+    # exist -> still dangling-citation (the locator strip must never
+    # manufacture a false pass on a genuinely missing file).
+    print("  PR-1: comma-separated multi-range locator (:44-46,443-507)")
+    multirange_root = REPO_ROOT / ".tmp" / f"verify-fixture-multirange-{uuid.uuid4().hex}"
+    round_dir_mr = multirange_root / ".harnessloop" / "goals" / "20260107-001-fixture" / "rounds" / "0001"
+    try:
+        (round_dir_mr / "evidence").mkdir(parents=True)
+        (round_dir_mr / "reviews").mkdir(parents=True)
+        (round_dir_mr / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (multirange_root / "app" / "kernel-client" / "swift").mkdir(parents=True)
+        (multirange_root / "app" / "kernel-client" / "swift" / "X.swift").write_text(
+            "// real swift file\n" * 600, encoding="utf-8"
+        )
+        (round_dir_mr / "reviews" / "multirange.md").write_text(
+            "Multi-range locator on a real file, must resolve (not dangling):\n"
+            "- `app/kernel-client/swift/X.swift:44-46,443-507`\n"
+            "\n"
+            "Multi-range locator on a file that does not exist, must stay dangling:\n"
+            "- `app/kernel-client/swift/DoesNotExist.swift:1-2,10-20`\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = verify_protocol.verify_project(multirange_root)
+        details = " | ".join(v["detail"] for v in violations)
+        check(
+            "kernel-client/swift/X.swift:44-46,443-507" not in details,
+            "PR-1: a multi-range-locator citation on a real file resolves (not dangling)",
+        )
+        check(
+            any("DoesNotExist.swift" in v["detail"] for v in violations),
+            "PR-1: a multi-range-locator citation on a nonexistent file still reports dangling-citation",
+        )
+    finally:
+        shutil.rmtree(multirange_root, ignore_errors=True)
 
     # TH-0008 REWORK counterexample 4/5: noise_pruned_ambiguity. Two real files
     # share the cited suffix's last two segments -- one under an ordinary source
