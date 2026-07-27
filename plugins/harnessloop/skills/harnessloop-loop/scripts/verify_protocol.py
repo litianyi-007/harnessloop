@@ -6,7 +6,21 @@ This script enforces only machine-checkable rules:
 
 - Rule A (scope-lock containment): every file under a round's evidence/ and
   reviews/ directories must fall inside a path allowed by that round's
-  scope-lock.md "Allowed Changes" section.
+  scope-lock.md "Allowed Changes" section. Before either directory (or the
+  round, goal, or goals directory above them) is ever listed, each is
+  containment-checked in its own right: a symlink at any of those levels —
+  `evidence/`, `reviews/`, the round directory itself, or a goal directory —
+  is never followed to read whatever it points at (`round-container-escapes-
+  project`); every entry found while walking a clean container is itself
+  symlink-checked before any `is_file()` filtering, so a symlinked file, a
+  symlinked directory, and a dangling symlink are all reported
+  (`round-artifact-is-symlink`) rather than silently included or silently
+  dropped. The per-file "is this allowed" check itself also ANDs the
+  existing lexical scope-lock match with canonical project containment, so a
+  file lexically inside `reviews/` whose real target escapes the project
+  still fails even if some future change ever bypassed the container/entry
+  checks above (G17, external-citation-base-spec-20260727.md §3.1 — see
+  `_container_escape_violation` / `_scan_round_artifacts` / `_is_contained`).
 - Rule B (citation existence): every backtick-quoted span in a round's
   review files that looks like a project-relative path must exist in the
   project. A span is exempt from this check (not treated as a citation) if
@@ -406,9 +420,16 @@ def _is_contained(candidate: Path, project: Path) -> bool:
     every candidate. Used by every containment check that guards Rule B
     citation resolution: `_resolve_in_project` (explicit-base and suffix
     resolution), `submodule_roots` (`.gitmodules` `path =` acceptance), and
-    `suffix_unique_match` (the unique-hit's specific path) — all three must
-    share this one definition so a symlink escape cannot slip through
-    whichever path is not updated.
+    `suffix_unique_match` (the unique-hit's specific path) — and, since G17
+    (external-citation-base-spec-20260727.md §3.1), a fourth call site: Rule
+    A's own per-file `allowed` check in `verify_round`, which ANDs the
+    existing lexical `is_under(file_path, base / span)` scope-lock test with
+    `_is_contained(file_path, project)` so a file lexically inside
+    `reviews/` or `evidence/` whose real target is a symlink escape out of
+    the project (fixture A: `reviews/ext.md -> <outside>`) still fails
+    scope-lock containment even though its *path string* never leaves
+    `reviews/`. All four must share this one definition so a symlink escape
+    cannot slip through whichever call site is not updated.
     """
     return is_under(_canonical(candidate), _canonical(project))
 
@@ -1234,6 +1255,101 @@ def check_review_declaration(
     return violations, review_state
 
 
+def _container_escape_violation(
+    container: Path, project: Path, round_label: Path
+) -> dict | None:
+    """G17 item 1 (external-citation-base-spec-20260727.md §3.1): checked on
+    a round-container directory itself — `goals_dir`, a `goal_dir`, a
+    `round_dir`, or that round's `evidence` / `reviews` — *before* anything
+    under it is ever listed or read.
+
+    This exists because `Path.rglob`'s per-entry `is_symlink()` guard (see
+    `_scan_round_artifacts` below) only ever inspects entries *found while
+    walking inside* a directory; it is structurally blind to the starting
+    directory itself being a symlink, or one of its own ancestors resolving
+    outside the project under canonicalization. Once such a container is
+    opened at all — `rglob("*")`, `.iterdir()`, even a plain `.is_dir()`
+    check follows the last symlink — the OS has already transparently
+    followed the escape, and everything "inside" it from that point on is
+    really inside whatever tree the symlink points to (real-repro fixtures
+    B: `reviews/` itself a symlink out of the project; C: `rounds/0001`
+    itself a symlink out of the project — both left every per-entry check
+    downstream with nothing symlinked left to see, because the *entries*
+    found after following the escape are ordinary files at the escape's
+    destination, not symlinks themselves).
+
+    Returns `None` (nothing to report) when `container` does not exist at
+    all (`os.path.lexists` false) — there is nothing to enumerate, so
+    nothing to check. Otherwise returns a `round-container-escapes-project`
+    violation dict if `container` is itself a symlink (dangling or not) or
+    its canonical resolution (`_is_contained`) lands outside `project`, or
+    `None` if the container is clean. Callers must not read *anything*
+    under `container` — not even to look — once this returns non-`None`;
+    the whole point is that its contents were never opened, so there is
+    nothing safe left to read.
+    """
+    if not os.path.lexists(container):
+        return None
+    if container.is_symlink() or not _is_contained(container, project):
+        return {
+            "round": str(round_label),
+            "kind": "round-container-escapes-project",
+            "detail": (
+                f"{container} is itself a symlink, or resolves outside the project "
+                "under canonical containment — its contents were never read"
+            ),
+        }
+    return None
+
+
+def _scan_round_artifacts(
+    container: Path, project: Path, round_dir: Path
+) -> tuple[list[Path], list[dict]]:
+    """G17 item 2 (external-citation-base-spec-20260727.md §3.1): walk a
+    round-container directory (`evidence/` or `reviews/`, already confirmed
+    clean by `_container_escape_violation`) and split its raw `rglob("*")`
+    entries into real files versus symlinks — checked *before* any
+    `is_file()` filtering, and using `is_symlink()` (an `lstat`, never
+    following the link) rather than `is_file()` or `.exists()`.
+
+    This ordering matters: a dangling symlink's `is_file()` is `False` for
+    exactly the same reason a genuine absence is — the target does not
+    exist — so a filter built on `is_file()` alone drops a broken symlink
+    silently, with zero signal that anything was ever there (T-062
+    `broken_symlink`, reproduced identically on the artifact side: a
+    checker built on `checked_files` after an `is_file()` filter would miss
+    the single most classic escape shape). `is_symlink()` sees it either
+    way, so every symlinked entry — file, directory, or dangling — is
+    reported as `round-artifact-is-symlink` and excluded from the returned
+    file list, never silently dropped.
+
+    A symlinked *directory* entry is covered the same way: its own entry is
+    a symlink and is flagged. As of this module's tested Python versions,
+    `rglob`'s recursive descent does not open a symlinked directory node to
+    yield further entries from beneath it (verified directly: see G17
+    fixture B's teeth in `validate.py`, which asserts the `dlink` entry
+    itself carries the kind — not merely "zero files found under it", which
+    would hold trivially either way and prove nothing). This function flags
+    the symlinked directory node itself regardless of that; it does not
+    depend on it.
+    """
+    files: list[Path] = []
+    violations: list[dict] = []
+    for entry in sorted(container.rglob("*")):
+        if os.path.lexists(entry) and entry.is_symlink():
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "round-artifact-is-symlink",
+                    "detail": f"{entry} is a symlink; its target is never read",
+                }
+            )
+            continue
+        if entry.is_file():
+            files.append(entry)
+    return files, violations
+
+
 def verify_round(
     project: Path, round_dir: Path, suffix_index: dict[str, list[tuple[str, ...]]]
 ) -> tuple[list[dict], dict]:
@@ -1248,15 +1364,34 @@ def verify_round(
     # scope-lock containment check is not loosened by either addition.
     citation_bases = bases + [project / ".harnessloop"] + submodule_roots(project)
 
-    checked_files = [
-        path
-        for sub in ("evidence", "reviews")
-        for path in sorted((round_dir / sub).rglob("*"))
-        if path.is_file()
-    ]
-
     coverage = _empty_coverage()
     coverage["rounds"] = 1
+
+    # G17 item 1 (external-citation-base-spec-20260727.md §3.1): check
+    # evidence/ and reviews/ containment *before* either is ever listed —
+    # `goals_dir` / a `goal_dir` / this `round_dir` were already checked the
+    # same way by the caller (`verify_project`) before `verify_round` was
+    # even invoked, so by this point only these two remaining containers in
+    # the chain are unverified. A container whose check fails here is never
+    # enumerated at all (no `rglob`, no `.iterdir()`) — its files are simply
+    # absent from `sub_files`/`checked_files`, not silently emptied by some
+    # later filter.
+    sub_files: dict[str, list[Path]] = {"evidence": [], "reviews": []}
+    sub_containers: dict[str, Path | None] = {}
+    for sub in ("evidence", "reviews"):
+        container = round_dir / sub
+        escape = _container_escape_violation(container, project, round_dir)
+        if escape is not None:
+            violations.append(escape)
+            sub_containers[sub] = None
+            continue
+        sub_containers[sub] = container
+        if container.is_dir():
+            files, artifact_violations = _scan_round_artifacts(container, project, round_dir)
+            sub_files[sub] = files
+            violations.extend(artifact_violations)
+
+    checked_files = sub_files["evidence"] + sub_files["reviews"]
     if not checked_files:
         coverage["rounds_zero_inspected"] = 1
 
@@ -1291,11 +1426,29 @@ def verify_round(
     if checked_files and spans:
         coverage["rule_a_files"] = len(checked_files)
         for file_path in checked_files:
+            # G17 item 3: two orthogonal conditions, both required — never
+            # OR, never one standing in for the other (see `_is_contained`'s
+            # docstring, "all four must share this one definition"):
+            #   - `is_under(...)` is the existing *lexical* scope-lock
+            #     authorization — is this path string inside a span the
+            #     round's scope-lock allows?
+            #   - `_is_contained(file_path, project)` is *canonical*
+            #     containment — does this path's real (symlink-resolved)
+            #     target still land inside the project at all?
+            # A file can satisfy the first while failing the second — e.g.
+            # `reviews/ext.md` is lexically under `reviews/` (scope-lock
+            # authorizes it) while its real target is a symlink escape out
+            # of the project (fixture A). Without the AND, that file passes
+            # Rule A silently even though its content is never really
+            # in-project. Both conditions stay independently load-bearing:
+            # dropping either one back to OR reopens a different escape
+            # (scope-lock's existing project-external-path fixtures still
+            # rely on the lexical half alone).
             allowed = any(
                 is_under(file_path, base / span)
                 for base in bases
                 for span in spans
-            )
+            ) and _is_contained(file_path, project)
             if not allowed:
                 violations.append(
                     {
@@ -1305,9 +1458,9 @@ def verify_round(
                     }
                 )
 
-    reviews_dir = round_dir / "reviews"
-    if reviews_dir.is_dir():
-        for review in sorted(reviews_dir.rglob("*.md")):
+    reviews_container = sub_containers["reviews"]
+    if reviews_container is not None and reviews_container.is_dir():
+        for review in [f for f in sub_files["reviews"] if f.suffix == ".md"]:
             coverage["rule_b_files"] += 1
             cited_list, exempt_external, ignored_explicit, shape_dropped, has_ignore = pathish_citations(
                 review.read_text(encoding="utf-8")
@@ -1430,11 +1583,44 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     if not goals_dir.is_dir():
         return [], coverage
     violations: list[dict] = []
+
+    # G17 item 1 (external-citation-base-spec-20260727.md §3.1): the
+    # container chain is checked top-down, level by level, *before* the
+    # next level down is ever listed — `goals_dir` itself here, then each
+    # `goal_dir`, then each `round_dir` below. `evidence`/`reviews` are the
+    # two remaining levels, checked inside `verify_round` once a clean
+    # `round_dir` reaches it. This replaces the previous single
+    # `goals_dir.glob("*/rounds/*")` walk (which would transparently follow
+    # a symlink at any of these levels the moment it opened the directory)
+    # with explicit per-level iteration so each level can be
+    # containment-checked before it is opened at all — a goal or round
+    # directory that is itself a symlink escape (fixture C:
+    # `rounds/0001 -> <outside>`) is reported and skipped without ever
+    # calling `.iterdir()` / `.rglob()` on it, including the round's own
+    # `scope-lock.md` and `decision.md` (fixture C's repro showed the whole
+    # round, scope-lock included, being read from outside the project).
+    escape = _container_escape_violation(goals_dir, project, goals_dir)
+    if escape is not None:
+        return [escape], coverage
+
     # Built once per project run (not per round/citation) — see
     # `build_suffix_index` for why this matters for performance.
     suffix_index = build_suffix_index(project)
-    for round_dir in sorted(goals_dir.glob("*/rounds/*")):
-        if round_dir.is_dir():
+    for goal_dir in sorted(p for p in goals_dir.iterdir() if p.is_dir()):
+        escape = _container_escape_violation(goal_dir, project, goal_dir)
+        if escape is not None:
+            violations.append(escape)
+            continue
+        rounds_dir = goal_dir / "rounds"
+        if not rounds_dir.is_dir():
+            continue
+        for round_dir in sorted(rounds_dir.iterdir()):
+            escape = _container_escape_violation(round_dir, project, round_dir)
+            if escape is not None:
+                violations.append(escape)
+                continue
+            if not round_dir.is_dir():
+                continue
             round_violations, round_coverage = verify_round(project, round_dir, suffix_index)
             violations.extend(round_violations)
             for key in coverage:

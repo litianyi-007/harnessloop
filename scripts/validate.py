@@ -2623,6 +2623,325 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(notree_root, ignore_errors=True)
 
+    # =====================================================================
+    # G17 (external-citation-base-spec-20260727.md §3.1, PR-2 v0.20.0):
+    # round-container / round-artifact symlink containment. `Path.rglob`'s
+    # per-entry `is_symlink()` guard only ever sees entries *inside* a
+    # directory -- structurally blind to the starting directory itself (or
+    # one of its own ancestors) being a symlink escape, because the OS
+    # transparently follows it the moment the walk opens it. Three real,
+    # independently reproduced holes share this one blind spot:
+    #   A: `reviews/ext.md` is a symlink out of the project (an ENTRY).
+    #   B: `reviews/` itself is a symlink out of the project (a CONTAINER).
+    #   C: `rounds/0001` itself is a symlink out of the project (a
+    #      CONTAINER two levels up -- takes the whole round, scope-lock
+    #      included, with it).
+    # Plus a fourth, orthogonal hole: a dangling symlink's `is_file()` is
+    # `False` for the same reason a genuine absence is, so a filter built on
+    # `is_file()` alone (as the pre-fix `checked_files` comprehension was)
+    # drops it with zero signal -- T-062 `broken_symlink` reproduced
+    # identically on the artifact side.
+    #
+    # Each "mutation control" below reconstructs the exact pre-fix logic
+    # inline (raw `rglob` + `is_file()`, `.is_dir()` alone, plain
+    # `.read_text()`) using the *same on-disk fixture*, rather than loading
+    # a historical copy of verify_protocol.py -- this stays meaningful
+    # forever, independent of git history, exactly like this file's existing
+    # T-063/T-064 mutation controls.
+    # =====================================================================
+    print("  G17: round artifact / container containment (PR-2, symlink escapes)")
+
+    if not hasattr(os, "symlink"):
+        print("  (skipped: os.symlink unavailable on this platform -- all G17 fixtures)")
+    else:
+        # -- Fixture A: reviews/ext.md is a symlink to a file outside the project.
+        # Deliberately no path-shaped citation inside the external content --
+        # this isolates "was the content read at all, and did Rule A notice",
+        # from Rule B's own (separately, correctly working) dangling-citation
+        # detection, which would otherwise confound the "0 violations before"
+        # reading with an unrelated true positive.
+        g17a_root = REPO_ROOT / ".tmp" / f"verify-fixture-g17a-{uuid.uuid4().hex}"
+        g17a_outside = Path(tempfile.mkdtemp(prefix="harnessloop-g17a-outside-"))
+        try:
+            round_dir = g17a_root / ".harnessloop" / "goals" / "20260727-001-fixture" / "rounds" / "0001"
+            (round_dir / "reviews").mkdir(parents=True)
+            (round_dir / "evidence").mkdir(parents=True)
+            (round_dir / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (g17a_outside / "ext.md").write_text(
+                "External content this project must never read. No path-shaped "
+                "citations here at all.\n",
+                encoding="utf-8",
+            )
+            ext_link = round_dir / "reviews" / "ext.md"
+            ext_link.symlink_to(g17a_outside / "ext.md")
+
+            pre_fix_reviews = [p for p in sorted((round_dir / "reviews").rglob("*")) if p.is_file()]
+            check(
+                ext_link in pre_fix_reviews
+                and "must never read" in ext_link.read_text(encoding="utf-8"),
+                "mutation control (G17 fixture A, pre-fix reconstruction): the old "
+                "`rglob('*')` + `is_file()` filter (no is_symlink() check) includes "
+                "the symlinked ext.md as an ordinary entry, and a plain `.read_text()` "
+                "on it -- exactly what pre-fix Rule B called -- reads the real "
+                "external content (confirms the escape was real, 0 violations, "
+                "rule_b_files=1, before this fix)",
+            )
+
+            violations, coverage = verify_protocol.verify_project(g17a_root)
+            artifact_violations = [v for v in violations if v["kind"] == "round-artifact-is-symlink"]
+            check(
+                len(violations) == 1
+                and artifact_violations
+                and str(ext_link) in artifact_violations[0]["detail"],
+                f"G17 fixture A (fixed): reviews/ext.md (a symlink out of the project) "
+                f"is reported round-artifact-is-symlink by name (got {violations})",
+            )
+            check(
+                coverage.get("rule_b_files") == 0 and coverage.get("citations_checked") == 0,
+                f"G17 fixture A (fixed): the symlinked entry is excluded before Rule B "
+                f"ever reads it -- rule_b_files=0, citations_checked=0 (got {coverage})",
+            )
+        finally:
+            shutil.rmtree(g17a_root, ignore_errors=True)
+            shutil.rmtree(g17a_outside, ignore_errors=True)
+
+        # -- Fixture B: reviews/ ITSELF is a symlink to a directory outside the
+        # project. The assertion below is deliberately about the `reviews`
+        # container itself being NAMED in a violation -- not "zero files found
+        # under it", which (on this module's tested Python versions) holds
+        # trivially either way, symlink guard or not, and would be a
+        # false-green assertion (see verify_protocol._scan_round_artifacts'
+        # docstring and the module's B2 fixture note).
+        g17b_root = REPO_ROOT / ".tmp" / f"verify-fixture-g17b-{uuid.uuid4().hex}"
+        g17b_outside = Path(tempfile.mkdtemp(prefix="harnessloop-g17b-outside-"))
+        try:
+            round_dir = g17b_root / ".harnessloop" / "goals" / "20260727-001-fixture" / "rounds" / "0001"
+            round_dir.mkdir(parents=True)
+            (round_dir / "evidence").mkdir(parents=True)
+            (round_dir / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (g17b_outside / "ext.md").write_text(
+                "external review content, reached via a symlinked reviews/ directory\n",
+                encoding="utf-8",
+            )
+            dlink = round_dir / "reviews"
+            dlink.symlink_to(g17b_outside, target_is_directory=True)
+
+            check(
+                dlink.is_dir() and list(dlink.rglob("*.md")),
+                "mutation control (G17 fixture B, pre-fix reconstruction): "
+                "`reviews_dir.is_dir()` follows the container symlink (True) and "
+                "`rglob('*.md')` finds the external file straight through it -- no "
+                "is_symlink() check existed anywhere in this path pre-fix (confirms "
+                "the escape was real, 0 violations, before this fix)",
+            )
+
+            violations, coverage = verify_protocol.verify_project(g17b_root)
+            container_violations = [v for v in violations if v["kind"] == "round-container-escapes-project"]
+            check(
+                len(violations) == 1
+                and container_violations
+                and str(dlink) in container_violations[0]["detail"],
+                f"G17 fixture B (fixed): the `reviews/` DIRECTORY ITSELF (a symlink "
+                f"out of the project) is named in a round-container-escapes-project "
+                f"violation -- not merely 'zero files under it' (got {violations})",
+            )
+            check(
+                coverage.get("rule_b_files") == 0 and coverage.get("citations_checked") == 0,
+                f"G17 fixture B (fixed): reviews/ is never enumerated once its "
+                f"container check fails -- rule_b_files=0, citations_checked=0 "
+                f"(got {coverage})",
+            )
+        finally:
+            shutil.rmtree(g17b_root, ignore_errors=True)
+            shutil.rmtree(g17b_outside, ignore_errors=True)
+
+        # -- Fixture C: rounds/0001 ITSELF is a symlink to a directory outside
+        # the project that holds a whole round -- scope-lock.md included, per
+        # the spec's own real repro ("整轮(含 scope-lock)从项目外读入"). --
+        g17c_root = REPO_ROOT / ".tmp" / f"verify-fixture-g17c-{uuid.uuid4().hex}"
+        g17c_outside = Path(tempfile.mkdtemp(prefix="harnessloop-g17c-outside-"))
+        try:
+            (g17c_root / ".harnessloop" / "goals" / "20260727-001-fixture" / "rounds").mkdir(parents=True)
+            (g17c_outside / "evidence").mkdir(parents=True)
+            (g17c_outside / "reviews").mkdir(parents=True)
+            (g17c_outside / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n"
+                "- Write reviews under `rounds/0001/reviews/`.\n",
+                encoding="utf-8",
+            )
+            (g17c_outside / "evidence" / "e.md").write_text("external evidence\n", encoding="utf-8")
+            (g17c_outside / "reviews" / "r.md").write_text("external review\n", encoding="utf-8")
+            round_link = g17c_root / ".harnessloop" / "goals" / "20260727-001-fixture" / "rounds" / "0001"
+            round_link.symlink_to(g17c_outside, target_is_directory=True)
+
+            check(
+                round_link.is_dir() and (round_link / "scope-lock.md").exists(),
+                "mutation control (G17 fixture C, pre-fix reconstruction): "
+                "round_dir.is_dir() follows the symlinked round (True), and its "
+                "scope-lock.md/evidence/reviews are all reachable straight through "
+                "it -- the pre-fix `goals_dir.glob(\"*/rounds/*\")` walk would have "
+                "matched and read the whole external round, scope-lock included "
+                "(confirms the escape was real, 0 violations, before this fix)",
+            )
+
+            violations, coverage = verify_protocol.verify_project(g17c_root)
+            container_violations = [v for v in violations if v["kind"] == "round-container-escapes-project"]
+            check(
+                len(violations) == 1
+                and container_violations
+                and str(round_link) in container_violations[0]["detail"],
+                f"G17 fixture C (fixed): rounds/0001 itself (a symlink out of the "
+                f"project) is named in a round-container-escapes-project violation "
+                f"-- reported before verify_round ever runs on it (got {violations})",
+            )
+            check(
+                coverage.get("rounds") == 0
+                and coverage.get("rule_a_files") == 0
+                and coverage.get("rule_b_files") == 0,
+                f"G17 fixture C (fixed): verify_round is never invoked for the "
+                f"escaping round (its scope-lock, evidence, and reviews are never "
+                f"opened) -- rounds/rule_a_files/rule_b_files all stay 0 "
+                f"(got {coverage})",
+            )
+        finally:
+            shutil.rmtree(g17c_root, ignore_errors=True)
+            shutil.rmtree(g17c_outside, ignore_errors=True)
+
+        # -- Broken (dangling) symlink, standalone: proves the guard is not
+        # built on top of is_file() -- a dangling symlink's is_file() is False
+        # for the same reason a genuine absence is, so a filter relying on
+        # is_file() alone (as pre-fix `checked_files` did) drops it with zero
+        # signal (T-062 broken_symlink, reproduced identically here). --
+        g17d_root = REPO_ROOT / ".tmp" / f"verify-fixture-g17d-{uuid.uuid4().hex}"
+        try:
+            round_dir = g17d_root / ".harnessloop" / "goals" / "20260727-001-fixture" / "rounds" / "0001"
+            (round_dir / "evidence").mkdir(parents=True)
+            (round_dir / "reviews").mkdir(parents=True)
+            (round_dir / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                "- Write evidence under `rounds/0001/evidence/`.\n",
+                encoding="utf-8",
+            )
+            broken = round_dir / "evidence" / "broken.md"
+            broken.symlink_to(round_dir / "evidence" / "does-not-exist-target.md")
+
+            check(
+                os.path.lexists(broken) and not broken.is_file(),
+                "sanity: the dangling symlink exists lexically but is_file() is "
+                "False -- the exact condition that made pre-fix checked_files "
+                "drop it silently",
+            )
+            pre_fix_checked = [p for p in sorted((round_dir / "evidence").rglob("*")) if p.is_file()]
+            check(
+                broken not in pre_fix_checked,
+                "mutation control (broken symlink, pre-fix reconstruction): the "
+                "old is_file()-filtered checked_files list silently drops the "
+                "dangling symlink with zero signal (confirms 0 violations, "
+                "nothing counted, before this fix)",
+            )
+
+            violations, coverage = verify_protocol.verify_project(g17d_root)
+            artifact_violations = [v for v in violations if v["kind"] == "round-artifact-is-symlink"]
+            check(
+                len(violations) == 1
+                and artifact_violations
+                and str(broken) in artifact_violations[0]["detail"],
+                f"broken symlink (fixed): a dangling symlink under evidence/ is "
+                f"reported round-artifact-is-symlink by name, not silently dropped "
+                f"(got {violations})",
+            )
+            check(
+                coverage.get("rule_a_files") == 0,
+                f"broken symlink (fixed): the dangling entry never reaches "
+                f"rule_a_files (got {coverage})",
+            )
+        finally:
+            shutil.rmtree(g17d_root, ignore_errors=True)
+
+        # -- G17 item 3 unit teeth: is_under(...) AND _is_contained(...) must
+        # both hold. AND-to-OR mutation must let fixture A's escape shape
+        # through (is_under alone already true) while a genuinely
+        # out-of-scope, non-escaping file is a completely different shape
+        # (is_under alone already false) -- proving the two conditions each
+        # do their own job, neither backing up the other. --
+        g17u_root = Path(tempfile.mkdtemp(prefix="harnessloop-g17unit-"))
+        g17u_outside = Path(tempfile.mkdtemp(prefix="harnessloop-g17unit-outside-"))
+        try:
+            reviews_dir = g17u_root / "reviews"
+            reviews_dir.mkdir(parents=True)
+            (g17u_outside / "ext.md").write_text("external\n", encoding="utf-8")
+            ext_link = reviews_dir / "ext.md"
+            ext_link.symlink_to(g17u_outside / "ext.md")
+
+            lexically_allowed = verify_protocol.is_under(ext_link, reviews_dir)
+            canonically_contained = verify_protocol._is_contained(ext_link, g17u_root)
+            check(
+                lexically_allowed is True and canonically_contained is False,
+                f"G17 item 3 sanity: ext_link is lexically under the reviews/ span "
+                f"(is_under=True) while its real target escapes the project "
+                f"(_is_contained=False) -- got is_under={lexically_allowed}, "
+                f"_is_contained={canonically_contained}",
+            )
+            check(
+                (lexically_allowed and canonically_contained) is False,
+                "G17 item 3: AND correctly disallows the escape (a "
+                "scope-lock-violation would fire for fixture A's shape)",
+            )
+            check(
+                (lexically_allowed or canonically_contained) is True,
+                "G17 item 3 mutation: OR would incorrectly allow it (fixture A "
+                "'transitions green') -- proves AND, not OR, is required here",
+            )
+
+            outside_span_file = g17u_root / "not-under-any-span.md"
+            outside_span_file.write_text("real, in-project, out-of-scope-lock\n", encoding="utf-8")
+            out_of_scope_lexically = verify_protocol.is_under(outside_span_file, reviews_dir)
+            out_of_scope_contained = verify_protocol._is_contained(outside_span_file, g17u_root)
+            check(
+                out_of_scope_lexically is False and out_of_scope_contained is True,
+                "sanity: an ordinary project file outside the reviews/ span is "
+                "lexically disallowed but canonically contained -- the opposite "
+                "combination from fixture A's shape",
+            )
+            check(
+                (out_of_scope_lexically and out_of_scope_contained) is False,
+                "G17 item 3: a genuinely out-of-scope, non-escaping file is still "
+                "rejected under the real AND -- the two conditions catch two "
+                "different escape shapes, neither one backing up the other",
+            )
+        finally:
+            shutil.rmtree(g17u_root, ignore_errors=True)
+            shutil.rmtree(g17u_outside, ignore_errors=True)
+
+    # G17 whole-project zero-migration (spec §5 PR-2 acceptance: "本项目全量
+    # 14 轮零变化" -- first census any existing symlink under .harnessloop/,
+    # since "should be zero change" is a claim to verify, not an assumption):
+    # this repo's own .harnessloop/ has zero symlinks (confirmed by `find
+    # .harnessloop -type l` during this round), so running the fixed gate
+    # against examples/mock-project (already asserted violation-free above)
+    # is the closest in-repo proxy available to CI; the real 14-round check
+    # against this outer project's own .harnessloop/ was run manually against
+    # both the pre-fix and post-fix code during this round (see the round's
+    # evidence/decision for the exact before/after coverage dump) since
+    # REPO_ROOT.parent is this harnessloop submodule's own container project,
+    # not a fixture CI can assume exists in every checkout.
+    print(
+        "  G17 zero-migration: examples/mock-project already asserted violation-free "
+        "above; this project's own 14 real rounds were compared before/after manually "
+        "(see round evidence) since REPO_ROOT.parent is not a fixture."
+    )
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")
