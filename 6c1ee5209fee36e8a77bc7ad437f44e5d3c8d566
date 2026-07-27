@@ -1,0 +1,86 @@
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_c587ecf7bbc3e2::t_fd880d86620879 1234-1234,1240-1249,1254-1254,1271-1285,1479-1479,1482-1493,2623-2626,2628-2645,2647-2647,2662-2669,2705-2705
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_d27f165336aa7d 4392-4430
+  s_c587ecf7bbc3e2::t_8bedb9762c937d 4431-4499
+.claude-plugin/marketplace.json
+  0000019fa38c93d7 1-21
+package.json
+  0000019fa38c93d7 1-12
+plugins/harnessloop/.claude-plugin/plugin.json
+  0000019fa38c93d7 1-13
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  0000019fa38c93d7 1-567
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "6c1ee5209fee36e8a77bc7ad437f44e5d3c8d566",
+  "prompts": {
+    "s_c587ecf7bbc3e2::t_fd880d86620879": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 72,
+      "total_deletions": 0,
+      "accepted_lines": 72,
+      "overriden_lines": 0
+    },
+    "s_c587ecf7bbc3e2::t_8bedb9762c937d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 69,
+      "total_deletions": 0,
+      "accepted_lines": 69,
+      "overriden_lines": 0
+    },
+    "s_c587ecf7bbc3e2::t_d27f165336aa7d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 39,
+      "total_deletions": 0,
+      "accepted_lines": 39,
+      "overriden_lines": 0
+    },
+    "s_af7a6097a34c30::t_af5a7156b5b18d": {
+      "agent_id": {
+        "tool": "mock_ai",
+        "id": "ai-thread-1785155326624568000",
+        "model": "unknown"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019fa38c93d7": {
+      "agent_id": {
+        "tool": "claude",
+        "model": "claude-opus-5",
+        "id": "ai-thread-claude-claude-opus-5-1785155326935"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 613,
+      "total_deletions": 0,
+      "accepted_lines": 613,
+      "overriden_lines": 0
+    }
+  }
+}
