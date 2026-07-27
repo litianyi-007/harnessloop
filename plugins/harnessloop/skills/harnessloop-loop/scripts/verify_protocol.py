@@ -872,9 +872,19 @@ def _load_versioned_roots(path: Path) -> tuple[list[dict], str | None]:
         subpaths = raw.get("subpaths")
         if subpaths is not None and (
             not isinstance(subpaths, list)
+            or not subpaths
             or not all(isinstance(p, str) and p.strip() and "/" not in p for p in subpaths)
         ):
-            return [], f"{path}: roots[{i}].subpaths, if present, must be single-segment names"
+            # An explicit empty list is rejected rather than silently read as
+            # "no whitelist": `[]` reads as deny-all to a human and was
+            # truthiness-collapsed into unrestricted by the loader. Omit the
+            # key for unrestricted; there is no deny-all spelling (a root
+            # nothing may be read from is a root that should not be declared).
+            return [], (
+                f"{path}: roots[{i}].subpaths, if present, must be a non-empty list of "
+                "single-segment names (omit the key for no restriction; `[]` is not a "
+                "deny-all spelling)"
+            )
 
         approved_by = raw.get("approved_by")
         if not isinstance(approved_by, str) or not approved_by.strip():
@@ -953,6 +963,12 @@ def _load_local_bindings(path: Path) -> tuple[dict[str, str], str | None]:
         raw_path = binding.get("path")
         if not isinstance(raw_path, str) or not raw_path.strip():
             return {}, f"{path}: bindings[{alias!r}].path must be a non-empty string"
+        bound_at = binding.get("bound_at")
+        if bound_at is not None and (not isinstance(bound_at, str) or not bound_at.strip()):
+            return {}, (
+                f"{path}: bindings[{alias!r}].bound_at, if present, must be a "
+                "non-empty string"
+            )
         bindings[alias] = raw_path
     return bindings, None
 
@@ -1220,6 +1236,31 @@ def load_reference_roots(
 
     if not versioned_path.is_file():
         return {}, violations
+    # The declaration must be the versioned file itself, not a pointer to
+    # somewhere else. `.harnessloop/setup/reference-roots.json` is the
+    # git-committed, diff-reviewable record of which external trees this
+    # project may read; if it is a symlink, what git shows a reviewer and
+    # what the gate actually loads are two different files -- and the
+    # target need not even be inside the project. Same discipline as
+    # v0.20.0's `round-artifact-is-symlink`, applied to the one artifact
+    # that decides external reach. Checked on both files: a symlinked
+    # local binding file is the same escape one layer down.
+    for label, candidate in (("versioned", versioned_path), ("local", local_path)):
+        if candidate.is_symlink():
+            violations.append(
+                {
+                    "round": str(project),
+                    "kind": "reference-roots-invalid"
+                    if label == "versioned"
+                    else "reference-root-local-invalid",
+                    "detail": (
+                        f"{candidate.relative_to(project).as_posix()} is a symlink; the "
+                        "reference-root declaration must be the tracked file itself, "
+                        "not a pointer to one"
+                    ),
+                }
+            )
+            return {}, violations
 
     entries, versioned_error = _load_versioned_roots(versioned_path)
     if versioned_error is not None:
@@ -1294,12 +1335,43 @@ def load_reference_roots(
     # one of them (say, the first) would make which alias survives depend on
     # declaration order -- the same "shape decides the outcome at runtime"
     # anti-pattern §2.4's last paragraph forbids.
-    by_canonical: dict[Path, list[str]] = {}
-    for alias, root in roots.items():
-        if root.available and root.canonical is not None:
-            by_canonical.setdefault(root.canonical, []).append(alias)
+    # Collision is decided by `os.path.samefile` (st_dev, st_ino), never by
+    # comparing the canonical `Path` objects -- `Path.__eq__` is string
+    # equality, and `Path.resolve()` does *not* case-normalize. On a
+    # case-insensitive volume (APFS/HFS+ default, NTFS) `/x/Wiki` and
+    # `/x/wiki` are one directory with two unequal canonical strings, so
+    # grouping by `Path` let both aliases stay available with zero
+    # violations -- the exact string-comparison mistake G4 already had
+    # teeth against, repeated one layer up. Hard links, bind mounts, and
+    # firmlinks are the same class and are covered by the same identity.
+    live = sorted(
+        ((a, r) for a, r in roots.items() if r.available and r.canonical is not None),
+        key=lambda pair: pair[0],
+    )
+    groups: list[list[str]] = []
+    assigned: dict[str, int] = {}
+    for i, (alias_i, root_i) in enumerate(live):
+        if alias_i in assigned:
+            continue
+        idx = len(groups)
+        groups.append([alias_i])
+        assigned[alias_i] = idx
+        for alias_j, root_j in live[i + 1 :]:
+            if alias_j in assigned:
+                continue
+            try:
+                same = os.path.samefile(root_i.canonical, root_j.canonical)
+            except OSError:
+                # A root that vanished between resolution and this check is
+                # not evidence of *distinctness*; fall back to canonical
+                # string equality, which can only under-report, never
+                # invent a collision.
+                same = root_i.canonical == root_j.canonical
+            if same:
+                groups[idx].append(alias_j)
+                assigned[alias_j] = idx
     for group in sorted(
-        (sorted(a) for a in by_canonical.values() if len(a) > 1),
+        (sorted(g) for g in groups if len(g) > 1),
         key=lambda g: g[0],
     ):
         for alias in group:
@@ -2272,7 +2344,7 @@ def verify_round(
                             "the intended file, cite it by a resolvable path or mark the "
                             f"line {IGNORE_MARKER}"
                         )
-                    elif alias_match is not None:
+                    elif alias_match is not None and roots:
                         # G15: this span was alias-*shaped* but its alias was
                         # never declared -- resolved (or not) exactly like
                         # any other project-relative string above; this is a
@@ -2381,7 +2453,17 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
     coverage = _empty_coverage()
     if not goals_dir.is_dir():
-        return [], coverage
+        # A project with no rounds yet still has a *declaration*, and the
+        # declaration is a project-level fact -- reporting
+        # `external_roots_declared=0` here would be the coverage lying about
+        # what this project is configured to reach, and would let a
+        # declaration land (or be swapped) unseen for as long as no round
+        # exists. Load it and report it; its G1-G6 violations are equally
+        # real without a single round on disk.
+        roots, root_violations = load_reference_roots(project)
+        coverage["external_roots_declared"] = len(roots)
+        coverage["external_roots_available"] = sum(1 for r in roots.values() if r.available)
+        return root_violations, coverage
     violations: list[dict] = []
 
     # G17 item 1 (external-citation-base-spec-20260727.md §3.1): the

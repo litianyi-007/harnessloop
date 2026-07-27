@@ -4048,6 +4048,252 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g21_root, ignore_errors=True)
 
+    print("  G22: T-069 round-2 findings (same-directory identity, declaration integrity, honest coverage)")
+    g22_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22-"))
+    try:
+        # 22a: same directory reached under two spellings that `Path.resolve()`
+        # does NOT fold together. On a case-insensitive volume that is the
+        # wrong-case spelling; everywhere it is a hard link is not applicable
+        # to directories, so the portable stand-in is a symlink, which G21
+        # already covers. This check therefore *self-verifies its own premise*
+        # first and skips honestly rather than passing vacuously.
+        project = _pr3_project(g22_root)
+        wiki = _pr3_wiki_root(g22_root / "case")
+        alt = wiki.parent / wiki.name.swapcase()
+        case_insensitive = alt.exists() and str(alt) != str(wiki)
+        if case_insensitive:
+            check(
+                Path(str(alt)).resolve() != wiki.resolve(),
+                "G22a premise: on this volume the two spellings resolve to unequal canonical "
+                "strings -- so grouping by Path equality genuinely could not see the collision",
+            )
+            check(
+                os.path.samefile(alt, wiki),
+                "G22a premise: ...while samefile() sees one directory (st_dev, st_ino)",
+            )
+            base = _pr3_standard_declaration(wiki)
+            _pr3_declare(
+                project,
+                {
+                    "version": 1,
+                    "roots": [
+                        base["roots"][0],
+                        {**base["roots"][0], "alias": "wiki2", "approved_by": "someone-else"},
+                    ],
+                },
+            )
+            _pr3_bind(
+                project,
+                {
+                    "version": 1,
+                    "bindings": {"wiki": {"path": str(wiki)}, "wiki2": {"path": str(alt)}},
+                },
+            )
+            roots, violations = verify_protocol.load_reference_roots(project)
+            check(
+                roots["wiki"].unavailable_reason == "shadow-alias"
+                and roots["wiki2"].unavailable_reason == "shadow-alias"
+                and len([v for v in violations if v["kind"] == "reference-root-shadow-alias"]) == 1,
+                "G22a: two aliases naming one directory under different case are caught -- "
+                "identity is samefile(), not canonical-string equality (T-069 F1.1)",
+            )
+        else:
+            print("  (skipped G22a: this volume is case-sensitive; premise not reproducible here)")
+
+        # 22b: the declaration artifacts must be the tracked files themselves.
+        for label, rel, kind in (
+            ("versioned", ".harnessloop/setup/reference-roots.json", "reference-roots-invalid"),
+            (
+                "local",
+                ".harnessloop/local/reference-roots.local.json",
+                "reference-root-local-invalid",
+            ),
+        ):
+            b_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22b-"))
+            try:
+                proj = _pr3_project(b_root)
+                w = _pr3_wiki_root(b_root)
+                _pr3_declare(proj, _pr3_standard_declaration(w))
+                _pr3_bind(proj, {"version": 1, "bindings": {"wiki": {"path": str(w)}}})
+                target = proj / rel
+                outside = b_root / f"outside-{label}.json"
+                outside.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+                target.unlink()
+                if not hasattr(os, "symlink"):
+                    print("  (skipped G22b: os.symlink unavailable)")
+                    break
+                target.symlink_to(outside)
+                roots, violations = verify_protocol.load_reference_roots(proj)
+                check(
+                    roots == {} and any(v["kind"] == kind for v in violations),
+                    f"G22b ({label}): a symlinked declaration loads zero roots -- what git shows "
+                    "a reviewer and what the gate reads can never be two different files (T-069 F4)",
+                )
+            finally:
+                shutil.rmtree(b_root, ignore_errors=True)
+
+        # 22c: coverage must not under-report a declaration just because no
+        # round exists yet -- that is the gate lying about this project's reach.
+        c_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22c-"))
+        try:
+            proj = _pr3_project(c_root)
+            w = _pr3_wiki_root(c_root)
+            _pr3_declare(proj, _pr3_standard_declaration(w))
+            _pr3_bind(proj, {"version": 1, "bindings": {"wiki": {"path": str(w)}}})
+            shutil.rmtree(proj / ".harnessloop" / "goals")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(LOOP_SCRIPTS / "verify_protocol.py"),
+                    "--project",
+                    str(proj),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            cov = json.loads(result.stdout)["coverage"]
+            check(
+                cov["external_roots_declared"] == 1 and cov["external_roots_available"] == 1,
+                "G22c: a project with a declaration but no rounds reports declared=1/available=1, "
+                "not 0/0 -- a declaration is a project-level fact, not a per-round one (T-069 F4)",
+            )
+        finally:
+            shutil.rmtree(c_root, ignore_errors=True)
+
+        # 22d: `subpaths: []` is rejected outright rather than truthiness-collapsed
+        # into "unrestricted" -- it reads as deny-all to a human.
+        d_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22d-"))
+        try:
+            proj = _pr3_project(d_root)
+            w = _pr3_wiki_root(d_root)
+            decl = _pr3_standard_declaration(w)
+            decl["roots"][0]["subpaths"] = []
+            _pr3_declare(proj, decl)
+            _pr3_bind(proj, {"version": 1, "bindings": {"wiki": {"path": str(w)}}})
+            roots, violations = verify_protocol.load_reference_roots(proj)
+            check(
+                roots == {} and any(v["kind"] == "reference-roots-invalid" for v in violations),
+                "G22d: an explicit empty `subpaths` is invalid, never silently unrestricted "
+                "(T-069 F4)",
+            )
+            decl["roots"][0]["subpaths"] = ["kernel"]
+            _pr3_declare(proj, decl)
+            roots, violations = verify_protocol.load_reference_roots(proj)
+            check(
+                roots.get("wiki") is not None and roots["wiki"].available,
+                "G22d control: a non-empty subpaths list still loads -- the rejection is of the "
+                "empty spelling, not of the key",
+            )
+        finally:
+            shutil.rmtree(d_root, ignore_errors=True)
+
+        # 22e: a wrong-typed `bound_at` is a schema error, not silently ignored.
+        e_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22e-"))
+        try:
+            proj = _pr3_project(e_root)
+            w = _pr3_wiki_root(e_root)
+            _pr3_declare(proj, _pr3_standard_declaration(w))
+            _pr3_bind(
+                proj,
+                {"version": 1, "bindings": {"wiki": {"path": str(w), "bound_at": {"wrong": "type"}}}},
+            )
+            roots, violations = verify_protocol.load_reference_roots(proj)
+            check(
+                any(v["kind"] == "reference-root-local-invalid" for v in violations)
+                and not roots["wiki"].available,
+                "G22e: a non-string `bound_at` is rejected -- provenance is schema, not decoration "
+                "(T-069 F4)",
+            )
+        finally:
+            shutil.rmtree(e_root, ignore_errors=True)
+
+        # 22f: zero-migration is byte-for-byte for a project with NO declaration
+        # at all -- including the violation `detail`, not just the `kind`.
+        f_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22f-"))
+        try:
+            proj = _pr3_project(f_root)
+            _pr3_write_review(proj, "See `@@foo/bar.md` and `nope/missing.md`.\n")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(LOOP_SCRIPTS / "verify_protocol.py"),
+                    "--project",
+                    str(proj),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            details = [
+                v["detail"] for v in json.loads(result.stdout)["violations"] if "@@foo" in v["detail"]
+            ]
+            check(
+                len(details) == 1 and "is not a declared reference-root alias" not in details[0],
+                "G22f: a project that declares no reference roots gets no alias hint appended to "
+                "its dangling-citation detail -- zero-migration is byte-for-byte, not kind-only "
+                "(T-069 F3)",
+            )
+        finally:
+            shutil.rmtree(f_root, ignore_errors=True)
+
+        # 22g: the hint DOES appear once the project declares roots -- 22f must
+        # be the absence of a hint in the no-declaration case, not the hint
+        # having been deleted outright.
+        g_root = Path(tempfile.mkdtemp(prefix="hl-pr3-g22g-"))
+        try:
+            proj = _pr3_project(g_root)
+            w = _pr3_wiki_root(g_root)
+            _pr3_declare(proj, _pr3_standard_declaration(w))
+            _pr3_bind(proj, {"version": 1, "bindings": {"wiki": {"path": str(w)}}})
+            _pr3_write_review(proj, "See `@@foo/bar.md`.\n")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(LOOP_SCRIPTS / "verify_protocol.py"),
+                    "--project",
+                    str(proj),
+                    "--json",
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            details = [
+                v["detail"] for v in json.loads(result.stdout)["violations"] if "@@foo" in v["detail"]
+            ]
+            check(
+                len(details) == 1
+                and "is not a declared reference-root alias" in details[0]
+                and "declared: wiki" in details[0],
+                "G22g control: with roots declared, the undeclared-alias hint still appears and "
+                "names the declared aliases -- 22f removed a migration artifact, not the feature",
+            )
+        finally:
+            shutil.rmtree(g_root, ignore_errors=True)
+    finally:
+        shutil.rmtree(g22_root, ignore_errors=True)
+
+    print("  G19-strengthened: no escape knob, by shape rather than by three literal flag names")
+    src = (LOOP_SCRIPTS / "verify_protocol.py").read_text(encoding="utf-8")
+    parser_args = set(re.findall(r"add_argument\(\s*[\"'](--[a-z0-9-]+)[\"']", src))
+    check(
+        parser_args == {"--project", "--json", "--show-root-paths"},
+        "G19: verify_protocol.py declares exactly --project/--json/--show-root-paths -- any new "
+        "flag at all must be reviewed as a potential escape knob, not just the three names "
+        "an earlier grep happened to look for (T-069 F5)",
+    )
+    check(
+        not re.search(r"os\.environ(?:\.get)?\s*[\[(]\s*[\"']HARNESSLOOP", src),
+        "G19: no HARNESSLOOP_* environment variable is read -- an env knob is an escape knob "
+        "that no flag-name grep would ever see (T-069 F5)",
+    )
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")
