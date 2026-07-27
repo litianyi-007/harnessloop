@@ -625,6 +625,33 @@ def strip_locator_suffix(cleaned: str) -> str:
     return cleaned
 
 
+def _carries_active_ignore(line: str) -> bool:
+    """Whether `line` *uses* the ignore marker, as opposed to *mentioning* it.
+
+    `IGNORE_MARKER in line` is a substring test, so a line that merely quotes
+    the marker inside a code span -- a review documenting the exemption
+    mechanism, or this protocol's own spec being scanned as a review --
+    silently exempted every citation on that line. Live false green,
+    reproduced: a line containing both `` `<!-- verify:ignore -->` `` and a
+    dangling path reported zero citations checked and two "ignored".
+
+    The fix is deliberately minimal: code spans are stripped before the
+    substring test, so quoted text stops acting as an instruction. The
+    marker's *scope* (this line and the next) is untouched -- that is a
+    separate question, and the whole prose-marker mechanism is slated for
+    replacement by out-of-band `citation-exemptions.json` declarations
+    (docs/ignore-scoping-spec-20260728.md v4), which removes this and three
+    other failure modes at once rather than patching each.
+
+    Known residual, accepted for now: a marker inside a *fenced* code block
+    still counts as active. Fence tracking is a larger change to a mechanism
+    already scheduled for removal, and the corpus contains no such case
+    (measured 2026-07-28). Inline code spans are the form that actually
+    occurs when someone writes about the marker mid-sentence.
+    """
+    return IGNORE_MARKER in CODE_SPAN.sub("", line)
+
+
 def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, bool]:
     """Extract citation spans that look like file paths.
 
@@ -685,8 +712,9 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, boo
     ignored_explicit = 0
     shape_dropped = 0
     lines = markdown_text.splitlines()
+    active = [_carries_active_ignore(l) for l in lines]
     for i, line in enumerate(lines):
-        if IGNORE_MARKER in line or (i > 0 and IGNORE_MARKER in lines[i - 1]):
+        if active[i] or (i > 0 and active[i - 1]):
             ignored_explicit += len(CODE_SPAN.findall(line))
             continue
         for span in CODE_SPAN.findall(line):

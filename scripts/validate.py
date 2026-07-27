@@ -933,7 +933,11 @@ def validate_protocol_gates() -> None:
             "Explicitly ignored same-line citation `totally/made/up/ignored_same_line.py` <!-- verify:ignore -->\n"
             "\n"
             "A genuinely dangling citation with none of the above properties, must still fail:\n"
-            "- `docs/genuinely_missing_file.md`\n",
+            "- `docs/genuinely_missing_file.md`\n"
+            "\n"
+            "Mentioning the marker as quoted text must NOT act as an instruction: the marker is "
+            "`<!-- verify:ignore -->` and this line also cites `docs/mentioned_not_ignored.md`\n"
+            "The line after a mention-only line is likewise unaffected: `docs/after_mention.md`\n",
             encoding="utf-8",
         )
 
@@ -963,6 +967,20 @@ def validate_protocol_gates() -> None:
         check(
             any("genuinely_missing_file.md" in v["detail"] for v in violations),
             "verify still catches a genuinely dangling citation with no applicable exemption (no false negative)",
+        )
+        # TH: the marker was matched as a bare substring, so a line that merely
+        # *quoted* it inside a code span -- a review documenting the exemption
+        # mechanism -- silently exempted every citation on that line, and on the
+        # line after it. Live false green until 0.26.0.
+        check(
+            any("mentioned_not_ignored.md" in v["detail"] for v in violations),
+            "a marker quoted inside a code span is TEXT, not an instruction -- citations on "
+            "that line are still checked (substring match would have exempted them)",
+        )
+        check(
+            any("after_mention.md" in v["detail"] for v in violations),
+            "a mention-only line does not exempt the following line either -- the previous-line "
+            "scope keys on active markers, not on the marker appearing anywhere in the text",
         )
     finally:
         shutil.rmtree(exempt_root, ignore_errors=True)
