@@ -1,0 +1,40 @@
+.claude-plugin/marketplace.json
+  0000019fa35edf11 1-21
+package.json
+  0000019fa35edf11 1-12
+plugins/harnessloop/.claude-plugin/plugin.json
+  0000019fa35edf11 1-13
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "e2f0b4b4045bd6c14c48ee86dbf79eed13f0bdfb",
+  "prompts": {
+    "s_16137d31fbcdc7::t_26b8cd091647c2": {
+      "agent_id": {
+        "tool": "mock_ai",
+        "id": "ai-thread-1785152331169206000",
+        "model": "unknown"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "0000019fa35edf11": {
+      "agent_id": {
+        "tool": "claude",
+        "model": "claude-opus-5",
+        "id": "ai-thread-claude-claude-opus-5-1785152331537"
+      },
+      "human_author": "litianyi",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 0,
+      "accepted_lines": 46,
+      "overriden_lines": 0
+    }
+  }
+}
