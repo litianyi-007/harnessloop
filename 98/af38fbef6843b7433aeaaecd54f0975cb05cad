@@ -1,0 +1,48 @@
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_4d9437a8b51930 4
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_26601b0a37d5a1 453-454
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_8a20d4241d4d9a 1175-1176
+  s_c587ecf7bbc3e2::t_30b72de46e3511 431-447
+  s_c587ecf7bbc3e2::t_7d63ec665bdd92 741-742,748,750-752,754,763-803
+  s_c587ecf7bbc3e2::t_a1922991f1e5e5 554-574
+  s_c587ecf7bbc3e2::t_82ae025b07fc8a 578,582-593
+  s_c587ecf7bbc3e2::t_656f51f58bebb1 1147-1148,1152
+  s_c587ecf7bbc3e2::t_757f6ffeca24df 1113-1119,1130-1146,1149-1151,1153-1174,1177-1233
+  s_ed7733e7ec0c85::t_f2205b6dd6ce96 804
+.claude-plugin/marketplace.json
+  s_c587ecf7bbc3e2::t_0d312b447dab4a 13
+package.json
+  s_c587ecf7bbc3e2::t_4b4a2cf9586baf 3
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_c587ecf7bbc3e2::t_5064fde1297e6d 523,540-572,576-577,581,605-607
+  s_c587ecf7bbc3e2::t_82c67e922cbc98 1402-1404
+  s_c587ecf7bbc3e2::t_4a084fbcd928ad 1297-1299,1301-1304
+  s_c587ecf7bbc3e2::t_1ea445fecd69f1 1516-1518
+  s_c587ecf7bbc3e2::t_3d61b04da5ad84 1439-1444
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "98af38fbef6843b7433aeaaecd54f0975cb05cad",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    },
+    "s_ed7733e7ec0c85": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4b39f23-5742-4f02-9fd8-943a8776e15e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
