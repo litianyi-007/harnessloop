@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "roots": [
+    {
+      "alias": "wiki",
+      "purpose": "external design wiki this project's reviews cite as upstream fact",
+      "expect_present": ["SCHEMA.md", "kernel/"],
+      "subpaths": ["kernel", "research"],
+      "approved_by": "user-confirmed <date>"
+    }
+  ]
+}

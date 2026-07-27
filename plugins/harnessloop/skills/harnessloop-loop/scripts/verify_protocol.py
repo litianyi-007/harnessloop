@@ -382,6 +382,49 @@ NOISE_DIR_NAMES = frozenset(
     }
 )
 
+# External reference roots (PR-3, external-citation-base-spec-20260727.md
+# §2.1-2.7): a project may declare named external "reference roots" (e.g. an
+# upstream design wiki kept outside the project tree, cited as upstream fact
+# by this project's reviews) and cite a file inside one with the double-sigil
+# `@@<alias>/<relpath>` syntax. This is a *second*, structurally separate
+# resolution domain from ordinary project-relative citations -- see
+# `load_reference_roots` for the two-file declaration schema (a versioned,
+# zero-absolute-path side plus a gitignored local side that only ever answers
+# "where", never "is this the right tree"), and `resolve_external_citation`
+# for how a citation resolves once its alias is declared and its root is
+# bound and available. Single `@` (npm scoped packages / TS `paths` aliases)
+# and `alias:` colon-prefixed forms were both measured and rejected before
+# this syntax was chosen -- see the spec's §2.1 and §7 for the falsifying
+# measurements; do not reintroduce either.
+ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+ALIAS_CITATION_RE = re.compile(r"^@@([a-z][a-z0-9-]{1,31})/(.*)$", re.DOTALL)
+
+REFERENCE_ROOTS_VERSIONED_REL = ".harnessloop/setup/reference-roots.json"
+REFERENCE_ROOTS_LOCAL_REL = ".harnessloop/local/reference-roots.local.json"
+REFERENCE_ROOTS_MAX_BYTES = 64 * 1024
+REFERENCE_ROOTS_MAX_COUNT = 8
+
+# §2.2 schema table: a raw (pre-expanduser) local binding path string
+# containing any of these is rejected outright (`reference-root-rejected`)
+# before any filesystem call -- a glob or shell/env-interpolation character
+# in a path meant to be used literally is itself a red flag, independent of
+# what it might resolve to.
+_GLOB_OR_ENV_CHARS = frozenset("*?[]$%")
+
+# §2.2: the local (low-trust) binding side may only ever answer "where" --
+# a `path` string plus a provenance note (`bound_at`, matching the worked
+# example). If it also tries to answer "is this the right tree" (any of
+# these four keys), that is a `reference-root-local-invalid` violation, not
+# a value to trust.
+_LOCAL_BINDING_ALLOWED_KEYS = frozenset({"path", "bound_at"})
+_LOCAL_BINDING_FORBIDDEN_KEYS = frozenset({"identity", "available", "optional", "expect_present"})
+
+# §2.2: the exact key set a versioned root entry may declare. `subpaths` is
+# the only optional one.
+_VERSIONED_ROOT_ALLOWED_KEYS = frozenset(
+    {"alias", "purpose", "expect_present", "subpaths", "approved_by"}
+)
+
 
 def norm(path: Path) -> str:
     return os.path.normcase(os.path.normpath(str(path)))
@@ -432,6 +475,32 @@ def _is_contained(candidate: Path, project: Path) -> bool:
     cannot slip through whichever call site is not updated.
     """
     return is_under(_canonical(candidate), _canonical(project))
+
+
+def _is_contained_pinned(candidate: Path, canonical_domain: Path) -> bool:
+    """Containment check for a *pre-canonicalized, pinned* domain root (PR-3
+    §2.5) -- only `candidate` is canonicalized here; `canonical_domain` never
+    is.
+
+    This is deliberately a different function from `_is_contained`, not an
+    overload of it: `_is_contained` re-canonicalizes *both* sides on every
+    call, which is exactly right for the project root (a project directory
+    is not expected to be symlink-swapped mid-run) but is the wrong contract
+    for an external reference root. A reference root's canonical form is
+    computed once, at `load_reference_roots` time, specifically so that a
+    `~/wiki` symlink swapped out from under a long-running verification pass
+    cannot silently change what "inside the root" means partway through that
+    same run -- the root is canonicalized once and then *pinned* for the
+    rest of the run. Passing a non-canonical `canonical_domain` here would
+    silently defeat that pinning (each call would re-resolve it, following
+    whatever the symlink currently points at), so the entry assertion below
+    makes that misuse fail loudly instead of silently.
+    """
+    assert _canonical(canonical_domain) == canonical_domain, (
+        "_is_contained_pinned requires an already-canonical domain; pass "
+        "_canonical(root) once at load time, never the raw declared path"
+    )
+    return is_under(_canonical(candidate), canonical_domain)
 
 
 def extract_allowed_spans(scope_lock_text: str) -> list[str]:
@@ -591,12 +660,16 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, boo
 
     `shape_dropped` counts a third, previously-invisible exit: a span that
     contains `/` (so it is clearly meant as a path) but whose tail has no
-    file extension, no trailing `/`, and no `..` segment — e.g.
-    `@@wiki/kernel` or `src/pkgdir` — falls through the shape branch below
-    without ever being appended to `cited`, and before this field existed
-    that drop was silent. This is also the cheapest way to turn a real
-    dangling citation green: delete the file extension from an already-red
-    span and it vanishes from every coverage field, not just this one.
+    file extension, no trailing `/`, and no `..` segment — e.g. `src/pkgdir`
+    — falls through the shape branch below without ever being appended to
+    `cited`, and before this field existed that drop was silent. This is
+    also the cheapest way to turn a real dangling citation green: delete the
+    file extension from an already-red span and it vanishes from every
+    coverage field, not just this one. (PR-3: an `@@<alias>/...` span no
+    longer takes this exit even with an extension-less tail — e.g.
+    `@@wiki/kernel` — because the alias-shape branch above matches first
+    and appends it to `cited` unconditionally; only a non-`@@` span can
+    still land in `shape_dropped`.)
 
     Returns `(cited, exempt_external, ignored_explicit, shape_dropped,
     has_ignore_marker)`: `cited` is the list of spans to existence-check,
@@ -622,6 +695,23 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, boo
                 continue
             if cleaned.startswith(("-", "$", "<")):
                 continue
+            if ALIAS_CITATION_RE.match(cleaned):
+                # PR-3 §2.1 branch (a): `@@<alias>/<relpath>` is
+                # unconditionally a citation -- which resolution *domain* a
+                # span belongs to is decided by its syntax alone, before any
+                # exemption heuristic below runs and before any filesystem
+                # access (§2.4: "domain is decided by text + the declared
+                # alias set, before any filesystem access"). This also
+                # closes the one gap explicitly called out in the spec: a
+                # tail with no extension and no trailing slash (e.g.
+                # `@@wiki/kernel`) would otherwise fall through to the shape
+                # branch below and be silently counted as
+                # `shape_dropped` rather than checked. Whether the alias
+                # is actually *declared* is decided later, per citation, by
+                # the caller (`verify_round`) -- this function has no
+                # project/declaration context to decide that here.
+                cited.append(cleaned)
+                continue
             if _looks_like_pattern(cleaned):
                 continue
             if _looks_like_bare_domain(cleaned):
@@ -641,6 +731,549 @@ def pathish_citations(markdown_text: str) -> tuple[list[str], int, int, int, boo
                 else:
                     shape_dropped += 1
     return cited, exempt_external, ignored_explicit, shape_dropped, IGNORE_MARKER in markdown_text
+
+
+# ---------------------------------------------------------------------------
+# External reference roots (PR-3, external-citation-base-spec-20260727.md
+# §2.2-2.5). Everything from here to `resolve_external_citation` implements
+# the second, structurally separate resolution domain `@@<alias>/<relpath>`
+# citations use. See the module docstring's top for the one-paragraph
+# orientation and `verify_round` for how this is wired into Rule B.
+# ---------------------------------------------------------------------------
+
+
+class ReferenceRoot:
+    """One declared external reference root, fully resolved (or definitively
+    marked unavailable) for this run.
+
+    Built once per `verify_project` call by `load_reference_roots` — never
+    re-derived per-citation or per-round; `verify_round` receives the same
+    `dict[str, ReferenceRoot]` for every round in the project (G5's "every
+    run re-validates" applies at the `load_reference_roots` call granularity
+    — once per `verify_project` invocation — not once per lookup within it,
+    and not cached *across* separate invocations).
+
+    `canonical` is `None` unless `available` is `True` — every caller must
+    check `available` before touching `canonical`, never the reverse.
+    `unavailable_reason` is one of `"unbound"`, `"unresolvable"`,
+    `"rejected"`, `"identity-mismatch"`, or `None` (only when available) —
+    deliberately a short enum string, never a path (G20: nothing derived
+    from this object may leak an absolute path into a violation detail,
+    coverage line, or default `--json` output).
+    """
+
+    __slots__ = (
+        "alias",
+        "purpose",
+        "expect_present",
+        "subpaths",
+        "approved_by",
+        "canonical",
+        "available",
+        "unavailable_reason",
+    )
+
+    def __init__(
+        self,
+        alias: str,
+        purpose: str,
+        expect_present: tuple[str, ...],
+        subpaths: tuple[str, ...] | None,
+        approved_by: str,
+        canonical: Path | None,
+        available: bool,
+        unavailable_reason: str | None,
+    ) -> None:
+        self.alias = alias
+        self.purpose = purpose
+        self.expect_present = expect_present
+        self.subpaths = subpaths
+        self.approved_by = approved_by
+        self.canonical = canonical
+        self.available = available
+        self.unavailable_reason = unavailable_reason
+
+
+def _load_versioned_roots(path: Path) -> tuple[list[dict], str | None]:
+    """Parse and fully validate `.harnessloop/setup/reference-roots.json`.
+
+    Returns `(entries, None)` on success (`entries` is a list of plain dicts,
+    one per declared root, with keys already normalized to
+    `tuple[str, ...]` where the schema calls for a list) or `([], message)`
+    on ANY structural problem (G1): a single bad root entry invalidates the
+    *entire* file — "整份作废、加载零个 root" (§2.2) — deliberately not a
+    partial load, so a project can never end up in an ambiguous "some of my
+    declared roots loaded, which ones?" state.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return [], f"{path}: cannot stat ({exc})"
+    if size > REFERENCE_ROOTS_MAX_BYTES:
+        return [], f"{path}: exceeds {REFERENCE_ROOTS_MAX_BYTES} bytes"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [], f"{path}: cannot read ({exc})"
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return [], f"{path}: invalid JSON ({exc})"
+    if not isinstance(data, dict):
+        return [], f"{path}: top level must be a JSON object"
+    unknown_top = set(data) - {"version", "roots"}
+    if unknown_top:
+        return [], f"{path}: unknown top-level key(s) {sorted(unknown_top)}"
+    if data.get("version") != 1:
+        return [], f"{path}: 'version' must be 1"
+    raw_roots = data.get("roots", [])
+    if not isinstance(raw_roots, list):
+        return [], f"{path}: 'roots' must be a list"
+    if len(raw_roots) > REFERENCE_ROOTS_MAX_COUNT:
+        return [], f"{path}: more than {REFERENCE_ROOTS_MAX_COUNT} roots declared"
+
+    # G1: an alias may not collide with a protocol PATHISH_PREFIXES token
+    # (e.g. an alias literally named "setup" or "state"), computed from the
+    # same module-level constant Rule B's own base resolution uses so the
+    # two lists can never drift apart.
+    pathish_tokens = {p.strip("./").rstrip("/") for p in PATHISH_PREFIXES}
+
+    seen_alias: set[str] = set()
+    entries: list[dict] = []
+    for i, raw in enumerate(raw_roots):
+        if not isinstance(raw, dict):
+            return [], f"{path}: roots[{i}] must be an object"
+        unknown = set(raw) - _VERSIONED_ROOT_ALLOWED_KEYS
+        if unknown:
+            return [], f"{path}: roots[{i}] has unknown key(s) {sorted(unknown)}"
+
+        alias = raw.get("alias")
+        if not isinstance(alias, str) or not ALIAS_RE.match(alias):
+            return [], f"{path}: roots[{i}].alias is missing or does not match {ALIAS_RE.pattern}"
+        if alias in pathish_tokens:
+            return [], f"{path}: roots[{i}].alias {alias!r} collides with a PATHISH_PREFIXES token"
+        if alias in seen_alias:
+            return [], f"{path}: duplicate alias {alias!r}"
+        seen_alias.add(alias)
+
+        purpose = raw.get("purpose")
+        if not isinstance(purpose, str) or not purpose.strip():
+            return [], f"{path}: roots[{i}].purpose must be a non-empty string"
+
+        expect_present = raw.get("expect_present")
+        if (
+            not isinstance(expect_present, list)
+            or not (1 <= len(expect_present) <= 8)
+            or not all(isinstance(p, str) and p.strip() for p in expect_present)
+        ):
+            return [], f"{path}: roots[{i}].expect_present must be 1-8 non-empty strings"
+
+        subpaths = raw.get("subpaths")
+        if subpaths is not None and (
+            not isinstance(subpaths, list)
+            or not all(isinstance(p, str) and p.strip() and "/" not in p for p in subpaths)
+        ):
+            return [], f"{path}: roots[{i}].subpaths, if present, must be single-segment names"
+
+        approved_by = raw.get("approved_by")
+        if not isinstance(approved_by, str) or not approved_by.strip():
+            return [], f"{path}: roots[{i}].approved_by must be a non-empty string"
+
+        entries.append(
+            {
+                "alias": alias,
+                "purpose": purpose,
+                "expect_present": tuple(expect_present),
+                "subpaths": tuple(subpaths) if subpaths is not None else None,
+                "approved_by": approved_by,
+            }
+        )
+    return entries, None
+
+
+def _load_local_bindings(path: Path) -> tuple[dict[str, str], str | None]:
+    """Parse and validate `.harnessloop/local/reference-roots.local.json`.
+
+    Returns `(bindings, None)` where `bindings` maps alias -> raw (not yet
+    expanded or resolved) declared path string, or `({}, message)` on any
+    structural problem (G2/G3). A binding entry declaring any of
+    `_LOCAL_BINDING_FORBIDDEN_KEYS` (`identity`/`available`/`optional`/
+    `expect_present`) is rejected specifically because those keys would let
+    the low-trust local side answer a high-trust question ("is this the
+    right tree") that only the project-committed sentinel check
+    (`expect_present`, verified server-side by `_load_one_root`) is allowed
+    to answer (§2.2: "低信任半边不得影响可用性判定").
+
+    A missing file is not an error — every declared alias is simply
+    `"unbound"` (see `_load_one_root`), which is the correct default: a
+    fresh clone or a new machine has bound nothing yet.
+    """
+    if not path.is_file():
+        return {}, None
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        return {}, f"{path}: cannot stat ({exc})"
+    if size > REFERENCE_ROOTS_MAX_BYTES:
+        return {}, f"{path}: exceeds {REFERENCE_ROOTS_MAX_BYTES} bytes"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return {}, f"{path}: cannot read ({exc})"
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return {}, f"{path}: invalid JSON ({exc})"
+    if not isinstance(data, dict):
+        return {}, f"{path}: top level must be a JSON object"
+    unknown_top = set(data) - {"version", "bindings"}
+    if unknown_top:
+        return {}, f"{path}: unknown top-level key(s) {sorted(unknown_top)}"
+    if data.get("version") != 1:
+        return {}, f"{path}: 'version' must be 1"
+    raw_bindings = data.get("bindings", {})
+    if not isinstance(raw_bindings, dict):
+        return {}, f"{path}: 'bindings' must be an object"
+
+    bindings: dict[str, str] = {}
+    for alias, binding in raw_bindings.items():
+        if not isinstance(binding, dict):
+            return {}, f"{path}: bindings[{alias!r}] must be an object"
+        forbidden = _LOCAL_BINDING_FORBIDDEN_KEYS & set(binding)
+        if forbidden:
+            return {}, (
+                f"{path}: bindings[{alias!r}] declares low-trust identity "
+                f"key(s) {sorted(forbidden)} -- the local binding file may "
+                "only ever answer 'where', never 'is this the right tree'"
+            )
+        unknown = set(binding) - _LOCAL_BINDING_ALLOWED_KEYS
+        if unknown:
+            return {}, f"{path}: bindings[{alias!r}] has unknown key(s) {sorted(unknown)}"
+        raw_path = binding.get("path")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return {}, f"{path}: bindings[{alias!r}].path must be a non-empty string"
+        bindings[alias] = raw_path
+    return bindings, None
+
+
+def _resolve_in_root(root: Path, rel: str) -> Path | None:
+    """PR-3 §2.5's two orthogonal containment defenses, applied to an
+    external reference root: `root` must already be canonical (this is the
+    same "pinned domain" `_is_contained_pinned` requires — see its
+    docstring).
+
+    Defense 1 — literal traversal rejection, applied to the raw text before
+    any join: an empty `rel`, or one starting with `/` or `~`, a Windows
+    drive-absolute form, or containing a `..` segment, is rejected before
+    ever touching the filesystem (mirrors `_looks_like_out_of_project` /
+    the project-domain `..` rejection in `_resolve_in_project` — the same
+    escape shapes are just as real against an external root as against the
+    project).
+
+    Defense 2 — unfolded raw join + pinned canonical containment: the
+    candidate is `root / rel`, never a pre-folded
+    `Path(os.path.normpath(root / rel))` copy of it (T-064 MUST-FIX C,
+    reapplied to the new domain: folding `link/../escape.md` lexically
+    *before* resolving would erase the very symlink hop containment exists
+    to catch). `_is_contained_pinned` resolves the raw join and checks it
+    against the domain pinned at load time.
+    """
+    if (
+        not rel
+        or rel.startswith(("/", "~"))
+        or WINDOWS_DRIVE_ABS_RE.match(rel)
+        or any(seg == ".." for seg in rel.split("/"))
+    ):
+        return None
+    candidate = root / rel
+    if not _is_contained_pinned(candidate, root):
+        return None
+    return candidate
+
+
+def _resolve_case_exact(root: Path, rel: str) -> Path | None:
+    """Walk `rel`'s segments under `root` one directory entry at a time via
+    `os.scandir`, matching each segment name *exactly* (byte-for-byte
+    string comparison), never through `Path.exists()`/`Path.is_dir()` --
+    G10: those two delegate to the host filesystem's own comparison, which
+    is case-*insensitive* (but case-preserving) on a default macOS or
+    Windows filesystem, so a citation with the wrong case for a real file
+    would otherwise resolve there (measured directly against this project's
+    own external root: `@@wiki/KERNEL/FACTS.MD` resolves via `.exists()` on
+    macOS even though the real file is `kernel/facts.md`).
+
+    Deliberately host-independent and never delegated to `resolve()`: this
+    function's whole job is to disagree with the host filesystem's own
+    case-folding when they differ, so it cannot reuse anything that follows
+    that folding.
+
+    Returns the real, exact-case path if every segment matched exactly, or
+    `None` the moment any segment does not (missing entry, or `root`/an
+    intermediate segment is not actually a directory). A caller still owns
+    the final existence/directory-semantics decision (`_exists_as`, called
+    by `resolve_external_citation`) — this function only proves "an entry
+    with this exact name exists at this level", not "the whole path is
+    usable the way the citation implies" (e.g. a broken symlink's final
+    segment is still found here; `resolve_external_citation` is what turns
+    that into `not_found`, exactly as `_exists_as` does for the project
+    domain).
+    """
+    current = root
+    for seg in (s for s in rel.split("/") if s):
+        if not current.is_dir():
+            return None
+        try:
+            with os.scandir(current) as it:
+                match = next((e for e in it if e.name == seg), None)
+        except OSError:
+            return None
+        if match is None:
+            return None
+        current = current / seg
+    return current
+
+
+def resolve_external_citation(root: ReferenceRoot, rel: str) -> tuple[str, Path | None]:
+    """Resolve `rel` (the text after `@@<alias>/`, one attempt — the caller
+    tries the as-written form and, on failure, a locator-stripped retry, the
+    same order Rule B's project-domain resolution uses) against
+    `root.canonical`.
+
+    Returns `("resolved" | "not_found" | "rejected", path-or-None)`.
+    `root` must already be `available` — callers check that separately and
+    report `external-citation-unverifiable` instead of ever calling this
+    (G7); this function has no "unavailable" outcome of its own.
+
+    Order: (1) `_resolve_in_root` — G8's literal-traversal defense and G9's
+    unfolded-join pinned containment; a rejection here is final and never
+    falls through to the existence check below (a rejected `candidate` is
+    not something `_resolve_case_exact` should ever be asked about). (2)
+    `_resolve_case_exact` — G10's exact-case segment walk; `None` here is
+    `not_found`. (3) directory-semantics existence (G11): `is_dir()` when
+    `rel` ends in `/`, `exists()` otherwise (`exists()` follows symlinks, so
+    a broken symlink's dangling target is `not_found`, not `resolved`,
+    exactly like the project domain's `_exists_as`). (4) `subpaths`
+    whitelist (G12), checked against the *canonical* path relative to the
+    canonical root, not the literal `rel` — a `kernel/link -> <root>/raw`
+    symlink cited as `kernel/link/x.md` must be judged by where it actually
+    lands (`raw`), not by the literal first segment it was typed with.
+    """
+    candidate = _resolve_in_root(root.canonical, rel)
+    if candidate is None:
+        return "rejected", None
+
+    want_dir = rel.endswith("/")
+    real = _resolve_case_exact(root.canonical, rel)
+    if real is None:
+        return "not_found", None
+    if not _exists_as(real, want_dir):
+        return "not_found", None
+
+    if root.subpaths:
+        canon_real = _canonical(real)
+        try:
+            rel_canon = canon_real.relative_to(root.canonical)
+        except ValueError:
+            return "rejected", None
+        first_seg = rel_canon.parts[0] if rel_canon.parts else None
+        if first_seg not in root.subpaths:
+            return "rejected", None
+
+    return "resolved", real
+
+
+def _resolve_external_with_locator(root: ReferenceRoot, rel: str, full_cited: str) -> str:
+    """Try `rel` as written; on failure, retry with `full_cited`'s own
+    trailing locator suffix stripped (mirrors Rule B's project-domain
+    "original, then locator-stripped" order — see `strip_locator_suffix`,
+    unchanged by PR-3 and already verified to work unmodified against
+    `@@alias/...` spans).
+
+    Returns only the outcome string (`"resolved" | "not_found" |
+    "rejected"`) since the specific resolved path is not needed by the
+    citation-existence caller (unlike the sentinel/subpaths checks, which do
+    need it). If neither attempt resolves, `"rejected"` wins over
+    `"not_found"` so a genuinely malformed or escaping relpath is never
+    silently downgraded to a plain "no such file" just because a
+    locator-stripped retry also failed to find anything.
+    """
+    outcome, _ = resolve_external_citation(root, rel)
+    if outcome == "resolved":
+        return outcome
+    stripped_full = strip_locator_suffix(full_cited)
+    if stripped_full != full_cited:
+        m = ALIAS_CITATION_RE.match(stripped_full)
+        if m and m.group(2) != rel:
+            outcome2, _ = resolve_external_citation(root, m.group(2))
+            if outcome2 == "resolved":
+                return outcome2
+            if outcome2 == "rejected":
+                outcome = "rejected"
+    return outcome
+
+
+def _load_one_root(
+    entry: dict, raw_path: str | None, project_canonical: Path, verify_identity: bool
+) -> ReferenceRoot:
+    """Resolve one declared root entry to a `ReferenceRoot` (G4-G6).
+
+    Load order is itself the safety property (§2.5): `expanduser` (`~` only,
+    no env/glob interpolation) -> `resolve(strict=True)` (wrapped in
+    `try/except (OSError, RuntimeError)` — a symlink loop raises
+    `RuntimeError`, not `OSError`, on the interpreters this was measured
+    against) -> `is_dir()` -> *only then* the forbidden-root checks, and
+    every one of those checks compares **canonical** values, never the raw
+    declared string (G4: resolving first is what stops a symlink like
+    `fakehome/w2 -> <project's own parent directory>` — which reads as an
+    innocuous relative string — from defeating every literal check that ran
+    before resolution). The declared-string glob/env-character check is the
+    one exception: it runs on the raw string, deliberately before
+    `expanduser`/`resolve` are ever called, since a literal `*`/`$(`/`${`
+    in a path meant to be used literally is suspicious independent of what
+    it might canonicalize to.
+    """
+    common = dict(
+        alias=entry["alias"],
+        purpose=entry["purpose"],
+        expect_present=entry["expect_present"],
+        subpaths=entry["subpaths"],
+        approved_by=entry["approved_by"],
+    )
+
+    if raw_path is None:
+        return ReferenceRoot(canonical=None, available=False, unavailable_reason="unbound", **common)
+
+    if any(ch in _GLOB_OR_ENV_CHARS for ch in raw_path) or "${" in raw_path or "$(" in raw_path:
+        return ReferenceRoot(canonical=None, available=False, unavailable_reason="rejected", **common)
+
+    try:
+        canonical = Path(raw_path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ReferenceRoot(canonical=None, available=False, unavailable_reason="unresolvable", **common)
+
+    if not canonical.is_dir():
+        return ReferenceRoot(canonical=None, available=False, unavailable_reason="rejected", **common)
+
+    home = Path.home().resolve()
+    forbidden = (
+        canonical == Path(canonical.anchor)
+        or canonical == home
+        or canonical == home.parent
+        or is_under(project_canonical, canonical)  # root is project's ancestor or itself
+        or is_under(canonical, project_canonical)  # root sits inside the project
+    )
+    if forbidden:
+        return ReferenceRoot(canonical=None, available=False, unavailable_reason="rejected", **common)
+
+    if verify_identity:
+        for sentinel in entry["expect_present"]:
+            candidate = _resolve_in_root(canonical, sentinel)
+            if candidate is None or not _exists_as(candidate, sentinel.endswith("/")):
+                return ReferenceRoot(
+                    canonical=None, available=False, unavailable_reason="identity-mismatch", **common
+                )
+
+    return ReferenceRoot(canonical=canonical, available=True, unavailable_reason=None, **common)
+
+
+def load_reference_roots(
+    project: Path, verify_identity: bool = True
+) -> tuple[dict[str, ReferenceRoot], list[dict]]:
+    """Load, validate, and resolve every declared external reference root.
+
+    Reads two files: the versioned, zero-absolute-path
+    `.harnessloop/setup/reference-roots.json` (git-committed) and the
+    gitignored, machine-local `.harnessloop/local/reference-roots.local.json`
+    (§2.2). Absence of the versioned file is treated exactly like an empty
+    `roots` list — today's behavior, unchanged (§2.2: "缺席 ≡ 空列表 ≡ 今天的
+    行为"). This is the *only* parser for either file — `check_setup.py`
+    must call this (with `verify_identity=False`, see below) rather than
+    writing a second one if it ever wants to report an advisory line (§2.2:
+    "不得自写第二个解析器").
+
+    `verify_identity`: when `True` (the default, and always `True` when
+    called from `verify_project`), a root whose `expect_present` sentinels
+    do not all resolve is marked unavailable
+    (`unavailable_reason="identity-mismatch"`) rather than available. When
+    `False`, that check is skipped entirely — intended for a future
+    optimistic/advisory reader (e.g. a setup wizard reporting "N reference
+    roots declared") that must never let a low-cost, best-effort read
+    silently disagree with what the mechanical gate would decide; skipping
+    the check is the honest way to do that (reporting a wrong "available"
+    would not be).
+
+    Returns `(roots, violations)`. `roots` maps alias -> `ReferenceRoot`
+    (both available and unavailable ones — callers distinguish via
+    `.available`). `violations` are the G1/G2/G4/G5/G6 declaration-level
+    problems found while loading — never round-scoped (a declaration is a
+    project-level fact), so every violation here carries `"round":
+    str(project)`. `G7`'s per-alias-per-round-independent
+    `external-root-unavailable` violation is *not* added here — that is the
+    caller's (`verify_project`'s) job, exactly once per unavailable alias,
+    project-wide (§2.7: "external_roots_declared/available ... 项目级,在轮次
+    循环之后单次赋值").
+    """
+    violations: list[dict] = []
+    versioned_path = project / REFERENCE_ROOTS_VERSIONED_REL
+    local_path = project / REFERENCE_ROOTS_LOCAL_REL
+
+    if not versioned_path.is_file():
+        return {}, violations
+
+    entries, versioned_error = _load_versioned_roots(versioned_path)
+    if versioned_error is not None:
+        violations.append(
+            {"round": str(project), "kind": "reference-roots-invalid", "detail": versioned_error}
+        )
+        return {}, violations
+
+    bindings, local_error = _load_local_bindings(local_path)
+    if local_error is not None:
+        violations.append(
+            {"round": str(project), "kind": "reference-root-local-invalid", "detail": local_error}
+        )
+        bindings = {}
+
+    project_canonical = _canonical(project)
+    roots: dict[str, ReferenceRoot] = {}
+    for entry in entries:
+        alias = entry["alias"]
+        root = _load_one_root(entry, bindings.get(alias), project_canonical, verify_identity)
+        roots[alias] = root
+        if root.unavailable_reason == "rejected":
+            violations.append(
+                {
+                    "round": str(project),
+                    "kind": "reference-root-rejected",
+                    "detail": (
+                        f"reference root '{alias}' is rejected (forbidden location, "
+                        "not a directory, or a glob/env character in its declared path)"
+                    ),
+                }
+            )
+        elif root.unavailable_reason == "unresolvable":
+            violations.append(
+                {
+                    "round": str(project),
+                    "kind": "reference-root-unresolvable",
+                    "detail": f"reference root '{alias}' could not be resolved (symlink loop or OS error)",
+                }
+            )
+        elif root.unavailable_reason == "identity-mismatch":
+            violations.append(
+                {
+                    "round": str(project),
+                    "kind": "reference-root-identity-mismatch",
+                    "detail": (
+                        f"reference root '{alias}' is bound but at least one of its "
+                        "declared `expect_present` sentinels does not exist there"
+                    ),
+                }
+            )
+        # "unbound" produces no G1-G6 violation here -- only the G7
+        # `external-root-unavailable` violation the caller adds once,
+        # project-wide, for every unavailable alias regardless of reason.
+    return roots, violations
 
 
 def submodule_roots(project: Path) -> list[Path]:
@@ -1351,7 +1984,10 @@ def _scan_round_artifacts(
 
 
 def verify_round(
-    project: Path, round_dir: Path, suffix_index: dict[str, list[tuple[str, ...]]]
+    project: Path,
+    round_dir: Path,
+    suffix_index: dict[str, list[tuple[str, ...]]],
+    roots: dict[str, "ReferenceRoot"],
 ) -> tuple[list[dict], dict]:
     violations: list[dict] = []
     goal_dir = round_dir.parent.parent
@@ -1422,6 +2058,31 @@ def verify_round(
                     "detail": f"no backtick path spans found under '## Allowed Changes' in {scope_lock}",
                 }
             )
+        # PR-3 §4 OUT list ("Review: 与 scope-lock 的 Allowed Changes 永不接受
+        # alias"): a reference root is never an authorization to write --
+        # scope-lock's Allowed Changes must name project-versionable paths
+        # only. Triggered *only* for a span whose alias is actually
+        # declared (facet 1 P2's rejected all-`@`-spans filter would have
+        # produced a false-red for e.g. a JS monorepo's `@scope/pkg/` span
+        # that has nothing to do with reference roots); an undeclared
+        # `@@foo/...` span is left to whatever the existing lexical
+        # scope-lock matching already does with it (silently never
+        # matching any real file — not a new failure mode). Reported
+        # loudly, never silently dropped from `spans`.
+        for span in spans:
+            span_alias_match = ALIAS_CITATION_RE.match(span)
+            if span_alias_match and span_alias_match.group(1) in roots:
+                violations.append(
+                    {
+                        "round": str(round_dir),
+                        "kind": "scope-lock-span-names-reference-root",
+                        "detail": (
+                            f"{scope_lock} names `{span}` in Allowed Changes, which "
+                            f"targets declared reference root '{span_alias_match.group(1)}' -- "
+                            "a reference root can never be authorized for writes"
+                        ),
+                    }
+                )
 
     if checked_files and spans:
         coverage["rule_a_files"] = len(checked_files)
@@ -1472,6 +2133,65 @@ def verify_round(
                 coverage["review_files_with_ignore"] += 1
             for cited in cited_list:
                 coverage["citations_checked"] += 1
+
+                # PR-3 §2.4: domain is decided by text + the declared alias
+                # set, before any filesystem access. A declared alias is
+                # resolved *only* within its own root -- never against
+                # `citation_bases`, never through `suffix_index` (G13/G14).
+                # An alias-shaped-but-undeclared span (G15) falls straight
+                # through to the unchanged project-domain block below; the
+                # only difference there is a display-only hint naming the
+                # declared aliases, appended to the same `dangling-citation`
+                # it would have produced anyway.
+                alias_match = ALIAS_CITATION_RE.match(cited)
+                if alias_match and alias_match.group(1) in roots:
+                    alias = alias_match.group(1)
+                    root = roots[alias]
+                    coverage["external_citations_checked"] += 1
+                    if not root.available:
+                        coverage["external_citations_unverifiable"] += 1
+                        violations.append(
+                            {
+                                "round": str(round_dir),
+                                "kind": "external-citation-unverifiable",
+                                "detail": (
+                                    f"{review} cites `{cited}` but reference root '{alias}' "
+                                    f"is unavailable ({root.unavailable_reason}); run with "
+                                    "--show-root-paths for the local path"
+                                ),
+                            }
+                        )
+                        continue
+                    outcome = _resolve_external_with_locator(root, alias_match.group(2), cited)
+                    if outcome == "resolved":
+                        coverage["external_citations_resolved"] += 1
+                    elif outcome == "not_found":
+                        coverage["external_citations_not_found"] += 1
+                        violations.append(
+                            {
+                                "round": str(round_dir),
+                                "kind": "external-citation-not-found",
+                                "detail": (
+                                    f"{review} cites `{cited}` which does not exist under "
+                                    f"reference root '{alias}'"
+                                ),
+                            }
+                        )
+                    else:
+                        coverage["external_citations_rejected"] += 1
+                        violations.append(
+                            {
+                                "round": str(round_dir),
+                                "kind": "external-citation-rejected",
+                                "detail": (
+                                    f"{review} cites `{cited}` which reference root '{alias}' "
+                                    "rejects (traversal, symlink escape, or outside its "
+                                    "declared subpaths)"
+                                ),
+                            }
+                        )
+                    continue
+
                 want_dir = cited.endswith("/")
                 resolved = _any_base_resolves(cited, citation_bases, project, want_dir)
                 stripped = cited
@@ -1497,6 +2217,16 @@ def verify_round(
                             f" — a unique suffix match exists at {hint_rel}; if that is "
                             "the intended file, cite it by a resolvable path or mark the "
                             f"line {IGNORE_MARKER}"
+                        )
+                    elif alias_match is not None:
+                        # G15: this span was alias-*shaped* but its alias was
+                        # never declared -- resolved (or not) exactly like
+                        # any other project-relative string above; this is a
+                        # display-only note, not a different verdict.
+                        declared = ", ".join(sorted(roots)) if roots else "(none)"
+                        hint = (
+                            f" — `@@{alias_match.group(1)}` is not a declared "
+                            f"reference-root alias; declared: {declared}"
                         )
                     violations.append(
                         {
@@ -1574,6 +2304,22 @@ def _empty_coverage() -> dict:
         "rounds_review_none": 0,
         "rounds_review_missing_fields": 0,
         "rounds_review_digest_declared": 0,
+        # PR-3 (external-citation-base-spec-20260727.md §2.7): the two
+        # `external_roots_*` fields are project-level and assigned exactly
+        # once by `verify_project`, *after* its round loop -- never
+        # accumulated per round. They live in this same dict (so G18's
+        # coverage-key <-> SKILL.md IN-column check still sees them, and so
+        # every round's local `coverage = _empty_coverage()` has the keys
+        # too) but every round leaves them at 0; `verify_project`'s
+        # per-round accumulation loop therefore only ever adds 0 to them,
+        # and the real values are plain-assigned once after that loop.
+        "external_roots_declared": 0,
+        "external_roots_available": 0,
+        "external_citations_checked": 0,
+        "external_citations_resolved": 0,
+        "external_citations_not_found": 0,
+        "external_citations_rejected": 0,
+        "external_citations_unverifiable": 0,
     }
 
 
@@ -1599,9 +2345,36 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     # calling `.iterdir()` / `.rglob()` on it, including the round's own
     # `scope-lock.md` and `decision.md` (fixture C's repro showed the whole
     # round, scope-lock included, being read from outside the project).
+    # This check stays first and its early return unconditional (PR-3 must
+    # not touch this G17 invariant): if the goals directory itself escapes,
+    # nothing else in the project -- including reference-root declarations
+    # -- is read.
     escape = _container_escape_violation(goals_dir, project, goals_dir)
     if escape is not None:
         return [escape], coverage
+
+    # PR-3: load declared external reference roots once per run (G5: every
+    # run re-validates, never "validated once and trusted"). `roots` is
+    # threaded into every `verify_round` call below so each round resolves
+    # its `@@alias/...` citations against the same, single load. Violations
+    # from the declaration itself (G1/G2/G4/G5/G6) are project-level, added
+    # once here; `external-root-unavailable` (G7) is added once per
+    # unavailable alias, also project-level, immediately below.
+    roots, root_violations = load_reference_roots(project, verify_identity=True)
+    violations.extend(root_violations)
+    for alias, root in roots.items():
+        if not root.available:
+            violations.append(
+                {
+                    "round": str(project),
+                    "kind": "external-root-unavailable",
+                    "detail": (
+                        f"reference root '{alias}' is unavailable "
+                        f"({root.unavailable_reason}); every citation using this alias "
+                        "will be reported external-citation-unverifiable"
+                    ),
+                }
+            )
 
     # Built once per project run (not per round/citation) — see
     # `build_suffix_index` for why this matters for performance.
@@ -1621,10 +2394,19 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
                 continue
             if not round_dir.is_dir():
                 continue
-            round_violations, round_coverage = verify_round(project, round_dir, suffix_index)
+            round_violations, round_coverage = verify_round(project, round_dir, suffix_index, roots)
             violations.extend(round_violations)
             for key in coverage:
                 coverage[key] += round_coverage[key]
+
+    # PR-3 §2.7: project-level, single assignment *after* the round loop --
+    # every round's own `coverage["external_roots_*"]` stayed 0 (see
+    # `_empty_coverage`'s comment), so the accumulation loop above added 0
+    # to these keys regardless of round count; this plain assignment is the
+    # only place they are ever set, so they are never multiplied by the
+    # number of rounds.
+    coverage["external_roots_declared"] = len(roots)
+    coverage["external_roots_available"] = sum(1 for r in roots.values() if r.available)
     return violations, coverage
 
 
@@ -1668,6 +2450,25 @@ def main() -> int:
     )
     parser.add_argument("--project", "-p", default=".", help="Target project directory. Defaults to current directory.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON output.")
+    # PR-3 §2.7 safety constraint: violation detail, the coverage line, and
+    # --json never print a reference root's local path (G20). This is a
+    # separate, additional, human-output-only section -- deliberately not
+    # a verdict-changing knob (G19: this repo's argparse must never grow an
+    # allow-missing/skip-roots/no-external-style option that would let an
+    # unavailable or rejected root quietly stop failing); it has no effect
+    # at all under --json, so the JSON schema whitelist stays exactly what
+    # it was without this flag.
+    parser.add_argument(
+        "--show-root-paths",
+        action="store_true",
+        help=(
+            "Also print each declared reference-root alias's raw local path "
+            "(from .harnessloop/local/reference-roots.local.json), for "
+            "debugging an unavailable/rejected root. Human output only; "
+            "never changes exit code, violations, or coverage, and has no "
+            "effect under --json."
+        ),
+    )
     args = parser.parse_args()
 
     project = Path(args.project).resolve()
@@ -1722,8 +2523,28 @@ def main() -> int:
             f"review_declared={coverage['rounds_review_declared']} "
             f"review_none={coverage['rounds_review_none']} "
             f"review_missing_fields={coverage['rounds_review_missing_fields']} "
-            f"review_digest_declared={coverage['rounds_review_digest_declared']}"
+            f"review_digest_declared={coverage['rounds_review_digest_declared']} "
+            f"external_roots_declared={coverage['external_roots_declared']} "
+            f"external_roots_available={coverage['external_roots_available']} "
+            f"external_citations_checked={coverage['external_citations_checked']} "
+            f"external_citations_resolved={coverage['external_citations_resolved']} "
+            f"external_citations_not_found={coverage['external_citations_not_found']} "
+            f"external_citations_rejected={coverage['external_citations_rejected']} "
+            f"external_citations_unverifiable={coverage['external_citations_unverifiable']}"
         )
+        if args.show_root_paths:
+            # Deliberately the *only* place a reference root's local path is
+            # ever printed (G20 pins violation detail / coverage line /
+            # --json to alias-only; this flag is the documented escape
+            # valve those three point at, and it prints nothing else).
+            bindings, _local_error = _load_local_bindings(project / REFERENCE_ROOTS_LOCAL_REL)
+            _roots, _violations = load_reference_roots(project, verify_identity=True)
+            print("reference root local paths (--show-root-paths):")
+            if not _roots:
+                print("  (no reference roots declared)")
+            for alias in sorted(_roots):
+                raw = bindings.get(alias)
+                print(f"  {alias}: {raw if raw else '(unbound)'}")
     return 1 if violations else 0
 
 

@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "bindings": {
+    "wiki": { "path": "~/.llm-wiki/agent-app-design", "bound_at": "<ISO-8601 timestamp>" }
+  }
+}

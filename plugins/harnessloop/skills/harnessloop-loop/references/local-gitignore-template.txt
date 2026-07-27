@@ -1,5 +1,7 @@
 channel-params.json
 channel-params.json.*
+reference-roots.local.json
+reference-roots.local.json.*
 cost-marker.json
 *.secret.json
 *.token
