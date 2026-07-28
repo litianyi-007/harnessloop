@@ -7601,6 +7601,348 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g36_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G37: TH-0019 (evolution-issues/0019-external-system-declaration-not-
+    # wired.md) -- external system declarations
+    # (`verify_protocol.load_external_systems`,
+    # `_load_external_systems_file`) and their cross-reference from
+    # `<goal>/evals.json`'s optional `system` field
+    # (`check_goal_eval_registry`'s extension). Reuses `_rae_project` /
+    # `_rae_goal_dir` / `_rae_write_registry` from the G25 section above --
+    # same minimal one-round project fixture, since `evals.json` and
+    # `external-systems.json` are both today-layer, goal/project-level
+    # files that never depend on a round's own contents. Every letter below
+    # proves its primary claim AND its opposite via an explicit fixture
+    # mutation, same discipline as every other lettered group in this file.
+    # -------------------------------------------------------------------
+
+    def _ext_systems_path(project: Path) -> Path:
+        return project / ".harnessloop" / "setup" / "external-systems.json"
+
+    def _write_ext_systems(project: Path, obj) -> None:
+        path = _ext_systems_path(project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = obj if isinstance(obj, str) else json.dumps(obj)
+        path.write_text(text, encoding="utf-8")
+
+    print("  G37a: a legal external-systems.json -> zero violations, external_systems_declared == 1")
+    g37_root = Path(tempfile.mkdtemp(prefix="hl-extsys-g37-"))
+    try:
+        project = _rae_project(g37_root)
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {
+                        "id": "staging-api",
+                        "kind": "http",
+                        "description": "预发 API",
+                        "params": ["STAGING_API_BASE", "STAGING_API_TOKEN"],
+                    }
+                ],
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            f"G37a: a legal external-systems.json produces zero violations (got {violations})",
+        )
+        check(
+            coverage["external_systems_declared"] == 1,
+            f"G37a: external_systems_declared == 1 (got {coverage['external_systems_declared']})",
+        )
+
+        print("  G37b: duplicate id invalidates the whole file; a distinct id clears it")
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": "http", "description": "", "params": []},
+                    {"id": "staging-api", "kind": "grpc", "description": "", "params": []},
+                ],
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G37b: duplicate id 'staging-api' -> external-system-invalid, whole file "
+            f"invalidated (got {kinds})",
+        )
+        check(
+            coverage["external_systems_declared"] == 0,
+            "G37b: an invalidated file declares zero systems, not a partial load "
+            f"(got {coverage['external_systems_declared']})",
+        )
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": "http", "description": "", "params": []},
+                    {"id": "other-api", "kind": "grpc", "description": "", "params": []},
+                ],
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations and coverage["external_systems_declared"] == 2,
+            "G37b mutation control: giving the second entry a distinct id ('other-api') "
+            f"clears the violation and both systems load (got violations={violations}, "
+            f"external_systems_declared={coverage['external_systems_declared']})",
+        )
+
+        print("  G37c: kind outside the enum invalidates the whole file")
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "staging-api", "kind": "websocket", "description": "", "params": []}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G37c: kind 'websocket' is not in {{http,grpc,database,queue,filesystem,other}} "
+            f"-> external-system-invalid (got {kinds})",
+        )
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "staging-api", "kind": "http", "description": "", "params": []}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G37c mutation control: changing kind to the legal enum member 'http' clears the violation",
+        )
+
+        print("  G37d: an entry declaring any key outside id/kind/description/params invalidates the whole file")
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {
+                        "id": "staging-api",
+                        "kind": "http",
+                        "description": "",
+                        "params": [],
+                        "endpoint": "https://staging.example.com",
+                    }
+                ],
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            "G37d: an entry carrying an unlisted key ('endpoint') -- exactly the kind of "
+            "field this schema's field enumeration is designed to exclude -- invalidates "
+            f"the whole file (got {kinds})",
+        )
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "staging-api", "kind": "http", "description": "", "params": []}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G37d mutation control: removing the unlisted 'endpoint' key clears the violation",
+        )
+
+        print("  G37e: version != 1 invalidates the whole file")
+        _write_ext_systems(project, {"version": 2, "systems": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G37e: 'version': 2 -> external-system-invalid (got {kinds})",
+        )
+        _write_ext_systems(project, {"version": 1, "systems": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(not violations, "G37e mutation control: 'version': 1 with an empty systems list is legal")
+
+        print("  G37f: a duplicate JSON key in external-systems.json -> red, proving _load_strict_json is really wired")
+        dup_key_text = (
+            '{"version": 1, "systems": [{"id": "staging-api", "kind": "http", '
+            '"kind": "grpc", "description": "", "params": []}]}'
+        )
+        _write_ext_systems(project, dup_key_text)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G37f: a duplicate 'kind' key anywhere in the document -> external-system-invalid (got {kinds})",
+        )
+        naive = json.loads(dup_key_text)
+        check(
+            naive["systems"][0]["kind"] == "grpc",
+            "G37f destructive control: plain json.loads (no object_pairs_hook) silently "
+            "accepts this EXACT duplicate-key document and keeps only the LAST 'kind' "
+            "value ('grpc') without complaint -- if _load_external_systems_file used "
+            "plain json.loads instead of _load_strict_json, this fixture would have gone "
+            "GREEN instead of red",
+        )
+
+        print("  G37g: a params entry shaped like a URL is rejected by construction; a real parameter name is not")
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {
+                        "id": "staging-api",
+                        "kind": "http",
+                        "description": "",
+                        "params": ["https://evil.example.com/x"],
+                    }
+                ],
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            "G37g: params: [\"https://evil.example.com/x\"] -> external-system-invalid -- "
+            "the parameter-name regex ^[A-Z][A-Z0-9_]{0,63}$ admits no '/', ':', '.', or "
+            f"lowercase letter, so no URL-shaped string can ever match it (got {kinds})",
+        )
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "staging-api", "kind": "http", "description": "", "params": ["API_BASE"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G37g mutation control: changing the same slot to a real parameter name "
+            "('API_BASE') clears the violation",
+        )
+
+        print("  G37h: a full-width-character parameter name is rejected -- [A-Z0-9_] is used, never \\w")
+        naive_word_re = re.compile(r"^\w+$")
+        fullwidth_param = "ＡＰＩ_ＫＥＹ"  # full-width Latin letters + one ASCII underscore
+        check(
+            bool(naive_word_re.match(fullwidth_param)),
+            "G37h fixture sanity: a naive bare-\\w regex (the same class of mistake "
+            "G35a's bare-\\d sweep already fixed for this package) DOES accept this "
+            "full-width-lookalike string -- Python's \\w is Unicode-aware by default "
+            "and full-width Latin letters are classified as word characters",
+        )
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": "http", "description": "", "params": [fullwidth_param]}
+                ],
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            "G37h: the REAL implementation rejects the full-width parameter name despite "
+            f"the naive \\w regex accepting it above -- proves EXTERNAL_SYSTEM_PARAM_RE "
+            f"uses the explicit [A-Z0-9_] character class, not \\w (got {kinds})",
+        )
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "staging-api", "kind": "http", "description": "", "params": ["API_KEY"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G37h mutation control: the plain-ASCII equivalent ('API_KEY') is accepted",
+        )
+
+        print("  G37i: an eval's system: <declared id> is green and counted in evals_with_system")
+        _rae_write_registry(
+            project,
+            {"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "staging-api"}]},
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            not kinds & {"rae-invalid-system", "rae-system-undeclared"},
+            f"G37i: system: 'staging-api' names a declared id -> no system-related violation (got {kinds})",
+        )
+        check(
+            coverage["evals_with_system"] == 1 and coverage["evals_system_undeclared"] == 0,
+            "G37i: evals_with_system == 1, evals_system_undeclared == 0 "
+            f"(got {coverage['evals_with_system']}, {coverage['evals_system_undeclared']})",
+        )
+
+        print("  G37j: an eval's system: <undeclared id> -> rae-system-undeclared; declaring it clears the violation")
+        _rae_write_registry(
+            project,
+            {"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "nope"}]},
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"rae-system-undeclared"},
+            f"G37j: system: 'nope' is not declared in external-systems.json -> rae-system-undeclared (got {kinds})",
+        )
+        check(
+            coverage["evals_system_undeclared"] == 1 and coverage["evals_with_system"] == 0,
+            "G37j: evals_system_undeclared == 1, evals_with_system == 0 "
+            f"(got {coverage['evals_system_undeclared']}, {coverage['evals_with_system']})",
+        )
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": "http", "description": "", "params": []},
+                    {"id": "nope", "kind": "other", "description": "", "params": []},
+                ],
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-system-undeclared" not in kinds,
+            "G37j mutation control: declaring 'nope' in external-systems.json (same evals.json "
+            f"untouched) clears the violation (got {kinds})",
+        )
+        check(
+            coverage["evals_with_system"] == 1,
+            f"G37j mutation control: the now-declared id counts in evals_with_system (got {coverage['evals_with_system']})",
+        )
+    finally:
+        shutil.rmtree(g37_root, ignore_errors=True)
+
+    print("  G37k: external-systems.json absent + eval doesn't declare system -> zero violations (migration silence)")
+    g37k_root = Path(tempfile.mkdtemp(prefix="hl-extsys-g37k-"))
+    try:
+        project = _rae_project(g37k_root)
+        # Deliberately no external-systems.json written at all, and no
+        # `system` field in evals.json -- this is OUT-list item 3: absence
+        # of the declaration file is zero effect, not `gate_blocking`.
+        _rae_write_registry(project, {"evals": [{"eval_id": "RAE-0001", "activation_round": 1}]})
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations and coverage["external_systems_declared"] == 0,
+            "G37k: no external-systems.json and no `system` field declared anywhere -> "
+            f"zero violations, external_systems_declared == 0 (got violations={violations}, "
+            f"external_systems_declared={coverage['external_systems_declared']})",
+        )
+        _rae_write_registry(
+            project,
+            {"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "anything"}]},
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"rae-system-undeclared"},
+            "G37k mutation control: adding ONLY a `system` field to evals.json (the file "
+            "still does not exist) immediately turns it red -- proves G37k's greenness was "
+            f"specifically about the field never being declared, not a coincidental fixture "
+            f"blind spot (got {kinds})",
+        )
+    finally:
+        shutil.rmtree(g37k_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")

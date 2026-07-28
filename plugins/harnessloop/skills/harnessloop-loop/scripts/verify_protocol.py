@@ -608,6 +608,64 @@ _VERSIONED_ROOT_ALLOWED_KEYS = frozenset(
     {"alias", "purpose", "expect_present", "subpaths", "approved_by", "nested_under"}
 )
 
+# External system declarations (TH-0019, evolution-issues/0019-external-
+# system-declaration-not-wired.md): a project may declare named external
+# systems its evals bind to, as pure metadata -- see `load_external_systems`
+# for the versioned-file schema and `check_goal_eval_registry`'s `system`
+# handling for how `<goal>/evals.json` cross-references it. Deliberately a
+# *single*-file declaration, unlike reference roots' declared/bound split:
+# there is no local-binding counterpart here at all (§4 of the design this
+# issue records explicitly excludes one), because this gate never resolves
+# an id to a reachable address -- it only checks that an id an eval names is
+# an id this project declared.
+#
+# `EXTERNAL_SYSTEM_ID_RE` intentionally matches the same shape as `ALIAS_RE`
+# above (`^[a-z][a-z0-9-]{1,31}$`) -- both are short, human-chosen, kebab-case
+# identifiers with the same practical constraints -- but is kept as its own
+# constant rather than reusing `ALIAS_RE` directly: an external-system id and
+# a reference-root alias are two different namespaces (a project could one
+# day want an id and an alias to collide harmlessly), and this module's own
+# convention (see `RAE_EVAL_ID_RE` vs `ATTEMPT_ID_RE`, two independent regexes
+# that happen to share a `[0-9]{4}` shape) is never to fold two conceptually
+# distinct identifier spaces into one shared compiled pattern just because
+# today's patterns happen to match.
+EXTERNAL_SYSTEM_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
+
+# The closed enum a declared system's `kind` must land in. No normalization,
+# no near-miss tolerance -- exactly like `LEDGER_OUTCOMES` above, an enum
+# field is either the literal declared value or a violation, never guessed.
+EXTERNAL_SYSTEM_KINDS = frozenset({"http", "grpc", "database", "queue", "filesystem", "other"})
+
+# A `params` entry is a **parameter name**, never a value, and structurally
+# cannot hold a URL, host, or filesystem path: `[A-Z0-9_]` admits no `/`,
+# `:`, `.`, or lowercase letter, so a string like
+# `"https://evil.example.com/x"` cannot match this pattern no matter how it
+# is spelled. This is the security property the design brief requires --
+# "没有那个面，那个攻击就无从谈起" -- enforced by the shape of the character
+# class itself, not by a content scan for anything resembling a credential
+# or endpoint (there is no such scan anywhere in this file: `description`
+# below is free text and is deliberately never inspected for secrets).
+#
+# `[A-Z0-9_]`, never `\w`: Python's `re` module matches `\w` against any
+# Unicode codepoint its database classifies as a "word" character by
+# default, which includes full-width Latin letters/digits (U+FF21-FF3A,
+# U+FF10-FF19) that a casual reader could mistake for their ASCII
+# look-alikes. An explicit `[A-Z0-9_]` character class is defined purely by
+# literal codepoint ranges and admits none of those -- this repo's own
+# v0.33.2 class-wide sweep already fixed this exact confusion for every
+# bare-`\d` pattern in this package (see `_pattern_has_bare_backslash_d`'s
+# G35a teeth); this new regex is written to the same discipline from day one
+# rather than needing a second sweep later.
+EXTERNAL_SYSTEM_PARAM_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+# The exact key set a declared system entry may carry. Exhaustive per the
+# design brief ("字段穷举，多一个都不行") -- an entry declaring any key
+# outside this set invalidates the whole file, exactly like
+# `_VERSIONED_ROOT_ALLOWED_KEYS` above.
+_EXTERNAL_SYSTEM_ALLOWED_KEYS = frozenset({"id", "kind", "description", "params"})
+
+EXTERNAL_SYSTEMS_VERSIONED_REL = ".harnessloop/setup/external-systems.json"
+
 
 def norm(path: Path) -> str:
     return os.path.normcase(os.path.normpath(str(path)))
@@ -2373,6 +2431,140 @@ def _load_strict_json(path: Path) -> tuple[object | None, str | None]:
     return data, None
 
 
+# ---------------------------------------------------------------------------
+# External system declarations (TH-0019). `_load_external_systems_file` is
+# the schema loader for `.harnessloop/setup/external-systems.json`;
+# `load_external_systems` is the public entry point `verify_project` calls
+# (mirrors `_load_versioned_roots` / `load_reference_roots`'s split). Both
+# reuse `_load_strict_json` above rather than a second, independently-written
+# JSON reader -- the design brief for this issue explicitly requires it
+# ("必须复用"), and it is what gives this file the same duplicate-JSON-key
+# defense the RAE registry/ledger already have (G37f).
+# ---------------------------------------------------------------------------
+
+
+def _load_external_systems_file(path: Path) -> tuple[dict[str, dict], str | None]:
+    """Parse and fully validate `.harnessloop/setup/external-systems.json`.
+
+    Returns `(systems, None)` on success -- `systems` maps declared `id` ->
+    `{"kind": str, "description": str, "params": tuple[str, ...]}` -- or
+    `({}, message)` on ANY structural problem. All-or-nothing, mirroring
+    `_load_versioned_roots`'s "a single bad entry invalidates the entire
+    file" philosophy (a declared-systems file a reader partially trusts is
+    exactly the ambiguous state that philosophy exists to prevent): unreadable
+    or invalid JSON, a duplicate key at any nesting level (`_load_strict_json`,
+    G37f), a non-object top level, an unknown top-level key (only `version`
+    and `systems` are allowed), `version != 1`, `systems` not a list, a
+    non-object entry, an entry with any key outside `id`/`kind`/`description`/
+    `params` (the design brief's field enumeration is exhaustive -- "多一个都
+    不行"), a missing/malformed/duplicate `id`, an out-of-enum `kind`, a
+    non-string `description`, or a malformed `params` entry, all collapse to
+    the single caller-facing violation kind `external-system-invalid` (see
+    `load_external_systems`) -- there is deliberately no itemized, per-field
+    violation taxonomy here the way `check_goal_eval_registry` has for
+    `evals.json`, because every one of these problems already makes this
+    file's *shape* untrustworthy, not just one entry's content.
+
+    `params` is checked against `EXTERNAL_SYSTEM_PARAM_RE`
+    (`^[A-Z][A-Z0-9_]{0,63}$`) -- a parameter **name**, never a value, and a
+    shape no URL/host/path string can match (G37g). `description` is the
+    file's one free-text field and is validated only for being a string (any
+    content, including empty) -- this gate never scans it for anything that
+    looks like a credential (see `harnessloop-loop/SKILL.md`'s OUT column;
+    that scan would necessarily be both leaky and noisy, and secret-shaped
+    text is this project's own `check-secrets.sh`'s job, not this gate's).
+    """
+    data, err = _load_strict_json(path)
+    if err is not None:
+        return {}, err
+    if not isinstance(data, dict):
+        return {}, f"{path}: top level must be a JSON object"
+    unknown_top = set(data) - {"version", "systems"}
+    if unknown_top:
+        return {}, f"{path}: unknown top-level key(s) {sorted(unknown_top)} -- only 'version' and 'systems' are allowed"
+    if data.get("version") != 1:
+        return {}, f"{path}: 'version' must be 1"
+    raw_systems = data.get("systems")
+    if not isinstance(raw_systems, list):
+        return {}, f"{path}: 'systems' must be a list"
+
+    systems: dict[str, dict] = {}
+    for i, raw in enumerate(raw_systems):
+        if not isinstance(raw, dict):
+            return {}, f"{path}: systems[{i}] must be an object"
+        unknown = set(raw) - _EXTERNAL_SYSTEM_ALLOWED_KEYS
+        if unknown:
+            return {}, f"{path}: systems[{i}] has unknown key(s) {sorted(unknown)}"
+
+        system_id = raw.get("id")
+        if not isinstance(system_id, str) or not EXTERNAL_SYSTEM_ID_RE.match(system_id):
+            return {}, (
+                f"{path}: systems[{i}].id is missing or does not match "
+                f"{EXTERNAL_SYSTEM_ID_RE.pattern}"
+            )
+        if system_id in systems:
+            return {}, f"{path}: duplicate id {system_id!r}"
+
+        kind = raw.get("kind")
+        if kind not in EXTERNAL_SYSTEM_KINDS:
+            return {}, (
+                f"{path}: systems[{i}].kind {kind!r} is not one of "
+                f"{sorted(EXTERNAL_SYSTEM_KINDS)}"
+            )
+
+        description = raw.get("description")
+        if not isinstance(description, str):
+            return {}, f"{path}: systems[{i}].description must be a string (may be empty)"
+
+        params = raw.get("params")
+        if not isinstance(params, list) or not all(
+            isinstance(p, str) and EXTERNAL_SYSTEM_PARAM_RE.match(p) for p in params
+        ):
+            return {}, (
+                f"{path}: systems[{i}].params must be a list of parameter-name strings "
+                f"matching {EXTERNAL_SYSTEM_PARAM_RE.pattern}"
+            )
+
+        systems[system_id] = {
+            "kind": kind,
+            "description": description,
+            "params": tuple(params),
+        }
+    return systems, None
+
+
+def load_external_systems(project: Path) -> tuple[dict[str, dict], list[dict]]:
+    """Load and validate `.harnessloop/setup/external-systems.json` (TH-0019).
+
+    Returns `(systems, violations)`. `systems` maps declared id -> its
+    validated fields (see `_load_external_systems_file`); an empty dict both
+    when the file is absent (§4 of the design brief: absence is zero
+    behavior, not `gate_blocking` -- exactly today's behavior for a project
+    that has never declared any external system) and when the file exists
+    but is structurally invalid. `violations` carries at most one entry, a
+    project-level `external-system-invalid` (never round-scoped, tagged
+    `"round": str(project)` the same way `reference-roots-invalid` is
+    project-level in `load_reference_roots` -- a declaration file's own
+    legitimacy is a project-level fact, not something any single round did).
+
+    This function performs **no filesystem probing beyond reading this one
+    file** -- no symlink check, no local-binding counterpart, no
+    connectivity/availability check of any kind. The design brief explicitly
+    excludes all three: this file is a today-layer declaration of what ids
+    exist, consumed only by `check_goal_eval_registry`'s id-reference check
+    against `<goal>/evals.json`'s optional `system` field, itself another
+    today-layer file -- see that function's docstring for the one hard rule
+    this declaration feeds.
+    """
+    path = project / EXTERNAL_SYSTEMS_VERSIONED_REL
+    if not path.is_file():
+        return {}, []
+    systems, err = _load_external_systems_file(path)
+    if err is not None:
+        return {}, [{"round": str(project), "kind": "external-system-invalid", "detail": err}]
+    return systems, []
+
+
 def _uncoded_lines(text: str) -> list[str]:
     """Return `text`'s lines with every CommonMark fenced code block removed.
 
@@ -2538,13 +2730,16 @@ def _normalize_feedback(raw: str) -> str | None:
     return normalized if normalized in FEEDBACK_KNOWN_VALUES else None
 
 
-def check_goal_eval_registry(goal_dir: Path) -> tuple[list[dict], bool]:
+def check_goal_eval_registry(
+    goal_dir: Path, system_ids: frozenset[str] = frozenset()
+) -> tuple[list[dict], bool, dict]:
     """Validate `<goal>/evals.json` against only its own internal
     legitimacy -- never against any round's data, and never against any
     other goal (T-taxonomy: this is "today's layer", not a cross-time-layer
     join; see the module-level RAE section comment above).
 
-    Schema: `{"evals": [{"eval_id": "RAE-0001", "activation_round": 1}]}`.
+    Schema: `{"evals": [{"eval_id": "RAE-0001", "activation_round": 1,
+    "system": "staging-api"}]}` -- `system` is optional (TH-0019).
 
     All-or-nothing, single `rae-invalid` violation, for anything that makes
     the document's *shape* untrustworthy (mirrors `_load_versioned_roots`'s
@@ -2571,28 +2766,46 @@ def check_goal_eval_registry(goal_dir: Path) -> tuple[list[dict], bool]:
     - `activation_round` must be an `int` and `>= 1`, with `bool` explicitly
       excluded even though `isinstance(True, int)` is `True` in Python
       (`rae-invalid-activation-round`).
+    - `system` (TH-0019, optional -- absent is silent, exactly like every
+      other optional RAE field): when present, must be a string matching
+      `EXTERNAL_SYSTEM_ID_RE` (`rae-invalid-system` otherwise). When
+      well-formed, it must also name an id present in `system_ids` -- the
+      caller's already-loaded `.harnessloop/setup/external-systems.json`
+      declaration (`rae-system-undeclared` otherwise, counted in
+      `evals_system_undeclared`; a match is counted in `evals_with_system`).
+      Both operands of this last check are today-layer files (`evals.json`
+      here, `external-systems.json` in the caller) -- this is deliberately
+      not a cross-round join, and it carries no `round` field beyond the
+      same project-level `str(goal_dir)` tagging every other violation in
+      this function already uses.
 
     A file that does not exist produces zero violations (`文件不存在 → 不报
     违规` -- this vertical slice does not make the registry mandatory; see
     the OUT-list entry in harnessloop-loop/SKILL.md).
 
-    Returns `(violations, present)`: `present` is whether the file exists at
-    all (used by the caller, `verify_project`, to accumulate the
-    `goals_eval_registry_present` coverage field -- once per goal, never
-    once per round, since this file lives at the goal level and
-    `verify_round` is called once per round under that goal).
+    Returns `(violations, present, system_coverage)`: `present` is whether
+    the file exists at all (used by the caller, `verify_project`, to
+    accumulate the `goals_eval_registry_present` coverage field -- once per
+    goal, never once per round, since this file lives at the goal level and
+    `verify_round` is called once per round under that goal). `system_coverage`
+    is `{"evals_with_system": int, "evals_system_undeclared": int}`, zeroed
+    whenever the file is absent or its shape is untrustworthy (no entry was
+    ever itemized) -- the caller sums both across every goal, exactly like
+    `goals_eval_registry_present`.
     """
+    zero_system_coverage = {"evals_with_system": 0, "evals_system_undeclared": 0}
     path = goal_dir / "evals.json"
     if not path.is_file():
-        return [], False
+        return [], False, dict(zero_system_coverage)
 
     data, err = _load_strict_json(path)
     if err is not None:
-        return [{"round": str(goal_dir), "kind": "rae-invalid", "detail": err}], True
+        return [{"round": str(goal_dir), "kind": "rae-invalid", "detail": err}], True, dict(zero_system_coverage)
     if not isinstance(data, dict):
         return (
             [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: top level must be a JSON object"}],
             True,
+            dict(zero_system_coverage),
         )
     unknown_top = set(data) - {"evals"}
     if unknown_top:
@@ -2605,22 +2818,27 @@ def check_goal_eval_registry(goal_dir: Path) -> tuple[list[dict], bool]:
                 }
             ],
             True,
+            dict(zero_system_coverage),
         )
     evals_list = data.get("evals", [])
     if not isinstance(evals_list, list):
         return (
             [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: 'evals' must be a list"}],
             True,
+            dict(zero_system_coverage),
         )
     for i, entry in enumerate(evals_list):
         if not isinstance(entry, dict):
             return (
                 [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: evals[{i}] must be an object"}],
                 True,
+                dict(zero_system_coverage),
             )
 
     violations: list[dict] = []
     seen_ids: set[str] = set()
+    evals_with_system = 0
+    evals_system_undeclared = 0
     for i, entry in enumerate(evals_list):
         eval_id = entry.get("eval_id")
         if not isinstance(eval_id, str) or not RAE_EVAL_ID_RE.match(eval_id):
@@ -2658,7 +2876,47 @@ def check_goal_eval_registry(goal_dir: Path) -> tuple[list[dict], bool]:
                     ),
                 }
             )
-    return violations, True
+
+        # TH-0019: `system` is optional -- absent (key never written at all)
+        # is silent, exactly like the zero-migration treatment every other
+        # optional RAE field already gets. `dict.get` returning `None` is
+        # the "absent" signal here; a JSON `null` is indistinguishable from
+        # absence by design (both fail `isinstance(str)` if not skipped, so
+        # an explicit `null` would incorrectly become `rae-invalid-system`
+        # -- checked for below by testing `"system" in entry` instead of
+        # trusting `.get`'s default, so only a *truly missing* key is silent).
+        if "system" in entry:
+            system_ref = entry.get("system")
+            if not isinstance(system_ref, str) or not EXTERNAL_SYSTEM_ID_RE.match(system_ref):
+                violations.append(
+                    {
+                        "round": str(goal_dir),
+                        "kind": "rae-invalid-system",
+                        "detail": (
+                            f"{path}: evals[{i}].system {system_ref!r} does not match "
+                            f"{EXTERNAL_SYSTEM_ID_RE.pattern}"
+                        ),
+                    }
+                )
+            elif system_ref in system_ids:
+                evals_with_system += 1
+            else:
+                violations.append(
+                    {
+                        "round": str(goal_dir),
+                        "kind": "rae-system-undeclared",
+                        "detail": (
+                            f"{path}: evals[{i}].system {system_ref!r} is not declared in "
+                            f"{EXTERNAL_SYSTEMS_VERSIONED_REL}"
+                        ),
+                    }
+                )
+                evals_system_undeclared += 1
+    return (
+        violations,
+        True,
+        {"evals_with_system": evals_with_system, "evals_system_undeclared": evals_system_undeclared},
+    )
 
 
 def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
@@ -4800,6 +5058,16 @@ def _empty_coverage() -> dict:
         # stays 0 through that same per-round loop -- see the comment on
         # those fields immediately below).
         "goals_eval_registry_present": 0,
+        # TH-0019 (`check_goal_eval_registry`'s `system` handling): goal-level,
+        # exactly like `goals_eval_registry_present` immediately above --
+        # incremented directly by `verify_project`'s goal loop from
+        # `check_goal_eval_registry`'s returned `system_coverage`, never by
+        # the per-round accumulation loop below (there being no round
+        # involved in this check at all; both operands are today-layer
+        # files -- `evals.json` and `external-systems.json`). Every round's
+        # own local `coverage = _empty_coverage()` leaves both at 0.
+        "evals_with_system": 0,
+        "evals_system_undeclared": 0,
         # PR-3 (external-citation-base-spec-20260727.md §2.7): the two
         # `external_roots_*` fields are project-level and assigned exactly
         # once by `verify_project`, *after* its round loop -- never
@@ -4816,6 +5084,16 @@ def _empty_coverage() -> dict:
         "external_citations_not_found": 0,
         "external_citations_rejected": 0,
         "external_citations_unverifiable": 0,
+        # TH-0019: `external_systems_declared` is project-level, assigned
+        # exactly once by `verify_project` -- same placement discipline as
+        # `external_roots_declared` immediately above (a declaration is a
+        # project-level fact, real even before a single round exists; see
+        # `load_external_systems` and the no-goals-dir early-return branch
+        # of `verify_project`). Deliberately no `external_systems_available`
+        # companion: this gate never probes reachability, so "available" is
+        # not a concept it can honestly report (see the OUT-list entry in
+        # harnessloop-loop/SKILL.md).
+        "external_systems_declared": 0,
     }
 
 
@@ -5021,6 +5299,17 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         # (T-070 residual).
         root_violations.extend(_unavailable_root_violations(project, roots))
         root_violations.extend(anomaly_violations)
+        # TH-0019: external system declarations are project-level exactly
+        # like reference roots immediately above -- a project with no
+        # rounds yet still has a declaration, and it is a real fact
+        # regardless of whether any goal/round exists. There is no
+        # `_unavailable_*` companion call here: this gate never probes
+        # availability, only id-reference integrity (checked entirely
+        # inside `check_goal_eval_registry`, which never runs in this
+        # branch since there is no goal to check).
+        systems, system_violations = load_external_systems(project)
+        coverage["external_systems_declared"] = len(systems)
+        root_violations.extend(system_violations)
         return root_violations, coverage
     violations: list[dict] = []
     violations.extend(anomaly_violations)
@@ -5059,6 +5348,19 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     violations.extend(root_violations)
     violations.extend(_unavailable_root_violations(project, roots))
 
+    # TH-0019: load declared external systems once per project run, exactly
+    # like reference roots immediately above (G5-style re-validation: every
+    # run reloads, never "validated once and trusted"). `system_ids` is
+    # threaded into every `check_goal_eval_registry` call below so each
+    # goal's `evals.json` cross-references the same, single load. This is
+    # never threaded into `verify_round`/`verify_project`'s round loop --
+    # unlike reference roots (consumed by round-level citation resolution),
+    # this declaration is consumed only by the goal-level RAE registry
+    # check immediately below.
+    systems, system_violations = load_external_systems(project)
+    violations.extend(system_violations)
+    system_ids = frozenset(systems)
+
     # Built once per project run (not per round/citation) — see
     # `build_suffix_index` for why this matters for performance.
     suffix_index = build_suffix_index(project)
@@ -5074,10 +5376,14 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         # and would otherwise re-validate, and re-count, the identical file
         # once per round). See `check_goal_eval_registry`'s docstring for
         # exactly what "only its own internal legitimacy" means here.
-        eval_registry_violations, eval_registry_present = check_goal_eval_registry(goal_dir)
+        eval_registry_violations, eval_registry_present, eval_system_coverage = (
+            check_goal_eval_registry(goal_dir, system_ids)
+        )
         violations.extend(eval_registry_violations)
         if eval_registry_present:
             coverage["goals_eval_registry_present"] += 1
+        coverage["evals_with_system"] += eval_system_coverage["evals_with_system"]
+        coverage["evals_system_undeclared"] += eval_system_coverage["evals_system_undeclared"]
 
         rounds_dir = goal_dir / "rounds"
         if not rounds_dir.is_dir():
@@ -5102,6 +5408,9 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
     # number of rounds.
     coverage["external_roots_declared"] = len(roots)
     coverage["external_roots_available"] = sum(1 for r in roots.values() if r.available)
+    # TH-0019: project-level, single assignment after the round loop, same
+    # placement discipline as `external_roots_declared` immediately above.
+    coverage["external_systems_declared"] = len(systems)
     return violations, coverage
 
 
@@ -5223,6 +5532,8 @@ def main() -> int:
             f"goals_eval_registry_present={coverage['goals_eval_registry_present']} "
             f"rounds_eval_ledger_present={coverage['rounds_eval_ledger_present']} "
             f"eval_entries_checked={coverage['eval_entries_checked']} "
+            f"evals_with_system={coverage['evals_with_system']} "
+            f"evals_system_undeclared={coverage['evals_system_undeclared']} "
             f"eval_declaration_ran={coverage['rounds_eval_declaration_ran']} "
             f"eval_declaration_none={coverage['rounds_eval_declaration_none']} "
             f"eval_declaration_absent={coverage['rounds_eval_declaration_absent']} "
@@ -5237,7 +5548,8 @@ def main() -> int:
             f"external_citations_resolved={coverage['external_citations_resolved']} "
             f"external_citations_not_found={coverage['external_citations_not_found']} "
             f"external_citations_rejected={coverage['external_citations_rejected']} "
-            f"external_citations_unverifiable={coverage['external_citations_unverifiable']}"
+            f"external_citations_unverifiable={coverage['external_citations_unverifiable']} "
+            f"external_systems_declared={coverage['external_systems_declared']}"
         )
         # TH-0026: non-blocking hint lines, human mode only -- never affects
         # exit code, violations, or the `--json` coverage schema (the same

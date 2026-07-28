@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "systems": [
+    {
+      "id": "example-system",
+      "kind": "http",
+      "description": "<what this system is and why an eval binds to it -- replace this text>",
+      "params": ["EXAMPLE_SYSTEM_BASE_URL", "EXAMPLE_SYSTEM_API_TOKEN"]
+    }
+  ]
+}
