@@ -1,0 +1,53 @@
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_c587ecf7bbc3e2::t_147d76c3155bed 3806,3818-3830,3841-3842,3860,3875-3882,3891-3892,3903-3904
+  s_c587ecf7bbc3e2::t_c7fbb1e0a16c72 3981-3989
+  s_c587ecf7bbc3e2::t_aed7b78336b0a8 378-409
+  s_c587ecf7bbc3e2::t_1a5416b16b22e6 3581-3805,3807-3817,3831-3840,3843-3859,3861-3874,3883-3890,3893-3902,3905-3980,4002-4030,4032-4038,4044-4070
+  s_c587ecf7bbc3e2::t_59f115d1995c06 3990-4001
+  s_c587ecf7bbc3e2::t_3ef723f0b9deeb 5028-5029
+  s_c587ecf7bbc3e2::t_7231b71fa3256d 4031,4039-4043
+  s_c587ecf7bbc3e2::t_200c485c74b69e 4669-4686
+  s_c587ecf7bbc3e2::t_44025cdaf41e07 4781-4799,4819,4822
+package.json
+  s_c587ecf7bbc3e2::t_c3823304bcf7dc 3
+plugins/harnessloop/skills/harnessloop-continue/SKILL.md
+  s_c587ecf7bbc3e2::t_1f588f0918281a 100
+  s_c587ecf7bbc3e2::t_c30472ed282469 31-41
+  s_c587ecf7bbc3e2::t_4fbda556446a97 62
+plugins/harnessloop/skills/harnessloop-loop/references/control-contract-template.md
+  s_c587ecf7bbc3e2::t_169a5bc2eabdd3 8-14
+plugins/harnessloop/skills/harnessloop-loop/references/control-contract-profiles.md
+  s_c587ecf7bbc3e2::t_eca075c3d30ec9 11-29
+.claude-plugin/marketplace.json
+  s_c587ecf7bbc3e2::t_c3823304bcf7dc 13
+plugins/harnessloop/skills/harnessloop-status/SKILL.md
+  s_c587ecf7bbc3e2::t_65d38cf6697a27 41
+  s_c587ecf7bbc3e2::t_7b9547e089ced4 28-32
+  s_c587ecf7bbc3e2::t_b7aa88e243356d 75-76
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_fc97d2f1a5ec3a 477
+  s_c587ecf7bbc3e2::t_f96ff9c6e69f49 500-503
+  s_c587ecf7bbc3e2::t_51e0beb95631a8 463
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_c3823304bcf7dc 4
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_c3823304bcf7dc 3
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_6fde17566ae198 6706-7080
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "a69ae03d6179cdd07dac82fdd8086051e07e25d3",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
