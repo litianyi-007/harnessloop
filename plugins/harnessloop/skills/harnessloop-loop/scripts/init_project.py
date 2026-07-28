@@ -60,7 +60,14 @@ def normalize_slug(value: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9._-]+", "-", value.strip()).strip("-").lower()
     if not slug:
         raise ValueError("Intake slug cannot be empty")
-    if re.match(r"^\d{8}-\d{4}-", slug):
+    # `[0-9]`, not `\d`: Python's `re` module matches `\d` against any
+    # Unicode decimal-digit codepoint by default (e.g. full-width
+    # U+FF10-FF19). The `re.sub` above already strips anything outside
+    # ASCII `a-zA-Z0-9._-` before `slug` reaches this point, so today this
+    # is defense in depth rather than a live bypass -- but a bare `\d` here
+    # would silently reopen the same class of bug the moment that
+    # sanitization step is ever reordered or removed.
+    if re.match(r"^[0-9]{8}-[0-9]{4}-", slug):
         return slug
     return f"{datetime.now().strftime('%Y%m%d-%H%M')}-{slug}"
 

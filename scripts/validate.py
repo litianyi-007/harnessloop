@@ -26,6 +26,7 @@ Exit code 0 = all passed.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import inspect
 import json
@@ -103,7 +104,13 @@ def run_python(script: Path, *args: str) -> subprocess.CompletedProcess:
 
 VERSION_MANIFEST_FILENAMES = frozenset({"package.json", "plugin.json", "marketplace.json"})
 VERSION_SCAN_EXCLUDE_DIR_NAMES = frozenset({".git", "node_modules", ".tmp", "__pycache__"})
-SEMVER_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+# `[0-9]`, not `\d`: Python's `re` module matches `\d` against any Unicode
+# decimal-digit codepoint by default (e.g. full-width U+FF10-FF19), and
+# `int()`/JSON parsing would carry such a value through unchanged too -- a
+# `"version"` string written with full-width digits would still look like a
+# semver to a bare `\d` pattern, letting it into the cross-manifest identity
+# comparison below on a false pretense.
+SEMVER_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def _iter_version_manifest_paths(root: Path):
@@ -119,7 +126,7 @@ def _iter_version_manifest_paths(root: Path):
 
 def _collect_semver_values(node: object, out: list[str]) -> None:
     """Recursively walk a parsed JSON value, collecting every STRING value
-    keyed "version" that looks like a semantic version (`\\d+.\\d+.\\d+`).
+    keyed "version" that looks like a semantic version (`[0-9]+.[0-9]+.[0-9]+`).
     Integer schema-version fields such as `"version": 1` (real examples exist
     in this repo, e.g. reference-roots-template.json) are excluded by
     construction: the value must be a `str` AND match SEMVER_VERSION_RE."""
@@ -1050,6 +1057,159 @@ def _dotdot_symlink_semantics(tmp_root: Path) -> str:
         )
     finally:
         shutil.rmtree(probe_root, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# G35: bare-`\d` regex-pattern class check. Incident this generalizes: a
+# format-validation regex written with bare `\d` silently accepts input a
+# human reader would never recognize as "the same digits", because Python's
+# `re` module matches `\d` against any Unicode decimal-digit codepoint by
+# default -- including the full-width block U+FF10-FF19 -- and `int()`
+# parses that block too (`int("０００７") == 7`). First caught in
+# `check_loop_predecessor_declaration`'s round-directory-name check
+# (`ROUND_NAME_STRICT_RE`, verify_protocol.py); grepping the class across
+# every .py file in this repo -- not just that one function -- found three
+# more live instances in verify_protocol.py (`LINE_SUFFIX_RE`,
+# `ROUND_SEGMENT_RE`, `PREDECESSOR_VALUE_RE`) plus, outside
+# verify_protocol.py, this file's own `SEMVER_VERSION_RE` (G28) and an
+# inline `re.match` in init_project.py's `normalize_slug`. All were fixed
+# to `[0-9]`. This section turns that one-off grep into a standing
+# structural check over the shipped plugin surface: a bare `\d` added to
+# any pattern under plugins/harnessloop/ in the future must turn G35a red
+# immediately, rather than waiting for the next person to notice by hand.
+#
+# Deliberately scoped to plugins/harnessloop/ and NOT this file
+# (scripts/validate.py): this file is dev/test tooling that legitimately
+# embeds bare-`\d` literals to pin Python's own regex behavior as an
+# executable fact (see G34d above and G35c below) -- a different thing
+# entirely from a production format-validation regex silently accepting
+# full-width digits. Including this file in the walk would force the
+# whitelist below to carry entries for those intentional demonstrations,
+# defeating the point of keeping it empty. This file's own
+# production-relevant pattern (SEMVER_VERSION_RE) is instead checked
+# directly, by name, in the G35a block below.
+# ---------------------------------------------------------------------------
+
+# Pattern strings allowed to use Unicode-aware `\d` outside a character
+# class. Every real pattern in this repo (round numbers, version numbers,
+# line numbers, attempt ids) requires ASCII-only digits, so this is empty
+# by design. If a genuine need for Unicode-digit matching ever arises, add
+# the exact pattern string here with a comment explaining why -- do not
+# silently loosen `_pattern_has_bare_backslash_d` itself to accommodate it.
+G35_BARE_DIGIT_WHITELIST: frozenset[str] = frozenset()
+
+# AST-based (not text-regex-based): an early text-regex prototype of this
+# scanner produced a false positive on verify_protocol.py, matching a
+# `re.match(r"^\d{4}$", ...)` example quoted *inside a `#` comment*
+# (documenting this very bug) as if it were live code. Comments and
+# docstrings are exactly where this class of bug gets discussed in prose
+# (see G34d/G35c, which do the same deliberately), so a scanner that can't
+# tell code from prose is structurally the wrong shape for this job.
+# Parsing with `ast` sidesteps that whole problem: comments don't exist in
+# the parsed tree at all, and Python's own parser has already merged
+# adjacent string literals (e.g. `BARE_DOMAIN_RE`'s two-line pattern) into
+# a single `Constant` node before we ever see it.
+_G35_RE_FUNCS = frozenset(
+    {"compile", "match", "fullmatch", "search", "sub", "subn", "findall", "finditer", "split"}
+)
+
+
+def _g35_extract_pattern_text(node: ast.AST) -> str | None:
+    """Reconstruct the literal text of a pattern-argument AST node, or None
+    if it is not (fully) a compile-time string literal.
+
+    Handles a plain string constant directly, and a `+`-chain of string
+    constants around a dynamic middle term (e.g. `check_setup.py`'s
+    `_label_pattern`: `r"..." + re.escape(label) + r"..."`) by
+    concatenating only the literal pieces -- a dynamic operand
+    (`re.escape(label)`, a variable, ...) contributes no text, same
+    principle as G28's discovery-not-hardcoded-list approach: this
+    recovers everything that IS statically knowable rather than giving up
+    the moment part of the expression isn't.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _g35_extract_pattern_text(node.left)
+        right = _g35_extract_pattern_text(node.right)
+        return (left or "") + (right or "")
+    return None
+
+
+def _pattern_has_bare_backslash_d(pattern: str) -> bool:
+    """Return True iff `pattern` contains a `\\d` token that is NOT nested
+    inside a `[...]` character class.
+
+    A `\\d` used to build a character-class shorthand (e.g. `[\\d_]`) would
+    be exactly as Unicode-unsafe, but no pattern in this repo does that
+    (checked by hand); this scan targets the bare form specifically,
+    because that is the actual shape every real instance found in this
+    repo took. Intentionally simple (no handling of nested `[]` edge cases
+    like a leading `]` treated as a literal) -- sufficient for every
+    pattern actually present in this repo, all single, unnested character
+    classes.
+    """
+    in_class = False
+    i = 0
+    n = len(pattern)
+    while i < n:
+        ch = pattern[i]
+        if ch == "\\" and i + 1 < n:
+            if pattern[i + 1] == "d" and not in_class:
+                return True
+            i += 2
+            continue
+        if ch == "[" and not in_class:
+            in_class = True
+            i += 1
+            continue
+        if ch == "]" and in_class:
+            in_class = False
+            i += 1
+            continue
+        i += 1
+    return False
+
+
+def _g35_iter_patterns(path: Path):
+    """Yield the reconstructed pattern-literal text of every `re.<func>(...)`
+    call found in `path`, via an `ast` parse of its source (see the module
+    comment above for why this replaced an earlier text-regex prototype).
+    A call whose pattern argument is not any kind of string literal (a bare
+    variable, say) yields nothing for that call -- nothing to check
+    statically."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(text, filename=str(path))
+    except SyntaxError:
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (
+            isinstance(func, ast.Attribute)
+            and func.attr in _G35_RE_FUNCS
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "re"
+        ):
+            continue
+        if not node.args:
+            continue
+        pattern = _g35_extract_pattern_text(node.args[0])
+        if pattern is not None:
+            yield pattern
+
+
+def _iter_repo_py_files(root: Path):
+    """Discovery walk (not a hardcoded file list -- same principle as
+    G28's manifest discovery) for every .py file under `root`."""
+    exclude_dirs = {".git", "node_modules", ".tmp", "__pycache__"}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in exclude_dirs]
+        for filename in filenames:
+            if filename.endswith(".py"):
+                yield Path(dirpath) / filename
 
 
 def validate_protocol_gates() -> None:
@@ -7077,6 +7237,267 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g33_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G34: `check_loop_predecessor_declaration`'s round-directory-name
+    # fail-closed fix. Before this fix, `int(round_dir.name)` was wrapped in
+    # a bare `try/except ValueError: return [], state` -- a round whose own
+    # directory name did not parse as an int silently produced ZERO
+    # violations, no matter how malformed its `- Predecessor:` declaration
+    # was (verified: renaming a round directory to `abc` while its
+    # decision.md still declared `- Predecessor: 0003` produced exit 0).
+    # This is an X1 switch held by the very round being checked. Every
+    # letter below is a paired mutation exactly like G32/G33 above: a
+    # fixture asserted to land on a verdict, then a minimal, specific change
+    # to that SAME fixture asserted to flip it -- proving the check
+    # discriminates on the exact condition it claims to, not merely on
+    # "some round directory somewhere is oddly named".
+    # -------------------------------------------------------------------
+
+    print(
+        "  G34a: round directory named 'abc' (not four digits) + Predecessor: 0003 "
+        "(round 0003 exists) -> loop-predecessor-round-unnumbered; renaming the round "
+        "directory to '0007' (decision.md untouched) clears it"
+    )
+    g34_root = REPO_ROOT / ".tmp" / f"verify-fixture-g34a-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g34_root)
+        _loop_round(project, "0003")
+        _loop_round(project, "abc")
+        _loop_write_decision(project, "abc", "# Decision\n\n- Predecessor: 0003\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-round-unnumbered" in _loop_kinds(violations),
+            "G34a: a round directory named 'abc' declaring Predecessor: 0003 -> "
+            f"loop-predecessor-round-unnumbered (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            "loop-predecessor-not-backward" not in _loop_kinds(violations)
+            and "loop-predecessor-missing" not in _loop_kinds(violations),
+            "G34a: the arithmetic/existence constraints (steps 3/4) never even run once "
+            "this round's own directory name is untrustworthy -- only "
+            f"loop-predecessor-round-unnumbered fires (got {sorted(_loop_kinds(violations))})",
+        )
+
+        shutil.move(str(_loop_round_dir(project, "abc")), str(_loop_round_dir(project, "0007")))
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G34a mutation control: renaming ONLY the round directory from 'abc' to "
+            "'0007' (decision.md's `Predecessor: 0003` left byte-for-byte untouched) "
+            "clears every loop-* violation -- 0003 is a real, backward, existing round "
+            f"relative to 0007 (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g34_root, ignore_errors=True)
+
+    print(
+        "  G34b: round directory named 'abc' with NO `- Predecessor:` field at all -> "
+        "zero loop-* violations (this gate only ever fires for a round that DECLARED "
+        "the field); adding `- Predecessor: 0003` to the SAME decision.md turns it red"
+    )
+    g34_root = REPO_ROOT / ".tmp" / f"verify-fixture-g34b-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g34_root)
+        _loop_round(project, "abc")
+        _loop_write_decision(project, "abc", "# Decision\n\n- Verdict: pass\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G34b: a round directory named 'abc' that never declares `- Predecessor:` "
+            f"at all -> zero loop-* violations (got {sorted(_loop_kinds(violations))}) "
+            "-- proves this is NOT a general round-directory-naming rule; an "
+            "undeclared round's directory name is never inspected by this gate",
+        )
+        check(
+            coverage.get("rounds_predecessor_declared") == 0,
+            "G34b: rounds_predecessor_declared stays 0 when the field was never "
+            f"written (got {coverage.get('rounds_predecessor_declared')!r})",
+        )
+
+        _loop_write_decision(
+            project, "abc", "# Decision\n\n- Verdict: pass\n- Predecessor: 0003\n"
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-round-unnumbered" in _loop_kinds(violations),
+            "G34b mutation control: adding ONLY `- Predecessor: 0003` to the SAME "
+            "decision.md (round directory name 'abc' untouched) immediately turns it "
+            "red -- proves the earlier green was a real absence-check, not a vacuous "
+            f"always-pass path (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g34_root, ignore_errors=True)
+
+    print(
+        "  G34c: round directory named '007' (three digits -- int('007') == 7 raises "
+        "no ValueError) + Predecessor: 0003 -> loop-predecessor-round-unnumbered -- "
+        "proves the gate requires exactly four digits, not merely 'int() succeeds'"
+    )
+    g34_root = REPO_ROOT / ".tmp" / f"verify-fixture-g34c-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g34_root)
+        _loop_round(project, "007")
+        _loop_write_decision(project, "007", "# Decision\n\n- Predecessor: 0003\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-round-unnumbered" in _loop_kinds(violations),
+            "G34c: round directory '007' is three digits, not four -- a check that "
+            "only asked 'does int(round_dir.name) raise ValueError' would have "
+            f"silently passed this (int('007') == 7 raises nothing); the real gate "
+            f"requires ^[0-9]{{4}}$ (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g34_root, ignore_errors=True)
+
+    print(
+        "  G34d: full-width Unicode round directory name '０００７' + Predecessor: "
+        "0003 -> loop-predecessor-round-unnumbered -- proves ROUND_NAME_STRICT_RE "
+        "really uses [0-9], not .isdigit()/bare \\d, both of which accept full-width "
+        "digits too"
+    )
+    g34_fullwidth_name = "０００７"
+    check(
+        g34_fullwidth_name.isdigit() and int(g34_fullwidth_name) == 7,
+        "G34d precondition: Python's str.isdigit() is True, and int() succeeds "
+        f"(== 7), for the full-width Unicode digit block {g34_fullwidth_name!r} -- "
+        "this is exactly the bypass a naive `.isdigit()`-based (or bare try/int()) "
+        "implementation would have reopened",
+    )
+    check(
+        bool(re.match(r"^\d{4}$", g34_fullwidth_name)),
+        "G34d precondition: the BARE regex ^\\d{4}$ (no re.ASCII) also matches the "
+        f"full-width block {g34_fullwidth_name!r} in Python's re module -- `\\d` alone, "
+        "without an explicit [0-9] character class, is not a safe fix either",
+    )
+    g34_root = REPO_ROOT / ".tmp" / f"verify-fixture-g34d-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g34_root)
+        _loop_round(project, g34_fullwidth_name)
+        _loop_write_decision(project, g34_fullwidth_name, "# Decision\n\n- Predecessor: 0003\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-round-unnumbered" in _loop_kinds(violations),
+            "G34d: the REAL check_loop_predecessor_declaration must still reject the "
+            "full-width round directory name despite isdigit()/bare-\\d both accepting "
+            f"it -- this is the one test in this batch that actually discriminates "
+            f"[0-9] from \\d/.isdigit() (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g34_root, ignore_errors=True)
+
+    print(
+        "  G34e: round directory named '0000' (a syntactically legal four-digit name) "
+        "+ Predecessor: 0003 -> loop-predecessor-not-backward, NOT "
+        "loop-predecessor-round-unnumbered (0000 is a real four-digit name, just with "
+        "no smaller predecessor arithmetically possible)"
+    )
+    g34_root = REPO_ROOT / ".tmp" / f"verify-fixture-g34e-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g34_root)
+        _loop_round(project, "0000")
+        _loop_write_decision(project, "0000", "# Decision\n\n- Predecessor: 0003\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-not-backward" in _loop_kinds(violations),
+            "G34e: round directory '0000' is exactly four ASCII digits -- int('0003') "
+            "(3) is not strictly less than int('0000') (0) -- "
+            f"loop-predecessor-not-backward, pure arithmetic (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            "loop-predecessor-round-unnumbered" not in _loop_kinds(violations),
+            "G34e: '0000' must NOT be misclassified as an unnumbered round -- it "
+            "passes ROUND_NAME_STRICT_RE cleanly, it is simply arithmetically not "
+            f"backward relative to 0003 (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g34_root, ignore_errors=True)
+
+    print(
+        "  G35a: no re.compile/match/search/sub/... pattern under "
+        "plugins/harnessloop/ uses a bare `\\d` outside a character class"
+    )
+    g35_violations: list[str] = []
+    g35_scanned = 0
+    for g35_path in _iter_repo_py_files(PLUGIN_ROOT):
+        g35_scanned += 1
+        for g35_pattern in _g35_iter_patterns(g35_path):
+            if g35_pattern in G35_BARE_DIGIT_WHITELIST:
+                continue
+            if _pattern_has_bare_backslash_d(g35_pattern):
+                g35_violations.append(f"{g35_path.relative_to(REPO_ROOT)}: {g35_pattern!r}")
+    check(
+        g35_scanned >= 5,
+        f"G35a: scanned at least 5 .py files under plugins/harnessloop/ (scanned "
+        f"{g35_scanned}) -- guards against the walk silently matching nothing",
+    )
+    check(
+        not g35_violations,
+        "G35a: zero bare-`\\d` regex patterns outside a character class under "
+        f"plugins/harnessloop/ (whitelist={sorted(G35_BARE_DIGIT_WHITELIST)}; "
+        f"found: {g35_violations})",
+    )
+    check(
+        len(G35_BARE_DIGIT_WHITELIST) == 0,
+        "G35a: the bare-\\d whitelist is currently empty -- every real pattern in "
+        "this repo requires ASCII-only digits",
+    )
+
+    print(
+        "  G35a (supplement): this file's own SEMVER_VERSION_RE (G28) -- excluded "
+        "from the plugins/harnessloop/ walk above, see the G35 module comment -- "
+        "does not use a bare \\d either"
+    )
+    check(
+        not _pattern_has_bare_backslash_d(SEMVER_VERSION_RE.pattern),
+        f"G35a (supplement): SEMVER_VERSION_RE ({SEMVER_VERSION_RE.pattern!r}) does "
+        "not use a bare \\d outside a character class",
+    )
+
+    print(
+        "  G35b (destructive counter-proof): a fabricated pattern containing a bare "
+        "\\d must be detected as a hit -- proves G35a's detector can actually fire, "
+        "not just stay vacuously green"
+    )
+    check(
+        _pattern_has_bare_backslash_d(r"^\d{4}$"),
+        "G35b: _pattern_has_bare_backslash_d(r'^\\d{4}$') must return True",
+    )
+    check(
+        _pattern_has_bare_backslash_d(r"foo\d+bar"),
+        "G35b: a bare \\d anywhere in a pattern (not just anchored at the start) "
+        "must be detected",
+    )
+    check(
+        not _pattern_has_bare_backslash_d(r"^[0-9]{4}$"),
+        "G35b: an explicit [0-9] character class must NOT be flagged as a bare \\d",
+    )
+    check(
+        not _pattern_has_bare_backslash_d(r"[\d]"),
+        "G35b: \\d *inside* a character class is deliberately out of this "
+        "detector's scope (see its docstring) -- no real pattern in this repo "
+        "does this, so this documents the boundary rather than asserting safety",
+    )
+
+    print(
+        "  G35c: Python's own \\d-vs-[0-9] full-width-digit behavior, pinned as an "
+        "executable fact -- if Python ever changes this, this must go red"
+    )
+    check(
+        bool(re.match(r"^\d{4}$", "０００７")),
+        "G35c: re.match(r'^\\d{4}$', '０００７') matches (bare \\d is Unicode-aware) "
+        "-- pinned language-behavior fact",
+    )
+    check(
+        not bool(re.match(r"^[0-9]{4}$", "０００７")),
+        "G35c: re.match(r'^[0-9]{4}$', '０００７') does NOT match (explicit "
+        "ASCII-only character class) -- pinned language-behavior fact",
+    )
+    check(
+        int("０００７") == 7,
+        "G35c: int('０００７') == 7 (full-width digits parse successfully, same "
+        "blind spot as bare \\d) -- pinned language-behavior fact",
+    )
 
 
 def validate_round_cost_smoke() -> None:

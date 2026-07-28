@@ -351,10 +351,23 @@ This script enforces only machine-checkable rules:
   this round's own (`loop-predecessor-not-backward` — pure arithmetic, no
   cycle check needed, since a strictly-decreasing reference cannot cycle).
   A value that is not exactly four digits is `loop-predecessor-invalid-value`.
-  Absence is silent (zero-migration, exactly like `- Acceptance evals:`) —
-  this gate can only guarantee "once declared, self-consistent", never
-  "must be declared"; see `harnessloop-loop/SKILL.md`'s OUT column for the
-  registered consequence.
+  Constraint 2's arithmetic needs this round's own directory name parsed as
+  an integer, so a *declaring* round whose own directory name is not
+  exactly four ASCII digits (`^[0-9]{4}$` — never `\\d{4}`/`.isdigit()`,
+  both of which also accept full-width Unicode digits like `０００７`, a
+  live bypass verified against this exact regex/method pair, not a
+  theoretical one) is `loop-predecessor-round-unnumbered`, fail-closed:
+  see `check_loop_predecessor_declaration`'s docstring for why an
+  unparsable directory name used to mean silent, zero-violation pass-through
+  here (an X1 switch: the round being checked controlled, via its own
+  directory's name, whether the check that names ran at all) and why that
+  is now closed for exactly the rounds that declared the field, and no
+  others. Absence is silent (zero-migration, exactly like
+  `- Acceptance evals:`) — this gate can only guarantee "once declared,
+  self-consistent", never "must be declared"; see
+  `harnessloop-loop/SKILL.md`'s OUT column for the registered consequence
+  (including the still-open, broader question of round-directory naming
+  for rounds that never declare `Predecessor:` at all).
 
 - Loop-continuation record gate (batch 2 of the same spec, §3; see
   `check_loop_continuation_declaration`): `decision.md` may optionally
@@ -486,7 +499,12 @@ WINDOWS_DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:/")
 # matches exactly as before this was added — this is a strict superset of
 # the prior pattern, not a replacement shape. See `strip_locator_suffix`.
 ANCHOR_SUFFIX_RE = re.compile(r"::[^:]+$")
-LINE_SUFFIX_RE = re.compile(r":\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$")
+# `[0-9]`, not `\d`: Python's `re` module matches `\d` against any Unicode
+# decimal-digit codepoint by default (e.g. full-width U+FF10-FF19), and
+# `int()` parses those too, so a bare `\d` here would silently strip a
+# full-width "line number" as if it were a real locator, hiding it from the
+# path-existence check that follows in `strip_locator_suffix`.
+LINE_SUFFIX_RE = re.compile(r":[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$")
 
 # B2a review-declaration gate (see `check_review_declaration`): `Review:
 # none — <reason>` — the "none" token, an optional dash-like separator
@@ -707,7 +725,12 @@ def extract_allowed_spans(scope_lock_text: str) -> list[str]:
 # real instances found in this repo's own history: rounds/0008 and
 # rounds/0009). `<NNNN>` is this repo's round-directory naming convention
 # (exactly four digits, zero-padded).
-ROUND_SEGMENT_RE = re.compile(r"^\d{4}$")
+# `[0-9]`, not `\d`: Python's `re` module treats `\d` as Unicode-aware by
+# default, so it also matches the full-width digit block (e.g. `０００７`),
+# which `int()` parses too -- a span written with full-width digits would
+# pass this format check yet compare unequal (string-wise) to the real,
+# ASCII round-directory name below, silently defeating the TH-0026 match.
+ROUND_SEGMENT_RE = re.compile(r"^[0-9]{4}$")
 
 
 def _span_path_segments(span: str) -> list[str]:
@@ -3277,7 +3300,29 @@ def check_acceptance_eval_declaration(
 # unlike `Review:`/`Acceptance evals:`, there is no `none — <reason>` shape
 # for this field at all (Appendix F.2's two constraints are pure existence +
 # arithmetic, nothing else to declare).
-PREDECESSOR_VALUE_RE = re.compile(r"^\d{4}$")
+# `[0-9]`, not `\d`: Python's `re` module matches `\d` against any Unicode
+# decimal-digit codepoint by default (e.g. full-width U+FF10-FF19), and
+# `int()` parses those too, so a declared value like `０００７` would pass
+# this format check yet mean something other than what a human reader sees
+# -- the same bypass `ROUND_NAME_STRICT_RE` below is deliberately built to
+# exclude.
+PREDECESSOR_VALUE_RE = re.compile(r"^[0-9]{4}$")
+
+# `round_dir.name` validity check, used only by `check_loop_predecessor_
+# declaration` to decide whether `int(round_dir.name)` may be trusted (see
+# that function's docstring, constraint 2). Deliberately `[0-9]`, not `\d`:
+# Python's `re` module matches `\d` against any Unicode codepoint in the
+# decimal-digit category by default (no `re.ASCII` flag here), which
+# includes the full-width block U+FF10-FF19 -- `re.match(r"^\d{4}$",
+# "０００７")` matches. `str.isdigit()` has the same blind spot
+# (`"０００７".isdigit()` is `True`) and is even wider (also true for
+# superscript/subscript digit characters that `int()` rejects outright).
+# `int()` itself accepts the full-width block too (`int("０００７") == 7`).
+# An explicit `[0-9]` character class is the only one of the three that
+# excludes all of this -- verified empirically, not assumed; see
+# `docs/loop-stop-record-spec-20260728.md`'s Appendix F and this project's
+# own `ATTEMPT_ID_RE` above, which already uses `[0-9]` for the same reason.
+ROUND_NAME_STRICT_RE = re.compile(r"^[0-9]{4}$")
 
 
 def parse_loop_predecessor_declaration(decision_text: str) -> str | None:
@@ -3313,14 +3358,61 @@ def check_loop_predecessor_declaration(
     1. `<NNNN>` must be exactly four digits (`PREDECESSOR_VALUE_RE`) --
        otherwise `loop-predecessor-invalid-value`. Fail-closed: an
        unrecognizable value is never silently treated as absent.
-    2. `<NNNN>`'s integer value must be strictly less than this round's own
-       (`int(round_dir.name)`) -- otherwise `loop-predecessor-not-backward`.
-       This is checked with no filesystem access at all (both operands are
-       already in hand: the parsed value and this round's own directory
-       name), which is why a forward or self reference is caught here even
-       when no round with that number happens to exist on disk yet --
-       constraint 2 does not depend on constraint 3 having passed.
-    3. The named round must actually exist as a directory under this same
+    2. This round's *own* directory name must itself be exactly four ASCII
+       digits (`ROUND_NAME_STRICT_RE`, `^[0-9]{4}$`) before its int() value
+       can be trusted as an operand of constraint 3's arithmetic --
+       otherwise `loop-predecessor-round-unnumbered`.
+
+       This constraint used to not exist: the code here was
+       `try: current_round_num = int(round_dir.name) / except ValueError:
+       return [], state` -- silently returning zero violations whenever
+       `round_dir.name` failed to parse as an int. That is an X1 switch
+       ("open switch in the hands of the party being gated"): a round
+       carries an actual `- Predecessor:` declaration, actual scope-lock,
+       actual evidence -- everything a real round has -- but happens to
+       sit in a directory not named `NNNN`, and the exception handler
+       treated the whole gate as inapplicable rather than as "cannot
+       decide, so fail". Verified experimentally, not assumed: renaming a
+       round directory to `abc` while its `decision.md` still declared
+       `- Predecessor: 0003` produced exit 0 with zero violations --
+       the entire loop-predecessor gate silently switched off for that
+       round, and the switch was the round's own directory name, chosen
+       by whoever created that round.
+
+       The fix is fail-closed, not a general round-naming rule: it fires
+       **only** for a round that *declared* `- Predecessor:` at all (this
+       function has already returned `[], state` above if `raw is None`,
+       before this point is ever reached) -- declaring the field is
+       accepting the constraint that comes bundled with it, and that
+       constraint's decidability cannot be switched off by the declaring
+       round renaming its own directory. A round that never writes
+       `- Predecessor:` is untouched by this constraint no matter what its
+       directory is named -- see `harnessloop-loop/SKILL.md`'s OUT column
+       for the separate, broader, and deliberately out-of-scope question of
+       whether round-directory naming should be policed project-wide
+       regardless of declaration.
+
+       `ROUND_NAME_STRICT_RE` uses `[0-9]`, not `\\d` and not
+       `str.isdigit()`. Both of the rejected alternatives accept far more
+       than ASCII 0-9: `'０００７'.isdigit()` is `True` and
+       `int('０００７')` succeeds (`== 7`) for the full-width Unicode digit
+       block, and (verified separately, since Python's `re` module is
+       Unicode-aware by default) the bare pattern `^\\d{4}$` -- not just
+       `.isdigit()` -- *also* matches `'０００７'`; only an explicit
+       `[0-9]` character class excludes it. Using either would have
+       reopened exactly the same class of bypass this fix exists to close,
+       just moved one character-class choice to the right.
+    3. `<NNNN>`'s integer value must be strictly less than this round's own
+       (`int(round_dir.name)`, now safe per constraint 2) -- otherwise
+       `loop-predecessor-not-backward`. Constraint 2 must run first because
+       constraint 3's arithmetic requires `round_dir.name` to already be a
+       trustworthy integer; constraint 3 itself still needs no filesystem
+       access (both operands are already in hand: the parsed `raw` value
+       and this round's own directory name), which is why a forward or
+       self reference is caught here even when no round with that number
+       happens to exist on disk yet -- constraint 3 does not depend on
+       constraint 4 having passed.
+    4. The named round must actually exist as a directory under this same
        goal's `rounds/` -- otherwise `loop-predecessor-missing`. This is the
        one constraint that reads today's disk state rather than this
        round's own two fields; see `harnessloop-loop/SKILL.md`'s OUT column
@@ -3329,11 +3421,6 @@ def check_loop_predecessor_declaration(
        old forward-reference design this replaces, this can only ever
        affect a round that has *not yet* been judged as of today, never
        flip an already-recorded judgment about a different round).
-
-    A round whose own directory name does not parse as an integer (a
-    naming-convention violation this check was never designed to police --
-    every real round in this project is named `ROUND_SEGMENT_RE`-shaped)
-    is left unvalidated rather than crashing the gate over it.
 
     Returns `(violations, state)` where `state` has key `declared` (bool,
     `raw is not None`) -- the caller (`verify_round`) folds this into the
@@ -3364,10 +3451,30 @@ def check_loop_predecessor_declaration(
             state,
         )
 
-    try:
-        current_round_num = int(round_dir.name)
-    except ValueError:
-        return [], state
+    if not ROUND_NAME_STRICT_RE.match(round_dir.name):
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "loop-predecessor-round-unnumbered",
+                    "detail": (
+                        f"{decision_path} declares `Predecessor: {raw}`, but this "
+                        f"round's own directory name ({round_dir.name!r}) is not "
+                        "exactly four ASCII digits, so its integer value cannot be "
+                        "trusted to decide whether the declared predecessor is "
+                        "actually backward -- fail-closed: declaring `Predecessor:` "
+                        "means accepting the constraint that comes with it, and that "
+                        "constraint's decidability cannot be switched off by "
+                        "renaming this round's own directory. (This only fires for "
+                        "a round that declared the field at all; round-directory "
+                        "naming is otherwise unchecked by this gate.)"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    current_round_num = int(round_dir.name)
 
     if int(raw) >= current_round_num:
         return (
