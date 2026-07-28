@@ -352,6 +352,21 @@ import sys
 from pathlib import Path
 
 CODE_SPAN = re.compile(r"`([^`]+)`")
+
+# A CommonMark fenced-code-block delimiter line: 0-3 leading spaces (4+ is
+# an indented code block, a different construct entirely -- see
+# `_uncoded_lines`'s "known gap" paragraph), then a run of 3+ backticks or
+# 3+ tildes, then whatever remains on the line (an opening fence's optional
+# info string, e.g. "json" in "```json" -- or, for a candidate *closing*
+# line, text that -- per CommonMark -- disqualifies it from closing at all;
+# see `_uncoded_lines`). Group 1 is the fence run itself (its first
+# character gives the fence *type*, backtick vs tilde; its length is the
+# minimum a same-type closing run must meet or exceed). Group 2 is
+# everything after the run. This regex only detects "is this line
+# fence-marker-shaped at all" -- whether a given match opens or closes a
+# fence is a stateful decision `_uncoded_lines` makes, not this regex.
+FENCE_MARKER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
 PATHISH_PREFIXES = (
     ".harnessloop/",
     "rounds/",
@@ -2151,6 +2166,118 @@ def _load_strict_json(path: Path) -> tuple[object | None, str | None]:
     return data, None
 
 
+def _uncoded_lines(text: str) -> list[str]:
+    """Return `text`'s lines with every CommonMark fenced code block removed.
+
+    Exists so the three `- <label>:` line-prefix parsers below
+    (`parse_feedback`, `parse_review_fields`,
+    `parse_acceptance_eval_declaration`) only ever see lines a human reading
+    the *rendered* markdown would see as live prose -- never a line quoted
+    inside a fenced code block, e.g. a decision.md embedding a literal
+    example of what a `- Feedback:` line looks like. Reproduced live: a
+    fenced block containing `` - Feedback: negative `` followed, outside the
+    fence, by the round's actual `` - Feedback: positive `` was read by the
+    "first occurrence wins" convention these parsers share as `negative`,
+    silently defeating the `acceptance-eval-positive-without-pass` hard rule
+    for a decision.md whose real (rendered) claim was `positive`. This is
+    the *second* time this shape of bug has been fixed here -- v0.26.0 fixed
+    it for the `<!-- verify:ignore -->` marker (`_carries_active_ignore`),
+    but that fix strips only *inline* single-backtick spans (`CODE_SPAN`)
+    and never touched this `- <label>:` family, which is why the same class
+    of bug reappeared for it two versions later.
+
+    Relationship to `CODE_SPAN` (module top): different mechanism, different
+    granularity. `CODE_SPAN` strips inline, single-backtick spans
+    (`` `like this` ``) that appear mid-line, and is used by
+    `pathish_citations`/`_carries_active_ignore` for Rule B and the ignore
+    marker. This function instead tracks *fenced* (block) code, delimited by
+    dedicated marker lines, and works at line granularity: a line is either
+    entirely inside a fence or entirely outside one, never partially. Inline
+    spans do not open a block, and a fence marker line is not inline code --
+    conflating the two mechanisms would be wrong in both directions.
+
+    CommonMark fence rules implemented (`FENCE_MARKER_RE`, module top):
+
+    - Both delimiter characters: a run of 3+ backticks or 3+ tildes opens a
+      fence; the two are independent fence *types* -- a `~~~`-opened fence
+      is not closed by any run of backticks, and a `` ``` ``-opened fence is
+      not closed by any run of tildes.
+    - Longer fences: the opening run's length is remembered, and a
+      candidate closing run must be at least that long. A run shorter than
+      the opening (e.g. a 3-backtick line inside a 4-backtick-opened fence)
+      does not close it -- that line is just fenced *content*, most
+      commonly itself a documentation example of a shorter fence.
+    - Info strings: an opening fence may carry trailing text on the same
+      line (e.g. an opening line of "```json") -- accepted and ignored. A
+      *closing* fence must not carry any such trailing text: if a candidate
+      closing line has anything other than whitespace after its run of
+      fence characters, it does not close the fence and is instead treated
+      as ordinary fenced content.
+    - Indentation: a marker line (open or close) may be preceded by 0-3
+      spaces, matching CommonMark's allowance for fenced code blocks.
+      `FENCE_MARKER_RE` is anchored so that 4 or more leading spaces never
+      match it at all -- see the "known gap" paragraph below for what that
+      implies.
+    - Unclosed fence at end of file: if `text` ends while still inside a
+      fence, every remaining line -- there being no closing marker left to
+      find -- is treated as fenced and dropped. This is a deliberate
+      fail-closed choice, not an oversight: a `- <label>:` line swallowed
+      this way becomes a field its caller sees as *absent*, and absence
+      either trips `review-declaration-missing` (a reported violation) or,
+      for the two fields that are allowed to be genuinely absent
+      (`- Feedback:`, `- Acceptance evals:`), is a silent no-op that
+      produces no false *positive* judgment either way. The alternative --
+      treating an unclosed fence as if it had closed at EOF -- would risk
+      exposing a label line the author never intended as live prose, which
+      is the wrong side of "fail open vs. fail closed" for a mechanical
+      gate whose entire job is to disagree with a human skimming the file.
+
+    Known gap, deliberately not handled here (registered as a remaining
+    upper bound in `harnessloop-loop/SKILL.md`'s OUT column, not silently
+    left out): a 4-space-indented code block -- CommonMark's *other*
+    code-block syntax, with no fence markers at all -- is invisible to this
+    function. A `- <label>:` line written inside one is still read as live
+    prose by every caller. Recognizing indented code blocks correctly
+    requires tracking the *list-item and blockquote indentation context*
+    an indented block's "4 spaces" is relative to (not the document's left
+    margin) -- a materially larger change than a fence state machine, and
+    out of scope for this fix.
+
+    Returns the surviving lines in original order, with both the fence
+    marker lines themselves and everything between them removed --
+    `"\\n".join(_uncoded_lines(text))` is not a round-trippable
+    reconstruction of the non-fenced parts of `text`, only a list of lines
+    safe to feed to a `- <label>:` prefix scan.
+    """
+    out: list[str] = []
+    fence_char: str | None = None
+    fence_len = 0
+    for line in text.splitlines():
+        match = FENCE_MARKER_RE.match(line)
+        if fence_char is None:
+            if match:
+                run = match.group(1)
+                fence_char = run[0]
+                fence_len = len(run)
+                continue
+            out.append(line)
+            continue
+        # Inside a fence: only a same-type run at least as long as the
+        # opening run, with nothing but whitespace after it, closes it.
+        # Anything else -- including a shorter or differently-typed
+        # marker-shaped line, or a same-type/long-enough run that still
+        # carries trailing text -- is fenced content, dropped either way.
+        if (
+            match
+            and match.group(1)[0] == fence_char
+            and len(match.group(1)) >= fence_len
+            and not match.group(2).strip()
+        ):
+            fence_char = None
+            fence_len = 0
+    return out
+
+
 def parse_feedback(decision_text: str) -> str | None:
     """Extract the raw (not yet normalized) `- Feedback:` value from a
     decision.md.
@@ -2158,8 +2285,12 @@ def parse_feedback(decision_text: str) -> str | None:
     Same narrow convention as `parse_review_fields` and the E4 inline
     Verdict/Residuals parse: a case-insensitive `- <label>:` line prefix,
     matched against `.strip().lower()`, first occurrence wins, no prose
-    parsing anywhere else in the file. Returns `None` when the field was
-    never written at all -- the caller must not conflate this with
+    parsing anywhere else in the file. Lines inside a fenced code block are
+    never considered (`_uncoded_lines`) -- a decision.md quoting a `` -
+    Feedback: `` line as a literal example inside a ``` ``` ``` block must
+    not have that quoted value outrank the round's real, unfenced
+    declaration. Returns `None` when the field was never written at all
+    (outside any fence) -- the caller must not conflate this with
     `_normalize_feedback` returning `None` for a value that *was* written
     but could not be recognized; "absent" and "unparsable" are different
     facts with different consequences (absent: this rule is silent, exactly
@@ -2167,7 +2298,7 @@ def parse_feedback(decision_text: str) -> str | None:
     `acceptance-eval-feedback-unparsable`, a reported violation, never a
     silent skip).
     """
-    for line in decision_text.splitlines():
+    for line in _uncoded_lines(decision_text):
         stripped = line.strip()
         if stripped.lower().startswith("- feedback:"):
             return stripped.split(":", 1)[1].strip()
@@ -2529,11 +2660,16 @@ def parse_review_fields(decision_text: str) -> dict[str, str | None]:
     Same narrow convention as the existing Verdict/Residuals (E4) check:
     a case-insensitive `- <label>:` line prefix, matched against
     `.strip().lower()`, first occurrence wins, no prose parsing anywhere
-    else in the file is consulted. A key's value is `None` when the field
-    was never written at all — this is how `check_review_declaration`
-    tells "field absent" (a `review-declaration-missing` violation) apart
-    from "field present but its value turns out to be invalid" (a
-    different, more specific violation kind).
+    else in the file is consulted. Lines inside a fenced code block are
+    never considered either (`_uncoded_lines`) — a decision.md quoting one
+    of these four fields as a literal example inside a fenced block must
+    not have that quoted value outrank a real, unfenced declaration
+    elsewhere in the file. A key's value is `None` when the field was never
+    written at all (outside any fence) — this is how
+    `check_review_declaration` tells "field absent" (a
+    `review-declaration-missing` violation) apart from "field present but
+    its value turns out to be invalid" (a different, more specific
+    violation kind).
 
     `- Review verdict:` and `- Review digest:` are checked before
     `- Review:` for readability, but the ordering does not affect
@@ -2548,7 +2684,7 @@ def parse_review_fields(decision_text: str) -> dict[str, str | None]:
         "review_verdict": None,
         "review_digest": None,
     }
-    for line in decision_text.splitlines():
+    for line in _uncoded_lines(decision_text):
         stripped = line.strip()
         low = stripped.lower()
         if fields["review_verdict"] is None and low.startswith("- review verdict:"):
@@ -2752,19 +2888,22 @@ def parse_acceptance_eval_declaration(decision_text: str) -> str | None:
     Same narrow convention as `parse_feedback` and `parse_review_fields`/E4:
     a case-insensitive `- <label>:` line prefix, matched against
     `.strip().lower()`, first occurrence wins, no prose parsing anywhere
-    else in the file. Returns `None` when the field was never written at
-    all -- the caller (`check_acceptance_eval_declaration`) must not
-    conflate this with `_normalize_acceptance_eval_declaration` returning
-    `"unparsable"` for a value that *was* written but could not be
-    recognized: "absent" and "unparsable" are different facts with
-    different consequences (absent: this field is optional, so this gate
-    stays silent unless this same round's own ledger exists -- see
-    `check_acceptance_eval_declaration`; unparsable:
-    `acceptance-eval-declaration-unparsable`, a reported violation, never a
-    silent skip -- fail-closed, exactly like `parse_feedback` /
-    `_normalize_feedback`'s equivalent distinction).
+    else in the file. Lines inside a fenced code block are never considered
+    (`_uncoded_lines`) -- a decision.md quoting `` - Acceptance evals: ``
+    as a literal example inside a fenced block must not have that quoted
+    value outrank a real, unfenced declaration. Returns `None` when the
+    field was never written at all (outside any fence) -- the caller
+    (`check_acceptance_eval_declaration`) must not conflate this with
+    `_normalize_acceptance_eval_declaration` returning `"unparsable"` for a
+    value that *was* written but could not be recognized: "absent" and
+    "unparsable" are different facts with different consequences (absent:
+    this field is optional, so this gate stays silent unless this same
+    round's own ledger exists -- see `check_acceptance_eval_declaration`;
+    unparsable: `acceptance-eval-declaration-unparsable`, a reported
+    violation, never a silent skip -- fail-closed, exactly like
+    `parse_feedback` / `_normalize_feedback`'s equivalent distinction).
     """
-    for line in decision_text.splitlines():
+    for line in _uncoded_lines(decision_text):
         stripped = line.strip()
         if stripped.lower().startswith("- acceptance evals:"):
             return stripped.split(":", 1)[1].strip()

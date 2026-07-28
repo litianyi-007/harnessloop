@@ -5272,6 +5272,281 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g26_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G27: fenced code blocks must not leak into the `- <label>:` line-
+    # prefix parsers (`parse_feedback`, `parse_review_fields`,
+    # `parse_acceptance_eval_declaration`, all routed through the shared
+    # `_uncoded_lines` filter). Live false green, reproduced: a decision.md
+    # with a fenced-block example reading `- Feedback: negative` followed,
+    # outside the fence, by the round's real `- Feedback: positive` was read
+    # as `negative` by the pre-fix "first occurrence wins" scan -- silently
+    # defeating `acceptance-eval-positive-without-pass` for a round whose
+    # actual (rendered) claim was positive. Every letter below proves its
+    # primary claim AND flips it via an explicit fixture mutation, per this
+    # file's convention -- never just one direction.
+    # -------------------------------------------------------------------
+
+    print(
+        "  G27a (flagship): fenced `- Feedback: negative` + real `- Feedback: positive` "
+        "+ a failing due eval -> acceptance-eval-positive-without-pass (red), and the "
+        "fence is genuinely load-bearing both ways"
+    )
+    g27_root = Path(tempfile.mkdtemp(prefix="hl-rae-g27a-"))
+    try:
+        project = _rae_project(g27_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+
+        fenced_text = (
+            "# Decision\n\n"
+            "```\n"
+            "- Feedback: negative\n"
+            "```\n"
+            "- Feedback: positive\n"
+            "- Review: none — n/a\n"
+            "- Reviewer: me\n"
+            "- Review verdict: pass\n"
+        )
+        _rae_write_decision(project, fenced_text)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G27a: decision.md's real (unfenced) Feedback is positive, the due "
+            "RAE-0001 eval's only attempt is a fail, and a fenced-block example "
+            "claiming `Feedback: negative` sits earlier in the file -> "
+            f"acceptance-eval-positive-without-pass still fires (got {sorted(kinds)})",
+        )
+
+        # Reverse 1: delete the fenced example lines entirely (same real
+        # Feedback: positive, same failing ledger). The violation must
+        # survive identically -- proving G27a's redness is not somehow
+        # propped up by the fenced content that happens to sit above it.
+        unfenced_text = (
+            "# Decision\n\n"
+            "- Feedback: positive\n"
+            "- Review: none — n/a\n"
+            "- Reviewer: me\n"
+            "- Review verdict: pass\n"
+        )
+        _rae_write_decision(project, unfenced_text)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G27a destructive control: removing the fenced ```/Feedback: "
+            "negative/``` lines entirely (same real Feedback: positive, same "
+            "failing ledger) still fires the rule -- proves the violation was "
+            "never resting on the fenced content, only on the real, unfenced "
+            "declaration",
+        )
+
+        # Reverse 2: flip the REAL (unfenced) Feedback to negative, leaving
+        # the fenced block untouched. The violation must clear -- proving
+        # the parser genuinely reads the unfenced line, not the fenced one.
+        flipped_text = (
+            "# Decision\n\n"
+            "```\n"
+            "- Feedback: negative\n"
+            "```\n"
+            "- Feedback: negative\n"
+            "- Review: none — n/a\n"
+            "- Reviewer: me\n"
+            "- Review verdict: pass\n"
+        )
+        _rae_write_decision(project, flipped_text)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G27a mutation control: changing ONLY the real, unfenced Feedback "
+            "line to negative (the fenced example is untouched) clears the "
+            "violation -- proves the parser is genuinely reading the unfenced "
+            "line's value, not the fenced sham",
+        )
+    finally:
+        shutil.rmtree(g27_root, ignore_errors=True)
+
+    print("  G27b: `~~~` fences hide fenced content exactly like ``` fences do")
+    g27b_fenced = "# Decision\n\n~~~\n- Feedback: negative\n~~~\n- Feedback: positive\n"
+    check(
+        verify_protocol.parse_feedback(g27b_fenced) == "positive",
+        "G27b: a `~~~`-fenced `- Feedback: negative` does not shadow the real, "
+        "unfenced `- Feedback: positive` below it (got "
+        f"{verify_protocol.parse_feedback(g27b_fenced)!r})",
+    )
+    g27b_unfenced = g27b_fenced.replace("~~~\n", "")
+    check(
+        verify_protocol.parse_feedback(g27b_unfenced) == "negative",
+        "G27b mutation control: removing ONLY the two `~~~` marker lines "
+        "(same two Feedback lines, same order) flips the result back to "
+        "'negative' via first-occurrence-wins -- proves the `~~~` markers "
+        f"themselves were what hid the first line (got {verify_protocol.parse_feedback(g27b_unfenced)!r})",
+    )
+
+    print("  G27c: a shorter same-type run inside a longer fence does not close it")
+    g27c_text = (
+        "# Decision\n\n"
+        "````\n"
+        "- Feedback: negative\n"
+        "```\n"
+        "- Feedback: also-inside\n"
+        "````\n"
+        "- Feedback: positive\n"
+    )
+    check(
+        verify_protocol.parse_feedback(g27c_text) == "positive",
+        "G27c: a 4-backtick-opened fence containing a bare 3-backtick line is "
+        "not closed by it -- both `negative` and `also-inside` stay fenced, "
+        "and the real `- Feedback: positive` below the true (4-backtick) "
+        f"close wins (got {verify_protocol.parse_feedback(g27c_text)!r})",
+    )
+
+    def _naive_fence_toggle_feedback(text: str) -> str | None:
+        """Counterfactual only, never a real code path: a length-blind fence
+        scanner that treats ANY run of 3+ backticks or tildes as toggling
+        fence state, ignoring the opening run's length entirely. Used to
+        show what G27c's fixture WOULD read if `_uncoded_lines` did not
+        enforce `len(closing run) >= len(opening run)`.
+        """
+        in_fence = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```") or stripped.startswith("~~~"):
+                in_fence = not in_fence
+                continue
+            if not in_fence and stripped.lower().startswith("- feedback:"):
+                return stripped.split(":", 1)[1].strip()
+        return None
+
+    check(
+        _naive_fence_toggle_feedback(g27c_text) == "also-inside",
+        "G27c destructive control: a length-blind naive scanner (any run "
+        "closes any fence) would let the bare 3-backtick line close the "
+        "4-backtick fence early, exposing `- Feedback: also-inside` as the "
+        "first unfenced Feedback line -- proving the real implementation's "
+        "run-length comparison is what keeps it fenced, not mere accident "
+        f"(naive got {_naive_fence_toggle_feedback(g27c_text)!r} vs. real "
+        f"{verify_protocol.parse_feedback(g27c_text)!r})",
+    )
+
+    print("  G27d: a closing-looking fence line carrying an info string does not close the fence")
+    g27d_text = (
+        "# Decision\n\n"
+        "```\n"
+        "- Feedback: negative\n"
+        "``` still-open\n"
+        "- Feedback: positive\n"
+    )
+    check(
+        verify_protocol.parse_feedback(g27d_text) is None,
+        "G27d: '``` still-open' carries trailing text after the backtick "
+        "run, so it does not close the fence -- the fence stays open "
+        "through EOF (G27f's fail-closed rule), swallowing BOTH Feedback "
+        f"lines, so parse_feedback returns None (got {verify_protocol.parse_feedback(g27d_text)!r})",
+    )
+    g27d_closed = g27d_text.replace("``` still-open\n", "```\n")
+    check(
+        verify_protocol.parse_feedback(g27d_closed) == "positive",
+        "G27d mutation control: stripping ONLY the ' still-open' info string "
+        "from that same line (leaving a bare ```) makes it a genuine close, "
+        "exposing the real `- Feedback: positive` below -- proves the info "
+        f"string was what disqualified it (got {verify_protocol.parse_feedback(g27d_closed)!r})",
+    )
+
+    print("  G27e: a 3-space-indented fence counts; a 4-space-indented one does not (pins the registered upper bound)")
+    g27e_3space = "# Decision\n\n   ```\n- Feedback: negative\n   ```\n- Feedback: positive\n"
+    check(
+        verify_protocol.parse_feedback(g27e_3space) == "positive",
+        "G27e: a fence indented by exactly 3 spaces is still recognized as a "
+        f"fence (got {verify_protocol.parse_feedback(g27e_3space)!r})",
+    )
+    # This is NOT a missed case: it pins the documented upper bound (see
+    # `_uncoded_lines`'s "known gap" paragraph and harnessloop-loop/SKILL.md's
+    # OUT column) that a 4-space indent is CommonMark's *indented code block*
+    # syntax, a different construct this fix deliberately does not track.
+    g27e_4space = "# Decision\n\n    ```\n- Feedback: negative\n    ```\n- Feedback: positive\n"
+    check(
+        verify_protocol.parse_feedback(g27e_4space) == "negative",
+        "G27e: a fence-shaped line indented by 4 spaces is NOT recognized as "
+        "a fence (registered gap, not a silent miss) -- first-occurrence-wins "
+        f"reads the 'negative' line as live prose (got {verify_protocol.parse_feedback(g27e_4space)!r})",
+    )
+
+    print("  G27f: an unclosed fence swallows every field after it through EOF -> review-declaration-missing (fail-closed)")
+    g27f_root = Path(tempfile.mkdtemp(prefix="hl-rae-g27f-"))
+    try:
+        project = _rae_project(g27f_root)
+        _rae_write_decision(
+            project,
+            "# Decision\n\n```\n- Review: none — n/a\n- Reviewer: me\n- Review verdict: pass\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "review-declaration-missing" in kinds,
+            "G27f: an opening fence with no closing marker before EOF makes "
+            "every Review/Reviewer/Review verdict line after it fenced (and "
+            "thus invisible) -- the three required fields are genuinely "
+            f"absent -> review-declaration-missing (got {sorted(kinds)})",
+        )
+
+        _rae_write_decision(
+            project,
+            "# Decision\n\n```\n```\n- Review: none — n/a\n- Reviewer: me\n- Review verdict: pass\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "review-declaration-missing" not in kinds,
+            "G27f mutation control: inserting the missing closing ``` "
+            "immediately (same three field lines, now genuinely outside the "
+            "fence) clears review-declaration-missing -- proves it was "
+            "genuinely the unclosed fence swallowing the fields, not "
+            f"something else about the fixture (got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g27f_root, ignore_errors=True)
+
+    print(
+        "  G27g: parse_review_fields and parse_acceptance_eval_declaration are EACH "
+        "independently fence-guarded -- not only parse_feedback"
+    )
+    fenced_reviewer = "# Decision\n\n```\n- Reviewer: fenced-fake\n```\n"
+    fields = verify_protocol.parse_review_fields(fenced_reviewer)
+    check(
+        fields["reviewer"] is None,
+        "G27g: parse_review_fields ignores a `- Reviewer:` line that only "
+        f"appears inside a fence -- the field is genuinely absent (got {fields})",
+    )
+    unfenced_reviewer = fenced_reviewer.replace("```\n", "")
+    fields2 = verify_protocol.parse_review_fields(unfenced_reviewer)
+    check(
+        fields2["reviewer"] == "fenced-fake",
+        "G27g mutation control: removing ONLY the fence markers around the "
+        "same `- Reviewer:` line exposes it -- proves the fence itself was "
+        f"hiding it, not some other property of the text (got {fields2})",
+    )
+
+    fenced_accept = "# Decision\n\n```\n- Acceptance evals: ran\n```\n"
+    check(
+        verify_protocol.parse_acceptance_eval_declaration(fenced_accept) is None,
+        "G27g: parse_acceptance_eval_declaration ignores a `- Acceptance "
+        "evals:` line that only appears inside a fence -- the field is "
+        "genuinely absent (got "
+        f"{verify_protocol.parse_acceptance_eval_declaration(fenced_accept)!r})",
+    )
+    unfenced_accept = fenced_accept.replace("```\n", "")
+    check(
+        verify_protocol.parse_acceptance_eval_declaration(unfenced_accept) == "ran",
+        "G27g mutation control: removing ONLY the fence markers around the "
+        "same `- Acceptance evals:` line exposes it -- proves the fence "
+        "itself was hiding it (got "
+        f"{verify_protocol.parse_acceptance_eval_declaration(unfenced_accept)!r})",
+    )
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")
