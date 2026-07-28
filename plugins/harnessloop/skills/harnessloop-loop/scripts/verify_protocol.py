@@ -629,6 +629,120 @@ def extract_allowed_spans(scope_lock_text: str) -> list[str]:
     return sorted({s.strip().replace("\\", "/") for s in spans if s.strip()})
 
 
+# TH-0026 (evolution-issues/0026-scope-lock-nonexistent-path-silent-zero-coverage.md):
+# a scope-lock span that drops the `goals/<goal-slug>/` segment out of a
+# round's own real path (e.g. `.harnessloop/rounds/0008/` instead of the real
+# `.harnessloop/goals/<goal>/rounds/0008/`) authorizes a location Rule A never
+# finds a single file under -- silent zero coverage, exit 0, nobody told (two
+# real instances found in this repo's own history: rounds/0008 and
+# rounds/0009). `<NNNN>` is this repo's round-directory naming convention
+# (exactly four digits, zero-padded).
+ROUND_SEGMENT_RE = re.compile(r"^\d{4}$")
+
+
+def _span_path_segments(span: str) -> list[str]:
+    """Split a scope-lock span into path segments for *segment-wise*
+    comparison, never string-wise (G31d: a span prefix like `xgoals/<goal>`
+    must never be treated as a match for `goals/<goal>` merely because the
+    raw characters happen to line up at the end of the string -- `xgoals`
+    and `goals` are different segments, not one a substring of the other by
+    coincidence at a path boundary).
+
+    Empty segments (from a leading `/`, a trailing `/`, or a doubled `//`)
+    and bare `.` segments carry no positional information for the suffix
+    comparison this feeds and are dropped.
+    """
+    return [seg for seg in span.split("/") if seg not in ("", ".")]
+
+
+def scope_lock_round_path_mismatch(span: str, round_dir: Path, project: Path) -> str | None:
+    """TH-0026: detect a scope-lock span that names *this* round's number
+    but whose path prefix does not match this round's own real directory
+    path.
+
+    Both operands live entirely at round `round_dir.name`'s own layer: the
+    span's text (from this round's own scope-lock.md) and this round's own
+    directory name / its parent goal directory's own name. This function
+    never touches the filesystem beyond that -- in particular it never
+    checks whether the span's path actually exists on disk. That check
+    would be a `(today layer, round N)` join: today's disk state (has
+    anything been renamed or deleted since this round closed?) is not a
+    property of round N, and joining the two would retroactively flip an
+    already-closed round red the moment an unrelated future cleanup
+    touches an unrelated directory -- exactly the trap this issue's own
+    "陷阱" section rules out (the class of judgment two independent 2026-07-28
+    reviews withdrew from the v5 runtime-evals contract; see v0.12.0's E1
+    discipline for the same principle applied elsewhere in this file).
+
+    Algorithm (the issue's worked table is the source of truth for every
+    branch below):
+      1. Find the first `rounds/<NNNN>` pair of *adjacent* path segments in
+         `span` (`<NNNN>` exactly four digits). No such pair -> None (this
+         rule has nothing to say about the span; most spans are not
+         round-shaped at all, e.g. `app/kernel-client/foo.md`).
+      2. `<NNNN>` must equal `round_dir.name` exactly. A span naming a
+         *different* round is left alone -> None -- it may legitimately
+         cite that other round's own artifacts (the issue's OUT-list item
+         2); this rule cannot distinguish a deliberate cross-round
+         reference from a typo, so it does not try.
+      3. The span's prefix (the segments before the matched `rounds/<NNNN>`
+         pair) is compared, segment by segment, against this round's real
+         path prefix relative to `project`
+         (`round_dir.parent.parent.relative_to(project)`, e.g.
+         `.harnessloop/goals/<slug>`). An *empty* span prefix (a bare
+         `rounds/0008/...` span with nothing before it) is treated as a
+         suffix of anything -- under-specified, not provably wrong, and
+         already covered by every base `verify_round` tries (`project`,
+         `goal_dir`, `round_dir`).
+      4. If the span's prefix is a path-segment suffix of the round's real
+         prefix, the span is fine (whether it spells out the full real
+         prefix, a `goals/<slug>`-relative form, or is empty) -> None.
+         Otherwise, this is the misspelled shape the issue describes: return
+         a human-readable note. The caller decides what to do with it
+         (TH-0026: hint-only -- never a violation, never touches exit code).
+    """
+    segments = _span_path_segments(span)
+    match_index = None
+    for i in range(len(segments) - 1):
+        if segments[i] == "rounds" and ROUND_SEGMENT_RE.match(segments[i + 1]):
+            match_index = i
+            break
+    if match_index is None:
+        return None
+
+    round_name = round_dir.name
+    if segments[match_index + 1] != round_name:
+        return None
+
+    span_prefix = segments[:match_index]
+    if not span_prefix:
+        return None
+
+    goal_dir = round_dir.parent.parent
+    try:
+        round_prefix = list(goal_dir.relative_to(project).parts)
+    except ValueError:
+        # goal_dir not actually under project -- cannot judge; never crash a
+        # hint-only check over this (see module discipline: hints degrade
+        # to silence, never to an exception that would take the real gate
+        # down with them).
+        return None
+
+    is_suffix = (
+        len(span_prefix) <= len(round_prefix)
+        and round_prefix[len(round_prefix) - len(span_prefix) :] == span_prefix
+    )
+    if is_suffix:
+        return None
+
+    return (
+        f"round {round_name}: scope-lock Allowed Changes span '{span}' names this "
+        f"round, but its path prefix '{'/'.join(span_prefix)}' is not this round's "
+        f"real directory prefix '{'/'.join(round_prefix)}' (real path: "
+        f"{(goal_dir / 'rounds' / round_name)})"
+    )
+
+
 def _looks_like_pattern(cleaned: str) -> bool:
     """True if the span contains a regex/glob metacharacter.
 
@@ -3280,6 +3394,23 @@ def verify_round(
                     }
                 )
 
+    # TH-0026: hint layer, not a violation (E1/fixed-by-demotion precedent,
+    # TH-0008) -- a span like `.harnessloop/rounds/0008/` names *this*
+    # round's number but drops the `goals/<slug>/` segment that this
+    # round's real directory path actually has, so Rule A silently finds
+    # zero files under it (the bug this issue exists to make visible; two
+    # real, already-closed instances found in this repo's own rounds/0008
+    # and rounds/0009). Deliberately unconditional on `checked_files` --
+    # unlike Rule A above, this is exactly the check that must still run
+    # when a round has nothing under evidence/ or reviews/, since that is
+    # the scenario the issue describes (a zero_inspected round whose
+    # scope-lock span points at nothing). Deliberately never promoted to a
+    # violation: doing so would retroactively fail already-closed rounds
+    # 0008/0009 with no way to clear red short of editing closed history
+    # (the E1 trap this file's module discipline exists to avoid).
+    if any(scope_lock_round_path_mismatch(span, round_dir, project) is not None for span in spans):
+        coverage["rounds_scope_lock_round_path_mismatch"] = 1
+
     # RAE gate, part 1: this round's own ledger
     # (`evidence/runtime/acceptance-evals.json`), checked unconditionally --
     # like scope-lock above, independent of whether the round has any other
@@ -3582,6 +3713,14 @@ def _empty_coverage() -> dict:
     return {
         "rounds": 0,
         "rounds_zero_inspected": 0,
+        # TH-0026: round-level (0 or 1, like `rounds_zero_inspected` above),
+        # set when at least one of this round's own scope-lock spans names
+        # this round's number but not this round's real path prefix (see
+        # `scope_lock_round_path_mismatch`). Hint-only -- never a violation,
+        # never affects exit code; accumulated across rounds by the same
+        # `coverage[key] += round_coverage[key]` loop every other per-round
+        # field uses.
+        "rounds_scope_lock_round_path_mismatch": 0,
         "rule_a_files": 0,
         "rule_b_files": 0,
         "citations_checked": 0,
@@ -3659,6 +3798,46 @@ def _unavailable_root_violations(project: Path, roots: dict) -> list[dict]:
         for alias, root in roots.items()
         if not root.available
     ]
+
+
+def collect_scope_lock_round_path_mismatch_notes(project: Path) -> list[str]:
+    """TH-0026: human-readable notes for `main()`'s CLI display only.
+
+    A light, standalone walk of `goals/*/rounds/*/scope-lock.md`, deliberately
+    kept separate from `verify_project`'s `(violations, coverage)` return
+    value -- that tuple already has 70+ call sites across this repo (this
+    module's own `main()` plus every fixture in `scripts/validate.py`) that
+    unpack it as exactly two values; growing it would mean touching every
+    one of them for a hint that must never affect exit code, violations, or
+    the `--json` coverage schema in the first place. This mirrors the
+    existing `--show-root-paths` precedent: a second, independent pass run
+    only for an additional human-mode-only print section, computed fresh
+    rather than threaded through the main verification return value.
+
+    Never raises on a malformed tree -- worst case is a missed note, never a
+    crash of the real gate.
+    """
+    notes: list[str] = []
+    goals_dir = project / ".harnessloop" / "goals"
+    if not goals_dir.is_dir():
+        return notes
+    for goal_dir in sorted(p for p in goals_dir.iterdir() if p.is_dir()):
+        rounds_dir = goal_dir / "rounds"
+        if not rounds_dir.is_dir():
+            continue
+        for round_dir in sorted(p for p in rounds_dir.iterdir() if p.is_dir()):
+            scope_lock = round_dir / "scope-lock.md"
+            if not scope_lock.is_file():
+                continue
+            try:
+                spans = extract_allowed_spans(scope_lock.read_text(encoding="utf-8"))
+            except OSError:
+                continue
+            for span in spans:
+                note = scope_lock_round_path_mismatch(span, round_dir, project)
+                if note is not None:
+                    notes.append(note)
+    return notes
 
 
 def verify_project(project: Path) -> tuple[list[dict], dict]:
@@ -3876,6 +4055,7 @@ def main() -> int:
             f"citations_shape_dropped={coverage['citations_shape_dropped']} "
             f"review_files_with_ignore={coverage['review_files_with_ignore']} "
             f"zero_inspected={coverage['rounds_zero_inspected']} "
+            f"scope_lock_round_path_mismatch={coverage['rounds_scope_lock_round_path_mismatch']} "
             f"review_declared={coverage['rounds_review_declared']} "
             f"review_none={coverage['rounds_review_none']} "
             f"review_missing_fields={coverage['rounds_review_missing_fields']} "
@@ -3894,6 +4074,16 @@ def main() -> int:
             f"external_citations_rejected={coverage['external_citations_rejected']} "
             f"external_citations_unverifiable={coverage['external_citations_unverifiable']}"
         )
+        # TH-0026: non-blocking hint lines, human mode only -- never affects
+        # exit code, violations, or the `--json` coverage schema (the same
+        # boundary `--show-root-paths` already keeps below). Printed
+        # whenever `rounds_scope_lock_round_path_mismatch` is nonzero so the
+        # count above is not just a number nobody can act on; each note
+        # names the round, what its scope-lock actually wrote, and what
+        # this round's real directory path is.
+        if coverage["rounds_scope_lock_round_path_mismatch"] > 0:
+            for note in collect_scope_lock_round_path_mismatch_notes(project):
+                print(f"  note (non-blocking, TH-0026): {note}")
         if args.show_root_paths:
             # Deliberately the *only* place a reference root's local path is
             # ever printed (G20 pins violation detail / coverage line /

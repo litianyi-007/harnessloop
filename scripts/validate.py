@@ -6214,6 +6214,153 @@ def validate_protocol_gates() -> None:
         f"{verify_protocol.parse_acceptance_eval_declaration(unfenced_accept)!r})",
     )
 
+    # G31: TH-0026 (evolution-issues/0026-scope-lock-nonexistent-path-silent-
+    # zero-coverage.md) -- a scope-lock span naming this round's own number
+    # but dropping the `goals/<slug>/` segment out of its path (e.g.
+    # `.harnessloop/rounds/0008/` instead of the real
+    # `.harnessloop/goals/<slug>/rounds/0008/`) authorizes a location Rule A
+    # never finds a single file under -- silent zero coverage, exit 0.
+    # G31a-e exercise `scope_lock_round_path_mismatch` directly: it is a pure
+    # function over Path objects (round_dir.name / .parent.parent /
+    # relative_to) with zero filesystem access, so a synthetic project/round
+    # path that never touches disk is enough -- no tempdir needed. G31f/g
+    # exercise the real `verify_project` integration (coverage + violations).
+    print("  G31: TH-0026 scope-lock span names this round but the wrong path prefix -> hint, never a violation")
+    th0026_project = Path("/th0026-synthetic/project")
+    th0026_goal_slug = "20260718-002-agent-app"
+    th0026_round_dir = th0026_project / ".harnessloop" / "goals" / th0026_goal_slug / "rounds" / "0008"
+
+    print("  G31a: '.harnessloop/rounds/0008/' (real repo's actual rounds/0008 mistake) is flagged")
+    note_a = verify_protocol.scope_lock_round_path_mismatch(
+        ".harnessloop/rounds/0008/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_a is not None,
+        f"G31a: '.harnessloop/rounds/0008/' (missing the goals/{th0026_goal_slug}/ segment) is "
+        f"flagged as a round-path mismatch (got {note_a!r})",
+    )
+    note_a_real = verify_protocol.scope_lock_round_path_mismatch(
+        f".harnessloop/goals/{th0026_goal_slug}/rounds/0008/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_a_real is None,
+        "G31a mutation control: the round's real, full path "
+        f"('.harnessloop/goals/{th0026_goal_slug}/rounds/0008/') is NOT flagged "
+        f"(got {note_a_real!r})",
+    )
+
+    print("  G31b: 'rounds/0008/evidence/' (empty prefix, goal-relative) is NOT flagged")
+    note_b = verify_protocol.scope_lock_round_path_mismatch(
+        "rounds/0008/evidence/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_b is None,
+        f"G31b: an empty span prefix ('rounds/0008/evidence/') is a suffix of anything, so it "
+        f"is not flagged -- every base verify_round already tries (got {note_b!r})",
+    )
+    note_b_mutation = verify_protocol.scope_lock_round_path_mismatch(
+        ".harnessloop/rounds/0008/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_b_mutation is not None,
+        "G31b mutation control: prefixing the SAME round number with the wrong "
+        f"'.harnessloop' segment flips it to flagged (got {note_b_mutation!r})",
+    )
+
+    print("  G31c: 'goals/<slug>/rounds/0008/' (goal-relative form) is NOT flagged")
+    note_c = verify_protocol.scope_lock_round_path_mismatch(
+        f"goals/{th0026_goal_slug}/rounds/0008/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_c is None,
+        f"G31c: 'goals/{th0026_goal_slug}/rounds/0008/' is a genuine path-segment suffix of "
+        f"this round's real prefix ('.harnessloop/goals/{th0026_goal_slug}') and so is not "
+        f"flagged (got {note_c!r})",
+    )
+
+    print("  G31d: segment comparison, not string comparison -- 'xgoals/<slug>/rounds/0008/' MUST be flagged")
+    naive_span_prefix = f"xgoals/{th0026_goal_slug}"
+    naive_relative_form = f"goals/{th0026_goal_slug}"
+    check(
+        naive_span_prefix.endswith(naive_relative_form),
+        "G31d fixture sanity: a naive raw-string .endswith check on the span's own prefix "
+        f"text really would (wrongly) read '{naive_span_prefix}' as already containing the "
+        f"correct relative suffix '{naive_relative_form}' -- proving this fixture actually "
+        "distinguishes segment-wise from string-wise comparison, not a vacuous case where "
+        "both approaches agree",
+    )
+    note_d = verify_protocol.scope_lock_round_path_mismatch(
+        f"xgoals/{th0026_goal_slug}/rounds/0008/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_d is not None,
+        f"G31d: 'xgoals/{th0026_goal_slug}/rounds/0008/' MUST be flagged -- 'xgoals' and "
+        "'goals' are different path segments, not one a substring of the other at a segment "
+        f"boundary; a string-endswith implementation would have missed this (got {note_d!r})",
+    )
+
+    print("  G31e: span names a DIFFERENT round (rounds/0007) -> NOT flagged (OUT list item 2)")
+    note_e = verify_protocol.scope_lock_round_path_mismatch(
+        "rounds/0007/", th0026_round_dir, th0026_project
+    )
+    check(
+        note_e is None,
+        "G31e: round 0008's scope-lock citing 'rounds/0007/' (a different round's number) is "
+        "not flagged -- this rule cannot tell a deliberate cross-round reference from a typo, "
+        f"and does not try (registered OUT-list boundary, not a missed case) (got {note_e!r})",
+    )
+
+    print("  G31f: real verify_project() integration -- hint-only, exit code and violations untouched")
+    g31f_root = REPO_ROOT / ".tmp" / f"verify-fixture-g31f-{uuid.uuid4().hex}"
+    g31f_round_dir = g31f_root / ".harnessloop" / "goals" / "20260101-001-g31f" / "rounds" / "0008"
+    try:
+        g31f_round_dir.mkdir(parents=True)
+        (g31f_round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n- `.harnessloop/rounds/0008/`\n",
+            encoding="utf-8",
+        )
+        violations, coverage = verify_protocol.verify_project(g31f_root)
+        check(
+            not violations,
+            "G31f: a project with ONLY the TH-0026 mismatch (no other artifacts) produces "
+            f"zero violations -- the hint never enters the violations list (got {violations})",
+        )
+        check(
+            coverage.get("rounds_scope_lock_round_path_mismatch") == 1,
+            "G31f: coverage counts exactly 1 round with the mismatch "
+            f"(got {coverage.get('rounds_scope_lock_round_path_mismatch')!r})",
+        )
+    finally:
+        shutil.rmtree(g31f_root, ignore_errors=True)
+
+    print("  G31g: coverage accumulates across rounds -- two mismatched rounds -> count 2")
+    g31g_root = REPO_ROOT / ".tmp" / f"verify-fixture-g31g-{uuid.uuid4().hex}"
+    try:
+        for g31g_round_name in ("0008", "0009"):
+            g31g_round_dir = (
+                g31g_root / ".harnessloop" / "goals" / "20260101-001-g31g" / "rounds" / g31g_round_name
+            )
+            g31g_round_dir.mkdir(parents=True)
+            (g31g_round_dir / "scope-lock.md").write_text(
+                "# Scope Lock\n\n## Allowed Changes\n\n"
+                f"- `.harnessloop/rounds/{g31g_round_name}/`\n",
+                encoding="utf-8",
+            )
+        violations, coverage = verify_protocol.verify_project(g31g_root)
+        check(
+            not violations,
+            f"G31g: both mismatched rounds still produce zero violations (got {violations})",
+        )
+        check(
+            coverage.get("rounds_scope_lock_round_path_mismatch") == 2
+            and coverage.get("rounds") == 2,
+            "G31g: coverage sums the per-round mismatch flag across rounds (both rounds hit "
+            f"-> 2), not just the last round checked (got {coverage.get('rounds_scope_lock_round_path_mismatch')!r} "
+            f"of {coverage.get('rounds')!r} rounds)",
+        )
+    finally:
+        shutil.rmtree(g31g_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")
