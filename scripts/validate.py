@@ -5006,6 +5006,272 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g25n_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G26: second RAE vertical slice -- decision.md's optional
+    # `- Acceptance evals: ran` / `none — <reason>` field
+    # (`verify_protocol.check_acceptance_eval_declaration`,
+    # `parse_acceptance_eval_declaration`,
+    # `_normalize_acceptance_eval_declaration`). This narrows the G25l upper
+    # bound ("ledger absent -> zero violations from the RAE hard rule")
+    # WITHOUT ever joining across time layers: both operands here -- the
+    # decision.md text and this SAME round's own ledger presence -- come
+    # from one round, exactly like B2a's `check_review_declaration`; neither
+    # `<goal>/evals.json` nor `activation_round` is ever read by this gate.
+    #
+    # Eight letters below, one per row of the judgment table this vertical
+    # slice's brief specifies. Every letter proves its primary claim AND its
+    # opposite via an explicit fixture mutation -- never just one direction.
+    # None of these fixtures ever write a `- Feedback:` line, so the
+    # pre-existing `acceptance-eval-feedback-unparsable` /
+    # `acceptance-eval-positive-without-pass` kinds (the FIRST RAE vertical
+    # slice) never fire here; filtering violations by the shared
+    # `acceptance-eval-` prefix therefore isolates exactly this gate's own
+    # five kinds without needing to enumerate them by name at every call site.
+    # -------------------------------------------------------------------
+
+    def _accept_kinds(violations: list[dict]) -> set[str]:
+        return {v["kind"] for v in violations if v["kind"].startswith("acceptance-eval-")}
+
+    print("  G26a: field absent + ledger present -> acceptance-eval-declaration-missing (red)")
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26a-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Verdict: pass\n")
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-missing" in _accept_kinds(violations),
+            "G26a: decision.md has no `- Acceptance evals:` line but this round's "
+            "ledger exists -> acceptance-eval-declaration-missing (red) -- row 2 of "
+            "the second RAE vertical slice's judgment table",
+        )
+
+        _rae_write_decision(project, "# Decision\n\n- Verdict: pass\n- Acceptance evals: ran\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-missing" not in _accept_kinds(violations),
+            "G26a mutation control: declaring `Acceptance evals: ran` (same ledger, "
+            "otherwise-unchanged decision.md) clears the violation -- proves it is "
+            "really about the field's absence, not a coincidental fixture property",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print("  G26b: `Acceptance evals: ran` + ledger present -> green; deleting ONLY the ledger turns it red")
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26b-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Acceptance evals: ran\n")
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        accept_kinds = _accept_kinds(violations)
+        check(
+            not accept_kinds,
+            f"G26b: `Acceptance evals: ran` with this round's ledger present -> no "
+            f"acceptance-eval-* violation (row 3, got {sorted(accept_kinds)})",
+        )
+
+        _rae_ledger_path(project).unlink()
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declared-ran-without-ledger" in _accept_kinds(violations),
+            "G26b mutation control: deleting ONLY the ledger file (same `Acceptance "
+            "evals: ran` declaration) turns this round red -- proves G26b's greenness "
+            "depended on the ledger's actual presence, not a vacuous always-green path",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print("  G26c: `Acceptance evals: none — <reason>` + ledger absent -> green; adding a ledger turns it red")
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26c-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(
+            project, "# Decision\n\n- Acceptance evals: none — smoke test only, no eval harness yet\n"
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        accept_kinds = _accept_kinds(violations)
+        check(
+            not accept_kinds,
+            f"G26c: `Acceptance evals: none — <non-empty reason>` with no ledger for "
+            f"this round -> no acceptance-eval-* violation (row 5, got {sorted(accept_kinds)})",
+        )
+
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-contradicts-ledger" in _accept_kinds(violations),
+            "G26c mutation control: adding ONLY a ledger (same `Acceptance evals: none "
+            "— ...` declaration) turns this round red -- proves G26c's greenness "
+            "depended on the ledger's actual absence, not a vacuous always-green path",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print("  G26d: `Acceptance evals: ran` + ledger absent -> acceptance-eval-declared-ran-without-ledger (red)")
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26d-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Acceptance evals: ran\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declared-ran-without-ledger" in _accept_kinds(violations),
+            "G26d: `Acceptance evals: ran` with NO acceptance-evals.json written for "
+            "this round -> acceptance-eval-declared-ran-without-ledger (red) -- row 4",
+        )
+
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declared-ran-without-ledger" not in _accept_kinds(violations),
+            "G26d mutation control: writing the ledger (same `Acceptance evals: ran` "
+            "declaration) clears the violation",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print("  G26e: field absent + ledger absent -> zero violations (OUT-list upper bound: migration-silent)")
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26e-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Verdict: pass\n")
+        # Deliberately no `- Acceptance evals:` line and no acceptance-evals.json --
+        # this is the residual OUT-list upper bound harnessloop-loop/SKILL.md now
+        # documents under "Narrowed, not closed, by the second vertical slice": a
+        # round that writes NEITHER the field NOR the ledger produces zero
+        # violations from this gate, forever -- the gate can only guarantee
+        # self-consistency once declared, never that declaration happens.
+        violations, _coverage = verify_protocol.verify_project(project)
+        accept_kinds = _accept_kinds(violations)
+        check(
+            not accept_kinds,
+            f"G26e: no `Acceptance evals:` declaration and no ledger for this round -> "
+            f"zero acceptance-eval-* violations (migration-silent, row 1, got {sorted(accept_kinds)})",
+        )
+
+        # Reverse mutation (required by the brief): add ONLY a ledger to the SAME
+        # round, decision.md unchanged -- this must turn the round red, proving
+        # G26e's greenness was because the condition (ledger absent) was genuinely
+        # not met, not because the check never runs at all.
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-missing" in _accept_kinds(violations),
+            "G26e mutation control: adding ONLY a ledger to the SAME round (decision.md "
+            "unchanged, still no `Acceptance evals:` line) immediately turns it red -- "
+            "proves G26e's greenness was real, not a coincidental blind spot where the "
+            "check simply never executes",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print(
+        "  G26f: `Acceptance evals: none — <reason>` + ledger present -> "
+        "acceptance-eval-declaration-contradicts-ledger (red)"
+    )
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26f-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(
+            project, "# Decision\n\n- Acceptance evals: none — smoke test only, no eval harness yet\n"
+        )
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-contradicts-ledger" in _accept_kinds(violations),
+            "G26f: `Acceptance evals: none — <reason>` while this round's ledger "
+            "exists -> acceptance-eval-declaration-contradicts-ledger (red) -- row 6",
+        )
+
+        _rae_ledger_path(project).unlink()
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-declaration-contradicts-ledger" not in _accept_kinds(violations),
+            "G26f mutation control: deleting ONLY the ledger (same `Acceptance evals: "
+            "none — ...` declaration) clears the violation",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print(
+        "  G26g: `Acceptance evals: none —` with empty/whitespace reason -> "
+        "acceptance-eval-none-reason-empty (red), regardless of ledger state"
+    )
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26g-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Acceptance evals: none —   \n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-none-reason-empty" in _accept_kinds(violations),
+            "G26g: `Acceptance evals: none —` with only whitespace after the "
+            "separator, ledger absent -> acceptance-eval-none-reason-empty (red) -- row 7",
+        )
+
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "acceptance-eval-none-reason-empty" in _accept_kinds(violations),
+            "G26g: the SAME empty-reason declaration still fires with a ledger "
+            "present too -- row 7 is 'either' ledger state, not conditioned on it",
+        )
+
+        _rae_ledger_path(project).unlink()
+        _rae_write_decision(
+            project, "# Decision\n\n- Acceptance evals: none — smoke test only, no eval harness yet\n"
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _accept_kinds(violations),
+            "G26g mutation control: filling in a non-empty reason (and removing the "
+            "ledger, back to row 5) clears acceptance-eval-none-reason-empty and "
+            "produces zero acceptance-eval-* violations -- proves the check is really "
+            "about the reason's emptiness, not a vacuous always-red path",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
+    print(
+        "  G26h: unparsable Acceptance evals value (full-width period) -> "
+        "acceptance-eval-declaration-unparsable (red), fail-closed and alone"
+    )
+    g26_root = Path(tempfile.mkdtemp(prefix="hl-rae-g26h-"))
+    try:
+        project = _rae_project(g26_root)
+        _rae_write_decision(project, "# Decision\n\n- Acceptance evals: ran。\n")  # trailing full-width period, U+3002
+        _rae_write_ledger(project, {"entries": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        accept_kinds = _accept_kinds(violations)
+        check(
+            accept_kinds == {"acceptance-eval-declaration-unparsable"},
+            "G26h: `Acceptance evals: ran。` (trailing full-width period) does not "
+            "normalize to `ran` or `none — ...` -> acceptance-eval-declaration-unparsable "
+            f"(red) -- row 8, and no OTHER acceptance-eval-* kind fires alongside it "
+            f"(got {sorted(accept_kinds)}), proving fail-closed took its own independent "
+            "branch rather than some other rule silently absorbing it",
+        )
+        naive_normalized = "ran。".strip().lower()
+        check(
+            naive_normalized != verify_protocol.ACCEPTANCE_EVAL_RAN_TOKEN,
+            "G26h destructive control: the raw value genuinely fails a plain `== "
+            '"ran"` membership test after only strip/lower -- if '
+            "_normalize_acceptance_eval_declaration folded this to 'ran' anyway (e.g. "
+            "by stripping trailing punctuation), or treated an unrecognized value as "
+            "absent (fail-open), this fixture would have silently produced zero "
+            "acceptance-eval-* violations",
+        )
+
+        _rae_write_decision(project, "# Decision\n\n- Acceptance evals: ran\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _accept_kinds(violations),
+            "G26h mutation control: fixing the spelling to plain ASCII `ran` (same "
+            "ledger present) clears the unparsable violation and correctly resolves "
+            "to green -- same fixture, only the punctuation differs",
+        )
+    finally:
+        shutil.rmtree(g26_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")

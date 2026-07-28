@@ -306,6 +306,37 @@ This script enforces only machine-checkable rules:
   by the very round being checked — this gate confirms internal
   self-consistency, never that the due set is complete.
 
+- Acceptance-eval declaration gate (second RAE vertical slice; see
+  `check_acceptance_eval_declaration`): narrows the upper bound above —
+  "a round with no ledger produces zero violations from the RAE hard
+  rule" — without ever joining across time layers. A round's
+  `decision.md` may optionally declare `- Acceptance evals: ran` or
+  `- Acceptance evals: none — <reason>`; this gate checks that
+  declaration for self-consistency against that **same round's own**
+  ledger presence (`check_round_eval_ledger`'s `state["present"]`) —
+  never `<goal>/evals.json`'s `activation_round`, which would require
+  joining today's goal-level registry against this round's evidence and
+  was measured and withdrawn as infeasible (see the consuming project's
+  `docs/runtime-evals-interface-contract-v5-20260728.md` §0/§6). Both
+  operands — the decision.md text and the ledger-presence flag — come
+  from round N only, so this stays a same-round check exactly like B2a
+  above, never a cross-round or cross-goal one. The field is read with
+  the same `- <label>:` convention as `parse_review_fields`/`parse_feedback`
+  (case-insensitive prefix, first occurrence wins), then normalized
+  fail-closed with exactly `.strip().lower()` — no punctuation stripped,
+  same discipline as `_normalize_feedback` — and its `none — <reason>`
+  shape is parsed with the *same* `REVIEW_NONE_RE` regex `check_review_
+  declaration` already uses for `Review: none — <reason>`, not a second,
+  subtly different pattern. A value landing in neither the `ran` nor the
+  `none — <reason>` shape is `acceptance-eval-declaration-unparsable`,
+  never silently treated as absent. See `check_acceptance_eval_declaration`'s
+  docstring for the full eight-row judgment table. The one upper bound
+  this narrowing deliberately leaves open, restated in
+  `harnessloop-loop/SKILL.md`'s OUT column: this field is optional, and a
+  round that writes **neither** the field **nor** the ledger produces
+  zero violations from this gate too — it can guarantee "once you
+  declare, you must be self-consistent", never "you must declare".
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
@@ -2705,6 +2736,215 @@ def check_review_declaration(
     return violations, review_state
 
 
+# Acceptance-eval declaration gate (second RAE vertical slice; see the module
+# docstring's "Acceptance-eval declaration gate" section and
+# `check_acceptance_eval_declaration` below). `ACCEPTANCE_EVAL_RAN_TOKEN` is
+# the exact (post `.strip().lower()`) value that means "this round ran its
+# acceptance evals" -- a module-level constant so the one literal string is
+# never duplicated between the normalizer and anything that tests it.
+ACCEPTANCE_EVAL_RAN_TOKEN = "ran"
+
+
+def parse_acceptance_eval_declaration(decision_text: str) -> str | None:
+    """Extract the raw (not yet normalized) `- Acceptance evals:` value from
+    a decision.md.
+
+    Same narrow convention as `parse_feedback` and `parse_review_fields`/E4:
+    a case-insensitive `- <label>:` line prefix, matched against
+    `.strip().lower()`, first occurrence wins, no prose parsing anywhere
+    else in the file. Returns `None` when the field was never written at
+    all -- the caller (`check_acceptance_eval_declaration`) must not
+    conflate this with `_normalize_acceptance_eval_declaration` returning
+    `"unparsable"` for a value that *was* written but could not be
+    recognized: "absent" and "unparsable" are different facts with
+    different consequences (absent: this field is optional, so this gate
+    stays silent unless this same round's own ledger exists -- see
+    `check_acceptance_eval_declaration`; unparsable:
+    `acceptance-eval-declaration-unparsable`, a reported violation, never a
+    silent skip -- fail-closed, exactly like `parse_feedback` /
+    `_normalize_feedback`'s equivalent distinction).
+    """
+    for line in decision_text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("- acceptance evals:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def _normalize_acceptance_eval_declaration(raw: str) -> tuple[str, str | None]:
+    """Classify a raw `- Acceptance evals:` value into exactly one of three
+    shapes: `("ran", None)`, `("none", reason)`, or `("unparsable", None)`.
+
+    Deliberately narrow, mirroring `_normalize_feedback`: only
+    `str.strip()` (which already treats the full-width ideographic space
+    U+3000 as whitespace) and ASCII case-folding (`.lower()`) are applied --
+    no punctuation is stripped. A value that is exactly `ran`
+    (`ACCEPTANCE_EVAL_RAN_TOKEN`) after that normalization is the `"ran"`
+    shape. A value matching `REVIEW_NONE_RE` -- the *same* regex
+    `check_review_declaration` already uses for `Review: none — <reason>`,
+    reused verbatim rather than hand-rolling a second, subtly different
+    pattern, per the second-vertical-slice spec's explicit instruction -- is
+    the `"none"` shape, with `reason` set to whatever text follows the
+    `none` token and its separator (stripped, but not yet checked for
+    emptiness -- the caller, `check_acceptance_eval_declaration`, owns that
+    check). Anything else -- including a value that merely *resembles* one
+    of the two shapes but for a stray character a naive normalizer would
+    silently swallow (e.g. a trailing full-width period, `ran。`, or `none。`
+    with nothing recognizable as the `none` token) -- is `"unparsable"`:
+    fail-closed, exactly like `_normalize_feedback`'s `None` return. The
+    caller reports `acceptance-eval-declaration-unparsable` rather than
+    ever treating an unrecognized value as if the field had never been
+    written, or as if it meant `none`.
+    """
+    normalized = raw.strip().lower()
+    if normalized == ACCEPTANCE_EVAL_RAN_TOKEN:
+        return "ran", None
+    none_match = REVIEW_NONE_RE.match(normalized)
+    if none_match:
+        return "none", none_match.group(1).strip()
+    return "unparsable", None
+
+
+def check_acceptance_eval_declaration(
+    round_dir: Path, decision_text: str, ledger_present: bool
+) -> tuple[list[dict], dict]:
+    """Second RAE vertical slice: narrow decision.md's optional
+    `- Acceptance evals:` field against this **same round's own** ledger
+    presence (`check_round_eval_ledger`'s `state["present"]`, passed in by
+    the caller -- never re-read here, never re-derived any other way, and
+    never joined against `<goal>/evals.json` -- that cross-time-layer join
+    was measured and withdrawn; see the module docstring's "Acceptance-eval
+    declaration gate" section).
+
+    Judgment table (all eight rows this function's callers rely on):
+
+    | field                              | ledger  | verdict                                          |
+    |------------------------------------|---------|---------------------------------------------------|
+    | absent                             | absent  | green (migration-silent, like E4/`Feedback`)       |
+    | absent                             | present | `acceptance-eval-declaration-missing`              |
+    | `ran`                               | present | green                                              |
+    | `ran`                               | absent  | `acceptance-eval-declared-ran-without-ledger`      |
+    | `none — <non-empty reason>`        | absent  | green                                              |
+    | `none — <non-empty reason>`        | present | `acceptance-eval-declaration-contradicts-ledger`   |
+    | `none —` (reason empty/whitespace) | either  | `acceptance-eval-none-reason-empty`                |
+    | anything else (unparsable)         | either  | `acceptance-eval-declaration-unparsable` (fail-closed) |
+
+    Row 1 is the deliberate upper bound this gate registers in
+    `harnessloop-loop/SKILL.md`'s OUT column: this field is optional, and a
+    round that never writes it -- and never writes a ledger either --
+    produces zero violations from this function, exactly like a round that
+    predates this field entirely. This is not a hole this function tries to
+    close; the gate can only enforce "once you declare, you must be
+    self-consistent", never "you must declare".
+
+    Returns `(violations, state)` where `state` has keys `declared` (bool,
+    whether the field was written at all -- `raw is not None`) and `mode`
+    (`"ran"` | `"none"` | `"unparsable"` | `None` when never declared). The
+    caller (`verify_round`) folds `mode`/`declared` into the
+    `rounds_eval_declaration_ran` / `_none` / `_absent` coverage fields,
+    mirroring how `rounds_review_declared`/`_none`/`_missing_fields`
+    already works for B2a. `"unparsable"` intentionally backs no coverage
+    field of its own -- same as `acceptance-eval-feedback-unparsable` above,
+    which has none either; the violation list is where an unparsable value
+    is visible, not a dedicated counter.
+    """
+    decision_path = round_dir / "decision.md"
+    ledger_path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+    raw = parse_acceptance_eval_declaration(decision_text)
+    state: dict = {"declared": raw is not None, "mode": None}
+
+    if raw is None:
+        if ledger_present:
+            return (
+                [
+                    {
+                        "round": str(round_dir),
+                        "kind": "acceptance-eval-declaration-missing",
+                        "detail": (
+                            f"{decision_path} has no `- Acceptance evals:` declaration, "
+                            f"but {ledger_path} exists -- a round that writes an "
+                            "acceptance-eval ledger must declare `Acceptance evals: ran` "
+                            "(or `none — <reason>` if the ledger is unrelated to this "
+                            "round's own claim)"
+                        ),
+                    }
+                ],
+                state,
+            )
+        return [], state
+
+    mode, reason = _normalize_acceptance_eval_declaration(raw)
+    state["mode"] = mode
+
+    if mode == "unparsable":
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "acceptance-eval-declaration-unparsable",
+                    "detail": (
+                        f"{decision_path} declares `Acceptance evals: {raw}`, which does "
+                        "not normalize (strip + lowercase only, no punctuation stripped) "
+                        "to `ran` or `none — <reason>` -- fail-closed, never silently "
+                        "treated as absent or as `none`"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    if mode == "ran":
+        if not ledger_present:
+            return (
+                [
+                    {
+                        "round": str(round_dir),
+                        "kind": "acceptance-eval-declared-ran-without-ledger",
+                        "detail": (
+                            f"{decision_path} declares `Acceptance evals: ran` but "
+                            f"{ledger_path} does not exist"
+                        ),
+                    }
+                ],
+                state,
+            )
+        return [], state
+
+    # mode == "none"
+    if not reason:
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "acceptance-eval-none-reason-empty",
+                    "detail": (
+                        f"{decision_path} declares `Acceptance evals: none` with no "
+                        "non-empty reason after it -- use `Acceptance evals: none — <why "
+                        "no acceptance evals were run this round>` (this check only "
+                        "verifies the reason is non-empty, not that it is adequate)"
+                    ),
+                }
+            ],
+            state,
+        )
+    if ledger_present:
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "acceptance-eval-declaration-contradicts-ledger",
+                    "detail": (
+                        f"{decision_path} declares `Acceptance evals: none — {reason}` but "
+                        f"{ledger_path} exists -- a round that has a ledger cannot also "
+                        "claim none were run"
+                    ),
+                }
+            ],
+            state,
+        )
+    return [], state
+
+
 def _container_escape_violation(
     container: Path, project: Path, round_label: Path
 ) -> dict | None:
@@ -3173,6 +3413,26 @@ def verify_round(
                         }
                     )
 
+        # Second RAE vertical slice (`check_acceptance_eval_declaration`):
+        # decision.md's optional `- Acceptance evals:` field against this
+        # SAME round's own ledger presence (`ledger_state["present"]`,
+        # already computed unconditionally earlier in this function --
+        # never re-read, never re-derived, never joined against the goal's
+        # `evals.json`). See that function's docstring for the full
+        # eight-row judgment table and `harnessloop-loop/SKILL.md`'s OUT
+        # column for the one upper bound it deliberately leaves open (a
+        # round that writes neither the field nor the ledger stays silent).
+        accept_violations, accept_state = check_acceptance_eval_declaration(
+            round_dir, decision_text, ledger_state["present"]
+        )
+        violations.extend(accept_violations)
+        if accept_state["mode"] == "ran":
+            coverage["rounds_eval_declaration_ran"] += 1
+        elif accept_state["mode"] == "none":
+            coverage["rounds_eval_declaration_none"] += 1
+        elif not accept_state["declared"]:
+            coverage["rounds_eval_declaration_absent"] += 1
+
     return violations, coverage
 
 
@@ -3201,6 +3461,16 @@ def _empty_coverage() -> dict:
         # runs over every other per-round field.
         "rounds_eval_ledger_present": 0,
         "eval_entries_checked": 0,
+        # Second RAE vertical slice (`check_acceptance_eval_declaration`,
+        # wired into `verify_round` right after the fields above): ordinary
+        # per-round fields, accumulated the same way. `mode` partitions a
+        # round with a `decision.md` into exactly one of `ran` / `none` /
+        # (declared but) unparsable (no counter of its own, mirroring
+        # `acceptance-eval-feedback-unparsable`'s lack of one) / never
+        # declared at all (`_absent`).
+        "rounds_eval_declaration_ran": 0,
+        "rounds_eval_declaration_none": 0,
+        "rounds_eval_declaration_absent": 0,
         # RAE gate (`check_goal_eval_registry`): goal-level, not round-level --
         # `<goal>/evals.json` lives once per goal, not once per round, so this
         # field is incremented directly by `verify_project`'s goal loop (once
@@ -3474,6 +3744,9 @@ def main() -> int:
             f"goals_eval_registry_present={coverage['goals_eval_registry_present']} "
             f"rounds_eval_ledger_present={coverage['rounds_eval_ledger_present']} "
             f"eval_entries_checked={coverage['eval_entries_checked']} "
+            f"eval_declaration_ran={coverage['rounds_eval_declaration_ran']} "
+            f"eval_declaration_none={coverage['rounds_eval_declaration_none']} "
+            f"eval_declaration_absent={coverage['rounds_eval_declaration_absent']} "
             f"external_roots_declared={coverage['external_roots_declared']} "
             f"external_roots_available={coverage['external_roots_available']} "
             f"external_citations_checked={coverage['external_citations_checked']} "
