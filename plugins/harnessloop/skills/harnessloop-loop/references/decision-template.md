@@ -14,6 +14,8 @@
 - Review verdict: pass | pass-with-note | rework | fail | not-applicable
 - Review digest: <sha256 of the Review file, optional>
 - Acceptance evals: ran | none — <non-empty reason no acceptance evals were run this round> (optional — not writing this field is migration-silent: a round that writes neither this field nor `evidence/runtime/acceptance-evals.json` produces zero violations from this gate; once you do write it, it must agree with whether that ledger file exists this round)
+- Predecessor: <NNNN, the four-digit round this round continued from> (optional — not writing this field is migration-silent: the mechanical gate can only guarantee "once declared, the named round exists under this same goal's `rounds/` and its number is strictly less than this round's own", never "you must declare it")
+- Loop continuation: stopped: <reason>[ — <free-text note>] (optional — not writing this field is migration-silent; `<reason>` must be one of the enumerated values in `harnessloop-loop/SKILL.md`'s Mechanical Gate Boundary, e.g. `goal-achieved`, `missing-human-input`, `unjustified-stop`, ...; the gate checks only that `<reason>` is a recognized value, never whether it is the true or adequate reason)
 - Mechanical gate: <exit-code> / <the coverage line printed by verify_protocol.py, verbatim> / <when it was run>
 - Active goal:
 - Active round:

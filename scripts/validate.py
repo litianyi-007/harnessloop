@@ -6361,6 +6361,348 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g31g_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G32: batch 2 of docs/loop-stop-record-spec-20260728.md (Appendix F's
+    # reversed direction) -- the loop-predecessor gate
+    # (`check_loop_predecessor_declaration`) and the loop-continuation
+    # record gate (`check_loop_continuation_declaration`). Every letter is a
+    # paired mutation exactly like G25/G26 above: a fixture asserted to land
+    # on verdict X under the real implementation, then a minimal, specific
+    # change to that SAME fixture asserted to flip the verdict -- proving
+    # each check discriminates on the exact condition it claims to.
+    # -------------------------------------------------------------------
+
+    def _loop_project(tmp_root: Path) -> Path:
+        return tmp_root / "project"
+
+    def _loop_round_dir(project: Path, round_name: str, goal: str = "20260101-001-loop") -> Path:
+        return project / ".harnessloop" / "goals" / goal / "rounds" / round_name
+
+    def _loop_round(project: Path, round_name: str, goal: str = "20260101-001-loop") -> Path:
+        """Create a minimal, real round directory -- scope-lock.md present
+        and parseable -- so this gate's own unrelated `missing-scope-lock` /
+        `unparseable-allowed-changes` noise never contaminates a G32
+        assertion (every G32 assertion below filters to `loop-` kinds via
+        `_loop_kinds`, but keeping the fixtures clean is cheap and avoids
+        depending on that filter alone)."""
+        round_dir = _loop_round_dir(project, round_name, goal)
+        round_dir.mkdir(parents=True, exist_ok=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            f"- `.harnessloop/goals/{goal}/rounds/{round_name}/`\n",
+            encoding="utf-8",
+        )
+        return round_dir
+
+    def _loop_write_decision(
+        project: Path, round_name: str, text: str, goal: str = "20260101-001-loop"
+    ) -> None:
+        (_loop_round_dir(project, round_name, goal) / "decision.md").write_text(
+            text, encoding="utf-8"
+        )
+
+    def _loop_kinds(violations: list[dict]) -> set[str]:
+        return {v["kind"] for v in violations if v["kind"].startswith("loop-")}
+
+    print(
+        "  G32a: Predecessor: 0003 (round 0003 exists, this round 0007) -> green; "
+        "deleting round 0003 -> loop-predecessor-missing"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32a-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0003")
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Predecessor: 0003\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32a: Predecessor: 0003 with round 0003 existing under the same goal's "
+            f"rounds/ -> zero loop-* violations (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            coverage.get("rounds_predecessor_declared") == 1,
+            "G32a: rounds_predecessor_declared counts exactly 1 round declaring "
+            f"Predecessor (got {coverage.get('rounds_predecessor_declared')!r})",
+        )
+
+        shutil.rmtree(_loop_round_dir(project, "0003"))
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-missing" in _loop_kinds(violations),
+            "G32a mutation control: deleting round 0003's directory (round 0007's "
+            "decision.md left byte-for-byte untouched) turns round 0007 red with "
+            "loop-predecessor-missing -- proves G32a's greenness depended on 0003 "
+            "actually existing on disk, not a vacuous always-pass path",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32b: Predecessor: 0009 (forward of round 0007) -> loop-predecessor-not-backward; "
+        "changing to 0003 -> green"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32b-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0003")
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Predecessor: 0009\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-not-backward" in _loop_kinds(violations),
+            "G32b: Predecessor: 0009 while this round is 0007 (0009 > 0007, a forward "
+            f"reference) -> loop-predecessor-not-backward (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            "loop-predecessor-missing" not in _loop_kinds(violations),
+            "G32b: the not-backward violation fires even though round 0009 does not "
+            "exist anywhere in this fixture -- proves the arithmetic check runs before, "
+            "and independently of, the filesystem existence check",
+        )
+
+        _loop_write_decision(project, "0007", "# Decision\n\n- Predecessor: 0003\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32b mutation control: changing ONLY the Predecessor value to 0003 (a real, "
+            f"backward, existing round) clears the violation (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32c: Predecessor: 0007 (self-reference, round 0007) -> "
+        "loop-predecessor-not-backward (proves strict <, not <=)"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32c-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Predecessor: 0007\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-not-backward" in _loop_kinds(violations),
+            "G32c: a round citing itself as its own Predecessor -> "
+            "loop-predecessor-not-backward, not silently accepted merely because the "
+            f"named round trivially 'exists' (it is this round itself) (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print("  G32d: Predecessor: abc (not four digits) -> loop-predecessor-invalid-value")
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32d-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Predecessor: abc\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-invalid-value" in _loop_kinds(violations),
+            "G32d: Predecessor: abc is not exactly four digits -> "
+            f"loop-predecessor-invalid-value, fail-closed (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32e: no Predecessor field at all -> zero loop-predecessor-* violations "
+        "(migration-silent); writing a bad value on the SAME fixture turns it red"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32e-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Verdict: pass\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        predecessor_kinds = {k for k in _loop_kinds(violations) if k.startswith("loop-predecessor-")}
+        check(
+            not predecessor_kinds,
+            "G32e: a decision.md with no `- Predecessor:` line at all -> zero "
+            f"loop-predecessor-* violations (migration-silent, got {sorted(predecessor_kinds)})",
+        )
+        check(
+            coverage.get("rounds_predecessor_declared") == 0,
+            "G32e: rounds_predecessor_declared stays 0 when the field was never "
+            f"written (got {coverage.get('rounds_predecessor_declared')!r})",
+        )
+
+        _loop_write_decision(project, "0007", "# Decision\n\n- Verdict: pass\n- Predecessor: 9999\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-not-backward" in _loop_kinds(violations),
+            "G32e reverse mutation: adding a bad Predecessor value (9999, forward of "
+            "round 0007) to the SAME otherwise-unchanged decision.md immediately turns "
+            "it red -- proves the earlier green was a real absence-check, not a vacuous "
+            "always-pass path that never actually looks at the field",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32f: Loop continuation: stopped: goal-achieved -> green; "
+        "stopped: 瞎编的理由 (not in the enum) -> loop-continuation-invalid-value"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32f-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(
+            project, "0007", "# Decision\n\n- Loop continuation: stopped: goal-achieved\n"
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32f: stopped: goal-achieved (a real enum member) -> zero loop-* "
+            f"violations (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            coverage.get("rounds_stop_recorded") == 1,
+            f"G32f: rounds_stop_recorded counts this round (got {coverage.get('rounds_stop_recorded')!r})",
+        )
+
+        _loop_write_decision(
+            project, "0007", "# Decision\n\n- Loop continuation: stopped: 瞎编的理由\n"
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-continuation-invalid-value" in _loop_kinds(violations),
+            "G32f: stopped: 瞎编的理由 (a made-up reason with no whitespace, structurally "
+            "shaped like a reason token but not a member of the enum) -> "
+            f"loop-continuation-invalid-value (got {sorted(_loop_kinds(violations))}) -- this "
+            "gate checks enum membership only, never whether a reason 'sounds plausible'",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32g: Loop continuation: stopped: unjustified-stop -> green (never judged "
+        "red) and rounds_stop_unjustified == 1"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32g-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(
+            project, "0007", "# Decision\n\n- Loop continuation: stopped: unjustified-stop\n"
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32g: stopped: unjustified-stop is a LEGAL enum member -- the spec argues at "
+            "length (§1.2/§3.2) that a mechanical gate cannot distinguish an honest "
+            "unjustified stop from one dressed up in a compliant-sounding reason, so "
+            f"judging this one red would only punish the honest label (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            coverage.get("rounds_stop_unjustified") == 1
+            and coverage.get("rounds_stop_recorded") == 1,
+            "G32g: rounds_stop_unjustified counts this round exactly once, as a strict "
+            f"subset of rounds_stop_recorded (got stop_unjustified="
+            f"{coverage.get('rounds_stop_unjustified')!r}, stop_recorded="
+            f"{coverage.get('rounds_stop_recorded')!r})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32h: Loop continuation: stopped: goal-achieved — 因为目标达成了 "
+        "(free-text note after the reason) -> green"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32h-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(
+            project,
+            "0007",
+            "# Decision\n\n- Loop continuation: stopped: goal-achieved — 因为目标达成了\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32h: a valid reason followed by a free-text note after ' — ' -> green; "
+            f"the note's content is never itself validated (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32i: a fenced bad Predecessor value must never shadow the real, unfenced "
+        "declaration (proves the new field really routes through _uncoded_lines)"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32i-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0003")
+        _loop_round(project, "0007")
+        fenced_decision = (
+            "# Decision\n\n"
+            "Example of a bad declaration (do not do this):\n\n"
+            "```\n"
+            "- Predecessor: 0009\n"
+            "```\n\n"
+            "- Predecessor: 0003\n"
+        )
+        _loop_write_decision(project, "0007", fenced_decision)
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _loop_kinds(violations),
+            "G32i: the fenced `- Predecessor: 0009` (bad -- forward reference) must "
+            "never outrank the real, unfenced `- Predecessor: 0003` (good) that follows "
+            f"it -- first-occurrence-wins only applies among UNFENCED lines (got {sorted(_loop_kinds(violations))})",
+        )
+
+        unfenced_decision = (
+            "# Decision\n\n"
+            "Example of a bad declaration (do not do this):\n\n"
+            "- Predecessor: 0009\n\n"
+            "- Predecessor: 0003\n"
+        )
+        _loop_write_decision(project, "0007", unfenced_decision)
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-predecessor-not-backward" in _loop_kinds(violations),
+            "G32i mutation control: removing ONLY the two fence-marker lines (same two "
+            "Predecessor lines, same order, same everything else) turns round 0007 red "
+            "-- first occurrence now wins on the formerly-fenced 0009 line, proving "
+            "G32i's greenness genuinely depended on the fence and not on some other "
+            "property of the fixture",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
+    print(
+        "  G32j: Loop continuation: stopped: goal-achieved。 (trailing full-width period) "
+        "-> loop-continuation-invalid-value, fail-closed, and no other loop-* kind fires "
+        "alongside it"
+    )
+    g32_root = REPO_ROOT / ".tmp" / f"verify-fixture-g32j-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g32_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(
+            project, "0007", "# Decision\n\n- Loop continuation: stopped: goal-achieved。\n"
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        loop_kinds = _loop_kinds(violations)
+        check(
+            loop_kinds == {"loop-continuation-invalid-value"},
+            "G32j: a trailing full-width period (U+3002) does not normalize to any enum "
+            "member (strip+lower only, no punctuation stripped) -> "
+            "loop-continuation-invalid-value, fail-closed -- never silently read as "
+            "absent -- and it is the ONLY loop-* kind present, proving the continuation "
+            "gate's fail-closed branch is independent of the predecessor gate "
+            f"(got {sorted(loop_kinds)})",
+        )
+        check(
+            coverage.get("rounds_stop_recorded") == 0,
+            "G32j: an unparsable value is never counted in rounds_stop_recorded (got "
+            f"{coverage.get('rounds_stop_recorded')!r})",
+        )
+    finally:
+        shutil.rmtree(g32_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")

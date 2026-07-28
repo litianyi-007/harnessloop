@@ -337,6 +337,44 @@ This script enforces only machine-checkable rules:
   zero violations from this gate too — it can guarantee "once you
   declare, you must be self-consistent", never "you must declare".
 
+- Loop-predecessor gate (batch 2 of `docs/loop-stop-record-spec-20260728.md`,
+  reversed per that spec's Appendix F; see `check_loop_predecessor_declaration`):
+  `decision.md` may optionally declare `- Predecessor: <NNNN>`. Appendix F
+  found the original forward-reference design (a round declaring
+  `continued: <successor>`) structurally unwritable — the successor round
+  does not exist yet when the predecessor round closes and the mechanical
+  gate runs — and reversed the direction: the *successor* round names its
+  own predecessor instead, a reference that is always to an already-closed,
+  already-frozen round. Two constraints only (Appendix F.2's five-to-two
+  collapse): the named round must exist under this same goal's `rounds/`
+  (`loop-predecessor-missing`), and its number must be strictly less than
+  this round's own (`loop-predecessor-not-backward` — pure arithmetic, no
+  cycle check needed, since a strictly-decreasing reference cannot cycle).
+  A value that is not exactly four digits is `loop-predecessor-invalid-value`.
+  Absence is silent (zero-migration, exactly like `- Acceptance evals:`) —
+  this gate can only guarantee "once declared, self-consistent", never
+  "must be declared"; see `harnessloop-loop/SKILL.md`'s OUT column for the
+  registered consequence.
+
+- Loop-continuation record gate (batch 2 of the same spec, §3; see
+  `check_loop_continuation_declaration`): `decision.md` may optionally
+  declare `- Loop continuation: stopped: <reason>[ — <free-text note>]`.
+  This is a record, not a judgment — the spec's §1.2/§3.2 argue at length
+  that a mechanical gate cannot tell a genuine stopping reason from one an
+  agent invented to look compliant, so this gate checks only that
+  `<reason>` normalizes to one of a fixed enum (protocol Stop conditions,
+  contract Auto-Continue/Stop-Conditions vocabulary, plus `budget-checkpoint`
+  / `user-interrupt` / the honesty label `unjustified-stop`) —
+  `loop-continuation-invalid-value` otherwise, fail-closed exactly like
+  `_normalize_acceptance_eval_declaration` (a value that merely resembles a
+  valid one, e.g. trailing full-width punctuation, is reported, never
+  silently read as absent). `unjustified-stop` is a legal value, not a
+  violation (the spec's point: judging it red would only punish the honest
+  agent who wrote it) — it is tracked instead in its own coverage counter,
+  `rounds_stop_unjustified`, so it is a visible review signal rather than an
+  invisible pass. The optional free-text note after ` — ` is never content-
+  checked.
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
@@ -3198,6 +3236,316 @@ def check_acceptance_eval_declaration(
     return [], state
 
 
+# Loop-predecessor gate (batch 2 of docs/loop-stop-record-spec-20260728.md,
+# reversed direction per that spec's Appendix F -- see the module docstring's
+# "Loop-predecessor gate" section and `check_loop_predecessor_declaration`
+# below). `PREDECESSOR_VALUE_RE` reuses this project's round-directory naming
+# convention exactly (`ROUND_SEGMENT_RE` above): a `- Predecessor:` value is
+# only ever a bare four-digit round id, never a path, never a description --
+# unlike `Review:`/`Acceptance evals:`, there is no `none — <reason>` shape
+# for this field at all (Appendix F.2's two constraints are pure existence +
+# arithmetic, nothing else to declare).
+PREDECESSOR_VALUE_RE = re.compile(r"^\d{4}$")
+
+
+def parse_loop_predecessor_declaration(decision_text: str) -> str | None:
+    """Extract the raw `- Predecessor:` value from a decision.md.
+
+    Same narrow convention as `parse_feedback` / `parse_review_fields` /
+    `parse_acceptance_eval_declaration`: a case-insensitive `- <label>:` line
+    prefix, matched against `.strip().lower()`, first occurrence wins, lines
+    inside a fenced code block never considered (`_uncoded_lines`) -- a
+    decision.md quoting `` - Predecessor: `` as a literal example inside a
+    fence must not have that quoted value outrank a real, unfenced
+    declaration elsewhere in the file. Returns `None` when the field was
+    never written at all (outside any fence); this is the field's OUT-list
+    upper bound (`harnessloop-loop/SKILL.md`) -- a round that never writes it
+    is invisible to this gate, exactly like `- Acceptance evals:`.
+    """
+    for line in _uncoded_lines(decision_text):
+        stripped = line.strip()
+        if stripped.lower().startswith("- predecessor:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def check_loop_predecessor_declaration(
+    round_dir: Path, decision_text: str
+) -> tuple[list[dict], dict]:
+    """Loop-predecessor gate: Appendix F.2's two structural constraints on an
+    optional `- Predecessor: <NNNN>` declaration in `decision.md`.
+
+    Checked in this order -- pure arithmetic before any filesystem access,
+    filesystem last:
+
+    1. `<NNNN>` must be exactly four digits (`PREDECESSOR_VALUE_RE`) --
+       otherwise `loop-predecessor-invalid-value`. Fail-closed: an
+       unrecognizable value is never silently treated as absent.
+    2. `<NNNN>`'s integer value must be strictly less than this round's own
+       (`int(round_dir.name)`) -- otherwise `loop-predecessor-not-backward`.
+       This is checked with no filesystem access at all (both operands are
+       already in hand: the parsed value and this round's own directory
+       name), which is why a forward or self reference is caught here even
+       when no round with that number happens to exist on disk yet --
+       constraint 2 does not depend on constraint 3 having passed.
+    3. The named round must actually exist as a directory under this same
+       goal's `rounds/` -- otherwise `loop-predecessor-missing`. This is the
+       one constraint that reads today's disk state rather than this
+       round's own two fields; see `harnessloop-loop/SKILL.md`'s OUT column
+       for what that implies (a predecessor round deleted after the fact
+       retroactively reddens whichever later round cites it -- unlike the
+       old forward-reference design this replaces, this can only ever
+       affect a round that has *not yet* been judged as of today, never
+       flip an already-recorded judgment about a different round).
+
+    A round whose own directory name does not parse as an integer (a
+    naming-convention violation this check was never designed to police --
+    every real round in this project is named `ROUND_SEGMENT_RE`-shaped)
+    is left unvalidated rather than crashing the gate over it.
+
+    Returns `(violations, state)` where `state` has key `declared` (bool,
+    `raw is not None`) -- the caller (`verify_round`) folds this into the
+    `rounds_predecessor_declared` coverage field, counting every round that
+    wrote the field at all, valid or not (an ordinary utilization signal,
+    not a partition of outcomes the way B2a's `rounds_review_*` triad is).
+    """
+    decision_path = round_dir / "decision.md"
+    raw = parse_loop_predecessor_declaration(decision_text)
+    state: dict = {"declared": raw is not None}
+    if raw is None:
+        return [], state
+
+    if not PREDECESSOR_VALUE_RE.match(raw):
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "loop-predecessor-invalid-value",
+                    "detail": (
+                        f"{decision_path} declares `Predecessor: {raw}`, which is not "
+                        "exactly four digits (this project's round-directory naming "
+                        "convention, e.g. `0003`) -- fail-closed, never silently "
+                        "treated as absent"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    try:
+        current_round_num = int(round_dir.name)
+    except ValueError:
+        return [], state
+
+    if int(raw) >= current_round_num:
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "loop-predecessor-not-backward",
+                    "detail": (
+                        f"{decision_path} declares `Predecessor: {raw}`, which is not "
+                        f"strictly before this round ({round_dir.name}) -- Appendix F's "
+                        "reversed direction requires the predecessor round's number to "
+                        "be less than this round's own (strict `<`, not `<=`: a "
+                        "self-reference is not backward either)"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    goal_dir = round_dir.parent.parent
+    predecessor_dir = goal_dir / "rounds" / raw
+    if not predecessor_dir.is_dir():
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "loop-predecessor-missing",
+                    "detail": (
+                        f"{decision_path} declares `Predecessor: {raw}` but "
+                        f"{predecessor_dir} does not exist under this same goal's "
+                        "rounds/"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    return [], state
+
+
+# Loop-continuation record gate (batch 2 of the same spec, §3 -- see the
+# module docstring's "Loop-continuation record gate" section and
+# `check_loop_continuation_declaration` below). This gate records why a
+# round stopped; it never judges whether the reason was the real one (the
+# spec's §1.2/§3.2 argue at length that a mechanical gate structurally
+# cannot tell). `LOOP_STOP_REASON_ENUM` is transcribed verbatim from the
+# spec's §3.1 (protocol Stop six, contract Auto-Continue-unmet five,
+# contract Stop-Conditions four, two previously-unnamed, one honesty
+# label) -- eighteen values total.
+LOOP_STOP_REASON_ENUM = frozenset(
+    {
+        # Protocol Stop (loop/SKILL.md:560-567 per the spec) -- six.
+        "goal-achieved",
+        "missing-human-input",
+        "missing-access-facts",
+        "write-safety-unconfirmed",
+        "data-contract-unsatisfiable",
+        "threshold-unevaluable",
+        # Contract Auto-Continue unmet (control-contract-profiles.md:15-19
+        # per the spec) -- five.
+        "feedback-not-auto-continuable",
+        "evidence-health-failed",
+        "open-handoff-blocking",
+        "environment-selfcheck-failed",
+        "profile-requires-confirmation",
+        # Contract Stop Conditions (control-contract-profiles.md:34-43 per
+        # the spec) -- four.
+        "model-effort-mismatch",
+        "external-system-unsafe",
+        "contract-unevaluable",
+        "evidence-missing-for-acceptance",
+        # Previously no vocabulary -- two.
+        "budget-checkpoint",
+        "user-interrupt",
+        # Honesty label -- one. Legal, not a violation (see
+        # `check_loop_continuation_declaration`'s docstring); tracked in its
+        # own coverage counter instead.
+        "unjustified-stop",
+    }
+)
+
+# `- Loop continuation: stopped: <reason>[ — <free text>]` -- the label's
+# own value nests a second `<label>: <value>` pair. The outer `- <label>:`
+# scan (`parse_loop_continuation_declaration`, shared convention with every
+# other field parser in this file) already splits on the line's *first*
+# colon, which is the one right after "Loop continuation" (that label has
+# no colon of its own), leaving `stopped: <reason>...` as the raw value this
+# regex further decomposes. Case-insensitive, matching the outer convention.
+LOOP_STOP_PREFIX_RE = re.compile(r"(?i)^stopped\s*:\s*(.*)$")
+
+# The reason token is a single whitespace-free run (every enum value above
+# is a kebab-case identifier with internal hyphens but no internal spaces,
+# e.g. `feedback-not-auto-continuable`) -- so it is safe to greedily match
+# `\S+` up to the first whitespace, which cannot occur inside a real enum
+# token but does occur before the optional ` — <free text>` separator.
+# Reusing a naive split on the first "-" character would be wrong: it would
+# sever `goal-achieved` at its own internal hyphen. The separator itself
+# reuses `REVIEW_NONE_RE`'s dash-class (plain hyphen, en dash, em dash),
+# required to be surrounded by whitespace here so it is never confused with
+# a token's internal hyphen (which never has adjacent whitespace).
+LOOP_STOP_REASON_RE = re.compile(r"^(\S+)(?:\s+[-–—]+\s*(.*))?$")
+
+
+def parse_loop_continuation_declaration(decision_text: str) -> str | None:
+    """Extract the raw `- Loop continuation:` value from a decision.md.
+
+    Same narrow convention as every other field parser in this file: a
+    case-insensitive `- <label>:` line prefix, `.strip().lower()`, first
+    occurrence wins, fenced lines never considered (`_uncoded_lines`).
+    Returns `None` when the field was never written at all -- absence is
+    silent (this field is optional, exactly like `- Acceptance evals:`);
+    see `check_loop_continuation_declaration` for how "absent" is kept
+    distinct from "present but unparsable".
+    """
+    for line in _uncoded_lines(decision_text):
+        stripped = line.strip()
+        if stripped.lower().startswith("- loop continuation:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def _normalize_loop_continuation_declaration(raw: str) -> tuple[str, str | None]:
+    """Classify a raw `- Loop continuation:` value.
+
+    Returns `("unparsable", None)` when the value does not normalize to
+    `stopped: <reason>[ — <free text>]` for a `<reason>` actually in
+    `LOOP_STOP_REASON_ENUM` -- fail-closed, exactly like
+    `_normalize_acceptance_eval_declaration`'s equivalent branch: a value
+    that merely resembles a valid one (e.g. `stopped: goal-achieved` with a
+    trailing full-width period, or a reason spelled correctly but not in the
+    enum) is reported, never silently read as absent or coerced to the
+    nearest known value.
+
+    Otherwise returns `(reason, description)` where `reason` is the
+    enum member (already `.strip().lower()`-folded) and `description` is
+    the optional free text after the ` — ` separator, or `None` when there
+    was none -- `description` is never itself validated; the caller does
+    not even look at it beyond storing it in `state` for callers that may
+    want it for display.
+    """
+    stop_match = LOOP_STOP_PREFIX_RE.match(raw.strip())
+    if not stop_match:
+        return "unparsable", None
+    reason_part = stop_match.group(1).strip()
+    reason_match = LOOP_STOP_REASON_RE.match(reason_part)
+    if not reason_match:
+        return "unparsable", None
+    reason_token = reason_match.group(1).strip().lower()
+    if reason_token not in LOOP_STOP_REASON_ENUM:
+        return "unparsable", None
+    description = reason_match.group(2).strip() if reason_match.group(2) else None
+    return reason_token, (description or None)
+
+
+def check_loop_continuation_declaration(
+    round_dir: Path, decision_text: str
+) -> tuple[list[dict], dict]:
+    """Loop-continuation record gate (spec §3): validate only that a
+    declared stop reason normalizes to a member of `LOOP_STOP_REASON_ENUM`.
+    Never judges whether the reason is honest, adequate, or the real one --
+    the spec's §1.2/§3.2 (`docs/loop-stop-record-spec-20260728.md`) argue
+    that distinction is structurally unavailable to a mechanical gate: the
+    same agent that would fabricate a stop also controls every input this
+    gate could check.
+
+    `unjustified-stop` is a legal enum member, not a violation -- judging it
+    red would only punish the round that told the truth about not having a
+    good reason (the spec's central argument against the predecessor design
+    this batch replaces). It is instead surfaced via `state["reason"] ==
+    "unjustified-stop"`, which the caller (`verify_round`) folds into the
+    independent `rounds_stop_unjustified` coverage counter -- non-zero is a
+    review signal, not a gate failure.
+
+    Returns `(violations, state)` where `state` has keys `declared` (bool)
+    and `reason` (the normalized enum member on success, `None` when the
+    field was absent or its value did not normalize). The caller increments
+    `rounds_stop_recorded` only when `reason` is not `None` -- an
+    unparsable declaration is reported via the violation list (like
+    `acceptance-eval-declaration-unparsable`), not double-counted in a
+    coverage field of its own.
+    """
+    decision_path = round_dir / "decision.md"
+    raw = parse_loop_continuation_declaration(decision_text)
+    state: dict = {"declared": raw is not None, "reason": None}
+    if raw is None:
+        return [], state
+
+    reason, _description = _normalize_loop_continuation_declaration(raw)
+    if reason == "unparsable":
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "loop-continuation-invalid-value",
+                    "detail": (
+                        f"{decision_path} declares `Loop continuation: {raw}`, which "
+                        "does not normalize to `stopped: <reason>` for a <reason> in "
+                        "the recognized enum (see harnessloop-loop/SKILL.md's "
+                        "Mechanical Gate Boundary) -- fail-closed, never silently "
+                        "treated as absent"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    state["reason"] = reason
+    return [], state
+
+
 def _container_escape_violation(
     container: Path, project: Path, round_label: Path
 ) -> dict | None:
@@ -3703,6 +4051,34 @@ def verify_round(
         elif not accept_state["declared"]:
             coverage["rounds_eval_declaration_absent"] += 1
 
+        # Loop-predecessor gate (batch 2,
+        # docs/loop-stop-record-spec-20260728.md Appendix F): decision.md's
+        # optional `- Predecessor: <NNNN>`. See
+        # `check_loop_predecessor_declaration`'s docstring for the two
+        # structural constraints and the deliberate order they are checked
+        # in (arithmetic before filesystem).
+        predecessor_violations, predecessor_state = check_loop_predecessor_declaration(
+            round_dir, decision_text
+        )
+        violations.extend(predecessor_violations)
+        if predecessor_state["declared"]:
+            coverage["rounds_predecessor_declared"] += 1
+
+        # Loop-continuation record gate (batch 2, same spec §3): decision.md's
+        # optional `- Loop continuation: stopped: <reason>[ — <note>]`. See
+        # `check_loop_continuation_declaration`'s docstring -- this never
+        # judges the reason, only that it normalizes to a member of
+        # `LOOP_STOP_REASON_ENUM`; `unjustified-stop` is legal and tracked
+        # separately, not treated as a violation.
+        continuation_violations, continuation_state = check_loop_continuation_declaration(
+            round_dir, decision_text
+        )
+        violations.extend(continuation_violations)
+        if continuation_state["reason"] is not None:
+            coverage["rounds_stop_recorded"] += 1
+            if continuation_state["reason"] == "unjustified-stop":
+                coverage["rounds_stop_unjustified"] += 1
+
     return violations, coverage
 
 
@@ -3749,6 +4125,25 @@ def _empty_coverage() -> dict:
         "rounds_eval_declaration_ran": 0,
         "rounds_eval_declaration_none": 0,
         "rounds_eval_declaration_absent": 0,
+        # Loop-predecessor gate (`check_loop_predecessor_declaration`, batch 2
+        # of docs/loop-stop-record-spec-20260728.md, Appendix F direction):
+        # ordinary per-round field, accumulated the same way as the RAE
+        # fields above. Counts every round that wrote `- Predecessor:` at
+        # all, valid or not -- an unparsable/missing/not-backward value still
+        # counts here (it is reported separately via the violations list,
+        # like `acceptance-eval-declaration-unparsable` has no coverage
+        # field of its own).
+        "rounds_predecessor_declared": 0,
+        # Loop-continuation record gate (`check_loop_continuation_declaration`,
+        # same spec §3): `rounds_stop_recorded` counts a round only when its
+        # `- Loop continuation: stopped: <reason>` normalized successfully
+        # (an unparsable value is reported via the violations list, not
+        # counted here). `rounds_stop_unjustified` is a strict subset of
+        # `rounds_stop_recorded` -- rounds whose reason was specifically the
+        # honesty label `unjustified-stop`, which is legal (never a
+        # violation) but is meant to be a visible, non-zero review signal.
+        "rounds_stop_recorded": 0,
+        "rounds_stop_unjustified": 0,
         # RAE gate (`check_goal_eval_registry`): goal-level, not round-level --
         # `<goal>/evals.json` lives once per goal, not once per round, so this
         # field is incremented directly by `verify_project`'s goal loop (once
@@ -4066,6 +4461,9 @@ def main() -> int:
             f"eval_declaration_ran={coverage['rounds_eval_declaration_ran']} "
             f"eval_declaration_none={coverage['rounds_eval_declaration_none']} "
             f"eval_declaration_absent={coverage['rounds_eval_declaration_absent']} "
+            f"predecessor_declared={coverage['rounds_predecessor_declared']} "
+            f"stop_recorded={coverage['rounds_stop_recorded']} "
+            f"stop_unjustified={coverage['rounds_stop_unjustified']} "
             f"external_roots_declared={coverage['external_roots_declared']} "
             f"external_roots_available={coverage['external_roots_available']} "
             f"external_citations_checked={coverage['external_citations_checked']} "
