@@ -3,16 +3,22 @@
 
 Checks, in order:
 1. Manifest and marketplace invariants (Codex + Claude).
-2. Init smoke test (skeleton creation, intake packet).
-3. Setup completeness smoke test (check_setup.py) on a skeleton project and a
+2. Version consistency across every manifest carrying a semantic version
+   (G28): discovered by a filesystem walk keyed on basename
+   (package.json / plugin.json / marketplace.json), not a hardcoded list,
+   with teeth proving the discovery mechanism itself (mutation -> red,
+   brand-new manifest path -> picked up automatically, integer schema
+   `"version": 1` fields -> correctly ignored).
+3. Init smoke test (skeleton creation, intake packet).
+4. Setup completeness smoke test (check_setup.py) on a skeleton project and a
    programmatically-filled fixture, including the double-gate (gate_blocking
    vs complete) regression cases.
-4. Secrets smoke test (channel-params store, gitignore protection, no values).
-5. Documentation skeleton consistency against init_project.py (single source of truth).
-6. Mechanical protocol gates (verify_protocol.py) on examples/mock-project,
+5. Secrets smoke test (channel-params store, gitignore protection, no values).
+6. Documentation skeleton consistency against init_project.py (single source of truth).
+7. Mechanical protocol gates (verify_protocol.py) on examples/mock-project,
    including negative fixtures that must fail.
-7. Round cost settlement smoke test (round_cost.py) on a synthetic transcript.
-8. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
+8. Round cost settlement smoke test (round_cost.py) on a synthetic transcript.
+9. Claude strict plugin validation (skippable via HARNESSLOOP_SKIP_CLAUDE=1
    for environments without the claude CLI, e.g. bare CI runners).
 
 Exit code 0 = all passed.
@@ -41,6 +47,24 @@ import init_project  # noqa: E402
 import verify_protocol  # noqa: E402
 import check_setup  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# windows-latest defaults its stdout/stderr encoding to the legacy console
+# code page (cp1252 under Python 3.14), not UTF-8. This file's check()
+# messages are allowed to (and do) contain non-ASCII text -- Chinese prose
+# and symbols like "⇒" quoting repo-internal strings verbatim (see e.g. the
+# RAE gate messages below) -- and printing one of those under cp1252 raises
+# UnicodeEncodeError, which aborts the whole run before any later check
+# executes (observed: v0.27.0+ CI, windows-latest, Python 3.14). Force UTF-8
+# explicitly rather than stripping non-ASCII text from messages: the next
+# message added anywhere in this file could just as easily reintroduce the
+# same crash. errors="backslashreplace" (not "replace") so a genuinely
+# unencodable character still leaves a visible escaped sequence in the CI
+# log instead of silently vanishing. See G29a below for the teeth.
+# ---------------------------------------------------------------------------
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+
 FAILURES: list[str] = []
 
 
@@ -68,8 +92,75 @@ def run_python(script: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
+# ---------------------------------------------------------------------------
+# G28: version-consistency discovery. This is a DISCOVERY mechanism (a
+# filesystem walk keyed on basename) and must stay one -- a hardcoded list of
+# "known" manifest paths would have exactly the same blind spot as the bug it
+# exists to catch (plugins/harnessloop/.codex-plugin/plugin.json drifted to
+# 0.11.0 for 18 minor releases with nobody noticing). Any new manifest added
+# anywhere under the repo is picked up automatically; see G28c below.
+# ---------------------------------------------------------------------------
+
+VERSION_MANIFEST_FILENAMES = frozenset({"package.json", "plugin.json", "marketplace.json"})
+VERSION_SCAN_EXCLUDE_DIR_NAMES = frozenset({".git", "node_modules", ".tmp", "__pycache__"})
+SEMVER_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+def _iter_version_manifest_paths(root: Path):
+    """Walk `root` and yield every package.json / plugin.json / marketplace.json,
+    however deeply nested, whatever its parent directory is named. Keyed only
+    on basename -- not a fixed list of paths."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in VERSION_SCAN_EXCLUDE_DIR_NAMES]
+        for filename in filenames:
+            if filename in VERSION_MANIFEST_FILENAMES:
+                yield Path(dirpath) / filename
+
+
+def _collect_semver_values(node: object, out: list[str]) -> None:
+    """Recursively walk a parsed JSON value, collecting every STRING value
+    keyed "version" that looks like a semantic version (`\\d+.\\d+.\\d+`).
+    Integer schema-version fields such as `"version": 1` (real examples exist
+    in this repo, e.g. reference-roots-template.json) are excluded by
+    construction: the value must be a `str` AND match SEMVER_VERSION_RE."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "version" and isinstance(value, str) and SEMVER_VERSION_RE.match(value):
+                out.append(value)
+            _collect_semver_values(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_semver_values(item, out)
+
+
+def discover_manifest_versions(root: Path) -> dict[Path, list[str]]:
+    """Discover {manifest_path: [semver strings found in it]} for every
+    package.json / plugin.json / marketplace.json under `root`. A manifest
+    that yields zero qualifying semver strings (e.g. .agents/plugins/marketplace.json,
+    which currently carries no "version" key at all, or a pure integer
+    schema-version file) is simply omitted -- it has nothing to be
+    inconsistent with."""
+    discovered: dict[Path, list[str]] = {}
+    for path in _iter_version_manifest_paths(root):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        found: list[str] = []
+        _collect_semver_values(data, found)
+        if found:
+            discovered[path] = found
+    return discovered
+
+
+def _g28_write_fixture_manifest(root: Path, rel: str, data: dict) -> None:
+    path = root / Path(rel)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def validate_manifests() -> None:
-    print("[1/8] Manifests and marketplace entries")
+    print("[1/9] Manifests and marketplace entries")
     codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
     codex_marketplace = read_json(REPO_ROOT / ".agents" / "plugins" / "marketplace.json")
     claude_manifest = read_json(PLUGIN_ROOT / ".claude-plugin" / "plugin.json")
@@ -114,8 +205,180 @@ def validate_manifests() -> None:
         check(codex_entry.get("license") == "Apache-2.0", "Codex marketplace entry declares Apache-2.0")
 
 
+def validate_version_consistency() -> None:
+    print("[2/9] Version consistency across manifests (G28)")
+
+    # G28a: real repo state. discover_manifest_versions() is a filesystem
+    # walk keyed on basename (package.json / plugin.json / marketplace.json),
+    # not a hardcoded list -- see G28c for the fixture that proves this.
+    discovered = discover_manifest_versions(REPO_ROOT)
+    rel_report = ", ".join(
+        f"{path.relative_to(REPO_ROOT)}={versions}" for path, versions in sorted(discovered.items())
+    )
+    check(
+        len(discovered) >= 3,
+        f"G28a: version scan discovered at least 3 manifests carrying a semantic "
+        f"version (found {len(discovered)}: {rel_report}) -- guards against the walk "
+        "silently matching nothing",
+    )
+    all_versions = sorted({v for versions in discovered.values() for v in versions})
+    check(
+        len(all_versions) <= 1,
+        f"G28a: every discovered manifest version string is identical across the repo "
+        f"(discovered: {rel_report})",
+    )
+
+    # ---- G28b/c/d: teeth. Every one of these runs against a disposable
+    # synthetic fixture tree built fresh in the system temp dir -- never the
+    # real repo files -- using the SAME discover_manifest_versions() pointed
+    # at a different root. ----
+
+    print(
+        "  G28b: mutating one manifest's version in a temp fixture must turn the "
+        "guard red and name that file"
+    )
+    fixture_root = Path(tempfile.mkdtemp(prefix="harnessloop-g28b-"))
+    try:
+        _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "version": "1.2.3"})
+        _g28_write_fixture_manifest(
+            fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "version": "1.2.3"}]}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.claude-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+
+        baseline = discover_manifest_versions(fixture_root)
+        baseline_versions = sorted({v for versions in baseline.values() for v in versions})
+        check(
+            baseline_versions == ["1.2.3"],
+            f"G28b baseline: freshly-built 4-manifest fixture (all 1.2.3) is internally "
+            f"consistent before mutation (found {baseline_versions})",
+        )
+
+        mutated_path = fixture_root / "plugins" / "harnessloop" / ".codex-plugin" / "plugin.json"
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "9.9.9"}
+        )
+        mutated = discover_manifest_versions(fixture_root)
+        mutated_versions = sorted({v for versions in mutated.values() for v in versions})
+        offenders = sorted(str(p.relative_to(fixture_root)) for p, vs in mutated.items() if "9.9.9" in vs)
+        check(
+            len(mutated_versions) > 1 and mutated_path in mutated and "9.9.9" in mutated[mutated_path],
+            f"G28b: bumping ONLY the fixture's .codex-plugin/plugin.json to 9.9.9 (three "
+            f"other manifests untouched at 1.2.3) makes the guard red AND the offending "
+            f"file is nameable from the discovery result (versions found: {mutated_versions}, "
+            f"offenders: {offenders})",
+        )
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+
+    print(
+        "  G28c: a brand-new, previously-unseen manifest path must be picked up "
+        "automatically (discover, not enumerate)"
+    )
+    fixture_root = Path(tempfile.mkdtemp(prefix="harnessloop-g28c-"))
+    try:
+        _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "version": "1.2.3"})
+        _g28_write_fixture_manifest(
+            fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "version": "1.2.3"}]}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.claude-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+
+        baseline = discover_manifest_versions(fixture_root)
+        check(
+            sorted({v for vs in baseline.values() for v in vs}) == ["1.2.3"],
+            "G28c baseline: 4-manifest fixture is consistent before the new manifest is added",
+        )
+
+        new_manifest_rel = "plugins/harnessloop/.someother-plugin/plugin.json"
+        check(
+            not (fixture_root / new_manifest_rel).exists(),
+            f"G28c: {new_manifest_rel} genuinely does not exist yet in the fixture -- "
+            "this is the 'previously non-existent manifest' case, not a pre-seeded one",
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, new_manifest_rel, {"name": "harnessloop-someother", "version": "4.5.6"}
+        )
+
+        after = discover_manifest_versions(fixture_root)
+        new_path = fixture_root / Path(new_manifest_rel)
+        after_versions = sorted({v for vs in after.values() for v in vs})
+        check(
+            new_path in after and after[new_path] == ["4.5.6"],
+            f"G28c: the newly-created {new_manifest_rel} (never hardcoded anywhere in the "
+            "scan logic) is present in the discovery result -- proves the walk is a real "
+            "filesystem discovery keyed on basename, not a fixed enumeration of known paths",
+        )
+        check(
+            len(after_versions) > 1,
+            f"G28c: adding that one previously-unknown manifest at version 4.5.6 (three "
+            f"pre-existing manifests still at 1.2.3) turns the consistency guard red "
+            f"(discovered versions: {after_versions}) -- if this were green instead, the "
+            "implementation would be an enumeration with a blind spot, not a discovery",
+        )
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+
+    print(
+        "  G28d: an integer schema `\"version\": 1` field must not be misread as a "
+        "plugin version"
+    )
+    fixture_root = Path(tempfile.mkdtemp(prefix="harnessloop-g28d-"))
+    try:
+        _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "version": "1.2.3"})
+        _g28_write_fixture_manifest(
+            fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "version": "1.2.3"}]}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.claude-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+        # A pure integer schema-version manifest, mirroring the real, already-in-repo
+        # shape of e.g. reference-roots-template.json -- except here it is placed
+        # under a scanned filename (plugin.json) so it is genuinely visited by the
+        # file-level walk, and must still be excluded at the value-level filter.
+        schema_rel = "plugins/harnessloop/skills/some-skill/schema/plugin.json"
+        _g28_write_fixture_manifest(fixture_root, schema_rel, {"version": 1})
+
+        all_manifest_paths = set(_iter_version_manifest_paths(fixture_root))
+        schema_path = fixture_root / Path(schema_rel)
+        check(
+            schema_path in all_manifest_paths,
+            "G28d: the integer-schema plugin.json IS visited by the filename-based file "
+            "walk (it is a real plugin.json on disk) -- the exclusion below happens at "
+            "the value level, not by skipping the file",
+        )
+
+        result = discover_manifest_versions(fixture_root)
+        check(
+            schema_path not in result,
+            "G28d: ...but it contributes zero entries to the version-bearing result, "
+            "because its only \"version\" value is the int 1, which fails the "
+            "isinstance(str) + semver-regex test",
+        )
+        all_versions = sorted({v for vs in result.values() for v in vs})
+        check(
+            all_versions == ["1.2.3"],
+            f"G28d: the nested integer schema version does not get pulled into the "
+            f"semantic version set alongside the real 1.2.3 manifests (discovered "
+            f"versions: {all_versions}) -- the guard stays green",
+        )
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+
+
 def validate_init_smoke() -> None:
-    print("[2/8] Init smoke test")
+    print("[3/9] Init smoke test")
     smoke_root = REPO_ROOT / ".tmp" / f"init-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
     try:
@@ -210,7 +473,7 @@ def validate_check_setup_smoke() -> None:
     fixed here. Tracked in TH-0009 for a future cost/benefit revisit rather
     than silently ignored.
     """
-    print("[3/8] Setup completeness smoke test (check_setup.py)")
+    print("[4/9] Setup completeness smoke test (check_setup.py)")
 
     # 1. Bare skeleton: incomplete + gate_blocking (design-v2 section 7.2
     # bullet 1). All 3 core policy files (environment, control-contract,
@@ -448,7 +711,7 @@ def validate_check_setup_smoke() -> None:
 
 
 def validate_secrets_smoke() -> None:
-    print("[4/8] Secrets smoke test")
+    print("[5/9] Secrets smoke test")
     secrets_script = PLUGIN_ROOT / "skills" / "harnessloop-secrets" / "scripts" / "channel_params.py"
     smoke_root = REPO_ROOT / ".tmp" / f"secrets-smoke-{uuid.uuid4().hex}"
     smoke_root.mkdir(parents=True)
@@ -523,7 +786,7 @@ def skeleton_blocks(text: str) -> str:
 
 
 def validate_doc_consistency() -> None:
-    print("[5/8] Documentation skeleton consistency (source of truth: init_project.py)")
+    print("[6/9] Documentation skeleton consistency (source of truth: init_project.py)")
     dirs, files = skeleton_entries()
 
     # usage.md documents the initializer output as a bullet list, not a tree.
@@ -655,8 +918,46 @@ def _pr3_standard_declaration(wiki_root: Path) -> dict:
     }
 
 
+def _case_fixture_class(wiki, alt) -> str:
+    """Classify which of three real platform behaviors a case-swapped path
+    pair (`wiki`, and `alt = wiki` with its name case-swapped) exhibits, so
+    G22a can pick the correct branch. Takes anything duck-typed like a
+    `Path` (needs only `str()`, `.exists()`, `.resolve()`) so G29b can drive
+    all three classes from fakes on one host instead of needing three
+    physically different filesystems.
+
+    - "case-sensitive" (matches ubuntu-latest/ext4): `alt` does not exist as
+      the same path at all -- the volume treats the two spellings as
+      unrelated. The collision this fixture is built to reproduce is not
+      constructible here; the caller must skip it honestly. (This is also
+      the fallback for the degenerate case where `alt` happens to be
+      spelled identically to `wiki`.)
+    - "resolve-folds" (matches windows-latest): `alt` exists and names the
+      same directory, but `Path.resolve()` ALSO folds the case difference
+      away, so the two resolved strings already compare equal. On such a
+      volume the fixture's own premise -- "grouping by Path-string equality
+      could not have seen this collision" -- is false before any assertion
+      about shadow-alias detection is even made, so asserting it would be
+      asserting something genuinely false on this platform, not skipping a
+      redundant check. The caller must skip honestly here too, but unlike
+      the case-sensitive class, coverage is not lost: G24a exercises the
+      same predicate (`_same_dir` seeing one directory through two unequal
+      spellings) via a symlink, portably, on every platform including this
+      one.
+    - "usable" (matches macos-latest/APFS default): `alt` exists, names the
+      same directory, and `Path.resolve()` does NOT fold the case
+      difference -- the original bug reproduces end-to-end and the full
+      fixture (premise + samefile + shadow-alias detection) should run.
+    """
+    if not (alt.exists() and str(alt) != str(wiki)):
+        return "case-sensitive"
+    if alt.resolve() == wiki.resolve():
+        return "resolve-folds"
+    return "usable"
+
+
 def validate_protocol_gates() -> None:
-    print("[6/8] Mechanical protocol gates (verify_protocol.py)")
+    print("[7/9] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
     violations, mock_coverage = verify_protocol.verify_project(mock_project)
     check(not violations, f"examples/mock-project passes verify ({len(violations)} violation(s))")
@@ -4078,10 +4379,10 @@ def validate_protocol_gates() -> None:
         project = _pr3_project(g22_root)
         wiki = _pr3_wiki_root(g22_root / "case")
         alt = wiki.parent / wiki.name.swapcase()
-        case_insensitive = alt.exists() and str(alt) != str(wiki)
-        if case_insensitive:
+        fixture_class = _case_fixture_class(wiki, alt)
+        if fixture_class == "usable":
             check(
-                Path(str(alt)).resolve() != wiki.resolve(),
+                alt.resolve() != wiki.resolve(),
                 "G22a premise: on this volume the two spellings resolve to unequal canonical "
                 "strings -- so grouping by Path equality genuinely could not see the collision",
             )
@@ -4114,6 +4415,15 @@ def validate_protocol_gates() -> None:
                 and len([v for v in violations if v["kind"] == "reference-root-shadow-alias"]) == 1,
                 "G22a: two aliases naming one directory under different case are caught -- "
                 "identity is samefile(), not canonical-string equality (T-069 F1.1)",
+            )
+        elif fixture_class == "resolve-folds":
+            print(
+                "  (skipped G22a: this volume is case-insensitive, but Path.resolve() already "
+                "folds the two spellings to the same canonical string, so the premise this "
+                "fixture needs -- 'grouping by Path equality could not see the collision' -- is "
+                "false here, not reproducible. Coverage is not lost: G24a: _same_dir sees one "
+                "directory through two unequal spellings -- this is the predicate G22a exercises "
+                "via case, tested here without needing a case-insensitive volume)"
             )
         else:
             print("  (skipped G22a: this volume is case-sensitive; premise not reproducible here)")
@@ -4514,6 +4824,95 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g24_root, ignore_errors=True)
+
+    print("  G29: teeth for the windows-latest CI fix (stdout encoding + G22a's 3-way case classifier)")
+    # G29a: the top-of-file stdout/stderr reconfigure must both (1) actually
+    # be in effect right now, in this run, and (2) be defending against a
+    # real crash rather than a hypothetical one. This file is allowed to
+    # (and does) carry check() messages with non-ASCII text -- e.g. the
+    # G25l message quoting '账本文件缺席 ⇒ 本规则零违规' verbatim -- and on
+    # windows-latest (cp1252 default console codepage) printing that exact
+    # message is what killed 5 straight CI runs. Pull the real offending
+    # string out of this file's own source (not a hardcoded copy that could
+    # silently drift out of sync) and prove it, encoded as cp1252, really
+    # does raise UnicodeEncodeError -- without touching sys.stdout/stderr,
+    # which stay reconfigured to UTF-8 throughout this process.
+    _self_src = Path(__file__).read_text(encoding="utf-8")
+    _crash_message_match = re.search(r'"([^"]*账本文件缺席[^"]*)"', _self_src)
+    check(
+        _crash_message_match is not None,
+        "G29a premise: the check() message that crashed windows-latest CI ('账本文件缺席 ⇒ "
+        "本规则零违规', see G25l above) still exists verbatim in this file -- the guard below "
+        "tests the actual offending text, not a copy of it that could drift out of sync",
+    )
+    if _crash_message_match is not None:
+        _would_crash = False
+        try:
+            _crash_message_match.group(1).encode("cp1252")
+        except UnicodeEncodeError:
+            _would_crash = True
+        check(
+            _would_crash,
+            "G29a: that exact message genuinely raises UnicodeEncodeError when encoded as "
+            "cp1252 (windows-latest's default console codepage, absent the reconfigure) -- "
+            "proving this guard defends against a real crash, not a ceremonial one",
+        )
+    check(
+        "utf8" in sys.stdout.encoding.lower().replace("-", ""),
+        "G29a: sys.stdout.encoding is UTF-8 right now, in this process -- the top-of-file "
+        "reconfigure is actually in effect, not merely present in source",
+    )
+
+    # G29b: _case_fixture_class's own branch selection, tested on every
+    # platform (including this one) via fakes -- rather than trusting that
+    # G22a's three real branches (case-sensitive / resolve-folds / usable)
+    # get exercised just because three different CI runners exist. A fake
+    # only needs to answer str()/.exists()/.resolve(), which is all
+    # _case_fixture_class touches.
+    class _FakeCasePath:
+        def __init__(self, spelling: str, exists: bool, resolved: str):
+            self._spelling = spelling
+            self._exists = exists
+            self._resolved = resolved
+
+        def __str__(self) -> str:
+            return self._spelling
+
+        def exists(self) -> bool:
+            return self._exists
+
+        def resolve(self) -> "_FakeCasePath":
+            return _FakeCasePath(self._resolved, True, self._resolved)
+
+        def __eq__(self, other: object) -> bool:
+            return isinstance(other, _FakeCasePath) and self._spelling == other._spelling
+
+        def __hash__(self) -> int:
+            return hash(self._spelling)
+
+    _fake_wiki = _FakeCasePath("/fake/Wiki", True, "/fake/Wiki")
+    check(
+        _case_fixture_class(_fake_wiki, _FakeCasePath("/fake/wiki", False, "/fake/wiki"))
+        == "case-sensitive",
+        "G29b: a case-swapped spelling that does not exist at all classifies as "
+        "case-sensitive (matches ubuntu-latest/ext4) -- the collision fixture is not "
+        "reproducible, so G22a must skip rather than assert on it",
+    )
+    check(
+        _case_fixture_class(_fake_wiki, _FakeCasePath("/fake/WIKI", True, "/fake/Wiki"))
+        == "resolve-folds",
+        "G29b: a case-swapped spelling that exists AND resolves identically to the original "
+        "classifies as resolve-folds (matches windows-latest) -- G22a's own premise would be "
+        "false here, so it must skip honestly instead of asserting something untrue, and G24a "
+        "covers the predicate instead",
+    )
+    check(
+        _case_fixture_class(_fake_wiki, _FakeCasePath("/fake/WIKI", True, "/fake/WIKI"))
+        == "usable",
+        "G29b: a case-swapped spelling that exists AND resolves to a genuinely different "
+        "string classifies as usable (matches macos-latest/APFS default) -- the full G22a "
+        "fixture (premise + samefile + shadow-alias detection) runs for real",
+    )
 
     print("  G19-strengthened: no escape knob, by shape rather than by three literal flag names")
     src = (LOOP_SCRIPTS / "verify_protocol.py").read_text(encoding="utf-8")
@@ -5549,7 +5948,7 @@ def validate_protocol_gates() -> None:
 
 
 def validate_round_cost_smoke() -> None:
-    print("[7/8] Round cost settlement smoke test (round_cost.py)")
+    print("[8/9] Round cost settlement smoke test (round_cost.py)")
     cost_script = LOOP_SCRIPTS / "round_cost.py"
     smoke_root = REPO_ROOT / ".tmp" / f"cost-smoke-{uuid.uuid4().hex}"
     project = smoke_root / "project"
@@ -5684,7 +6083,7 @@ def validate_round_cost_smoke() -> None:
 
 
 def validate_claude_strict() -> None:
-    print("[8/8] Claude strict plugin validation")
+    print("[9/9] Claude strict plugin validation")
     if os.environ.get("HARNESSLOOP_SKIP_CLAUDE") == "1":
         print("  skipped: HARNESSLOOP_SKIP_CLAUDE=1")
         return
@@ -5717,6 +6116,7 @@ def validate_claude_strict() -> None:
 
 def main() -> int:
     validate_manifests()
+    validate_version_consistency()
     validate_init_smoke()
     validate_check_setup_smoke()
     validate_secrets_smoke()
