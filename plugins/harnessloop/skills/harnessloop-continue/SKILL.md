@@ -28,16 +28,17 @@ If `.harnessloop/` exists and `check_setup.py` reports `gate_blocking: true` (a 
 1. Run `python3 -B <plugin-root>/skills/harnessloop-loop/scripts/check_setup.py --project <target-project> --json`. If `gate_blocking` is `true`, set decision to `needs-setup`, name the `template`/`missing` core file (environment.md, control-contract.md, or cost-context-policy.md) as the next setup step, and stop before evaluating any other gate. Do not execute business work. If `gate_blocking` is `false` but `complete` is `false`, do not stop; record `setup gate: warning`, `field_todo_count`, `selfcheck_todo_count`, and the `missing_sections` of any non-`filled` file, then proceed to step 2.
 2. Read `.harnessloop/state/current.md`, `state/control-contract.md`, `state/environment.md`, `state/evidence-index.md`, `state/self-check.md`, `meta/self-audit.md`, the active goal, active round, open handoffs, and latest decision.
 3. If the latest decision treats the active round as `positive`, confirm that `python <plugin-root>/skills/harnessloop-loop/scripts/verify_protocol.py --project <target-project>` was run for that round and exited zero, or run it now. A non-zero exit means the round must not be treated as `positive`; reclassify the blocker as `contract-insufficient` and stop for evidence/contract repair instead of continuing.
-4. Confirm the requested next action matches the control contract and latest feedback.
-5. If feedback is `positive`, continue only to the next subgoal/task or goal completion path.
-6. If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, missing evidence repair, or human-confirmed contract revision.
-7. If feedback is `blocked`, classify the blocker before stopping. Use `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
-8. If the blocker is `runtime-recoverable` and the next action is read-only investigation with declared evidence targets, create or enter the next investigation/recovery round instead of pausing for the user.
-9. If the blocker requires write cleanup, external mutation, missing access facts, missing local channel parameters, a named tool that is unavailable, or business judgment, stop and ask the user through `askuserquestion` when available.
-10. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
-11. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
-12. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
-13. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
+4. Read that same `verify_protocol.py --json` run's `coverage.loop_autocontinue_anomaly` and `coverage.loop_anomaly_skipped_unparsable`, and its `violations` for `loop-contract-profile-missing` (docs/loop-stop-record-spec-20260728.md §4/§5, Appendix B.1). If `loop_autocontinue_anomaly` is non-zero, or a `loop-contract-profile-missing` violation is present, surface it prominently at the top of the Output Contract, before the rest of the continuation decision, and record an explicit acknowledgement line in `state/self-audit.md` before treating this as an ordinary continuation. **This is a discipline this skill is asked to follow, not something the mechanical gate itself enforces**: `verify_protocol.py` never checks whether this step actually ran, so an agent that skips it still passes the mechanical gate cleanly and `decision: allowed` is not blocked by an unacknowledged anomaly — the same family of gap as this file's own step 3 not being independently verified, or `unjustified-stop` never being judged red by the mechanical gate. A non-zero `loop_anomaly_skipped_unparsable` is not itself an anomaly; note it in the same output section so "this could not be judged" stays visible, but do not require acknowledgement for it.
+5. Confirm the requested next action matches the control contract and latest feedback.
+6. If feedback is `positive`, continue only to the next subgoal/task or goal completion path.
+7. If feedback is `negative` or `neutral`, continue only with investigation, minimal fix, rollback, missing evidence repair, or human-confirmed contract revision.
+8. If feedback is `blocked`, classify the blocker before stopping. Use `runtime-recoverable`, `access-missing`, `write-safety-required`, `human-decision-required`, `contract-insufficient`, `external-system-unsafe`, or `unknown`.
+9. If the blocker is `runtime-recoverable` and the next action is read-only investigation with declared evidence targets, create or enter the next investigation/recovery round instead of pausing for the user.
+10. If the blocker requires write cleanup, external mutation, missing access facts, missing local channel parameters, a named tool that is unavailable, or business judgment, stop and ask the user through `askuserquestion` when available.
+11. If evidence contract changes are needed, route to `$harnessloop-evidence` before execution.
+12. If active work came from `.harnessloop/intake/`, require passed intake gate and accepted intake-review round before business execution.
+13. If self-audit, environment, delegation, named-tool, external-system, or access requirements are missing or ambiguous, ask the user for confirmation before tool use or execution. Use `askuserquestion` when available; otherwise ask directly in chat.
+14. If the next action relies on subagent, swarm, or another delegated mechanism and model/effort or scope control is unverified, route to `$harnessloop-delegation` before execution.
 
 ## Blocker Classification
 
@@ -58,6 +59,7 @@ Return a continuation decision before action:
 ```text
 Harnessloop continuation:
 - project:
+- unacknowledged loop-autocontinue anomaly: <count, from `coverage.loop_autocontinue_anomaly`> — shown first, before the rest of this report, whenever non-zero (see Processing Contract step 4)
 - decision: allowed | blocked | needs-setup | needs-evidence | needs-intake | needs-human | needs-self-audit | complete
 - active goal:
 - active round:
@@ -95,3 +97,4 @@ If execution is allowed and performed, write/update only the protocol files requ
 - Do not infer named-tool substitutions or external-system access details; ask the user first.
 - Do not accept a round after failed adversarial review unless the control contract and human decision explicitly allow it.
 - Do not evaluate evidence, control, environment, self-audit, or delegation gates before the setup gate; `gate_blocking: true` short-circuits directly to `needs-setup`. `gate_blocking: false` with `complete: false` is not a block — surface the gap as a warning and proceed.
+- Surface a non-zero `loop_autocontinue_anomaly` prominently and record its acknowledgement in `state/self-audit.md` (Processing Contract step 4) — but treat this as a discipline expected of this skill, not a mechanical requirement: `verify_protocol.py` does not check whether this step ran, so this is the same kind of "can be skipped without tripping the mechanical gate" boundary as writing `positive` without actually running the verification step, or picking a compliant-sounding `Loop continuation: stopped: <reason>` without it being the true reason.

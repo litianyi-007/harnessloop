@@ -6703,6 +6703,381 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g32_root, ignore_errors=True)
 
+    # G33: batch 3 of docs/loop-stop-record-spec-20260728.md (§4/§5, restated
+    # by that spec's Appendix B.1/B.2/F.3) -- the loop-autocontinue anomaly
+    # gate (`check_loop_autocontinue_anomaly`). Reuses G32's `_loop_project` /
+    # `_loop_round` / `_loop_round_dir` / `_loop_write_decision` / `_loop_kinds`
+    # closures above (same fixture family, same default goal
+    # "20260101-001-loop") plus three new small helpers for the two
+    # project-level files this gate reads: `.harnessloop/state/control-
+    # contract.md`'s three canonical fields and `.harnessloop/state/evidence-
+    # index.md`'s table. Every letter is a paired mutation exactly like
+    # G32/G25/G26 above.
+    # -------------------------------------------------------------------
+
+    def _g33_write_contract(project: Path, profile: str, positive: str) -> None:
+        contract = project / ".harnessloop" / "state" / "control-contract.md"
+        contract.parent.mkdir(parents=True, exist_ok=True)
+        contract.write_text(
+            "# Control Contract\n\n"
+            "## Auto-Continue\n\n"
+            f"- Profile: {profile}\n"
+            f"- Auto-continue on positive: {positive}\n"
+            "- Auto-continue on negative/neutral remediation: no\n\n"
+            "Allowed when:\n\n"
+            "- Feedback class: positive\n"
+            "- Evidence health: no stale\n"
+            "- Environment self-check: pass\n"
+            "- Open handoffs: none\n"
+            "- Human confirmation: not required\n",
+            encoding="utf-8",
+        )
+
+    def _g33_write_contract_no_profile(project: Path) -> None:
+        contract = project / ".harnessloop" / "state" / "control-contract.md"
+        contract.parent.mkdir(parents=True, exist_ok=True)
+        contract.write_text(
+            "# Control Contract\n\n"
+            "## Auto-Continue\n\n"
+            "Allowed when:\n\n"
+            "- Feedback class: positive\n"
+            "- Evidence health: no stale\n"
+            "- Environment self-check: pass\n"
+            "- Open handoffs: none\n"
+            "- Human confirmation: not required\n",
+            encoding="utf-8",
+        )
+
+    def _g33_write_contract_raw(project: Path, text: str) -> None:
+        contract = project / ".harnessloop" / "state" / "control-contract.md"
+        contract.parent.mkdir(parents=True, exist_ok=True)
+        contract.write_text(text, encoding="utf-8")
+
+    def _g33_evidence_row(evidence_id: str, health: str) -> str:
+        # 14 cells, matching evidence-index-template.md's 14-column header
+        # verbatim; only Evidence ID and Artifact health vary per fixture.
+        cells = [
+            evidence_id, "static", "p", "a", "f", "t", "v", "no", "yes",
+            health, "s", "eff", "rep", "internal",
+        ]
+        return "| " + " | ".join(cells) + " |"
+
+    def _g33_write_evidence_index(project: Path, rows: list) -> None:
+        path = project / ".harnessloop" / "state" / "evidence-index.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "# Evidence Index\n\n"
+            "| Evidence ID | Type | Path | Applies to | Freshness requirement | "
+            "Observed timestamp | Validation method | Channel parameter references | "
+            "Citation required | Artifact health | Claim support | Acceptance effect | "
+            "Reproducibility | Sensitivity |\n"
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        )
+        path.write_text(header + "\n".join(rows) + "\n", encoding="utf-8")
+
+    print(
+        "  G33a: Profile=standard + Auto-continue positive=yes + Feedback positive + "
+        "evidence-index all valid -> loop_autocontinue_anomaly=1, no violations, exit "
+        "code unaffected; Feedback negative on the SAME fixture -> 0"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33a-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract(project, "standard", "yes")
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-contract-profile-missing" not in _loop_kinds(violations),
+            "G33a: this fixture's contract carries a `- Profile:` field -> no "
+            f"profile-missing violation (got {sorted(_loop_kinds(violations))})",
+        )
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 1,
+            "G33a: Profile=standard, Auto-continue on positive=yes, Feedback=positive, "
+            "evidence-index all valid -> loop_autocontinue_anomaly==1 (got "
+            f"{coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+        check(
+            coverage.get("loop_anomaly_skipped_unparsable") == 0,
+            "G33a: every precondition was mechanically determinable -> "
+            f"loop_anomaly_skipped_unparsable==0 (got {coverage.get('loop_anomaly_skipped_unparsable')!r})",
+        )
+
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: negative\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33a mutation control: changing ONLY Feedback to negative clears the "
+            f"anomaly (got {coverage.get('loop_autocontinue_anomaly')!r}) -- proves the "
+            "count genuinely depended on Feedback: positive, not a vacuous always-1 path",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33b: Profile=strict -> loop_autocontinue_anomaly=0 (a determinate exclusion, "
+        "not a skip); changing to standard on the SAME fixture -> 1"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33b-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract(project, "strict", "yes")
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33b: Profile=strict is excluded from the anomaly trigger even though every "
+            f"other condition holds (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+        check(
+            coverage.get("loop_anomaly_skipped_unparsable") == 0,
+            "G33b: `strict` is a recognized, known value -- this is a determinate 'no', "
+            f"never an unparsable skip (got {coverage.get('loop_anomaly_skipped_unparsable')!r})",
+        )
+
+        _g33_write_contract(project, "standard", "yes")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 1,
+            "G33b mutation control: changing ONLY Profile to standard on the SAME "
+            f"fixture flips the anomaly on (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33c: Auto-continue on positive=no -> loop_autocontinue_anomaly=0 even "
+        "though Profile/Feedback/evidence all otherwise qualify"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33c-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract(project, "standard", "no")
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33c: Auto-continue on positive: no -> anomaly never fires (got "
+            f"{coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+        check(
+            coverage.get("loop_anomaly_skipped_unparsable") == 0,
+            "G33c: `no` is a recognized, known value -- determinate 'no', not a skip "
+            f"(got {coverage.get('loop_anomaly_skipped_unparsable')!r})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33d: evidence-index has a row with Artifact health=missing -> "
+        "loop_autocontinue_anomaly=0 (determinate, not a skip); changing that row to "
+        "valid on the SAME fixture -> 1"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33d-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract(project, "standard", "yes")
+        _g33_write_evidence_index(
+            project, [_g33_evidence_row("E1", "valid"), _g33_evidence_row("E2", "missing")]
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33d: evidence-index.md has one row with Artifact health=missing -> not "
+            f"every row is valid -> loop_autocontinue_anomaly==0 (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+        check(
+            coverage.get("loop_anomaly_skipped_unparsable") == 0,
+            "G33d: the table parsed fine and every value was a recognized enum member "
+            "-- health=missing is a determinate 'not all valid', not an unparsable skip "
+            f"(got {coverage.get('loop_anomaly_skipped_unparsable')!r})",
+        )
+
+        _g33_write_evidence_index(
+            project, [_g33_evidence_row("E1", "valid"), _g33_evidence_row("E2", "valid")]
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 1,
+            "G33d mutation control: changing ONLY E2's Artifact health to valid on the "
+            f"SAME fixture flips the anomaly on (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33e: evidence-index.md does not exist at all -> loop_autocontinue_anomaly=0 "
+        "AND loop_anomaly_skipped_unparsable=1 (the skip is visible, not silent)"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33e-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract(project, "standard", "yes")
+        # Deliberately never call _g33_write_evidence_index -- evidence-index.md
+        # does not exist in this fixture at all.
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33e: a missing evidence-index.md means the evidence-health precondition "
+            f"cannot be determined -> loop_autocontinue_anomaly==0 (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+        check(
+            coverage.get("loop_anomaly_skipped_unparsable") == 1,
+            "G33e: with every OTHER precondition (Profile/Auto-continue on positive/"
+            "Feedback) mechanically determinable and true, a missing evidence-index.md "
+            "is the ONLY undeterminable condition -- this must show up as "
+            f"loop_anomaly_skipped_unparsable==1 (got {coverage.get('loop_anomaly_skipped_unparsable')!r}), "
+            "proving 'this could not be judged' is visible, not silently folded into an "
+            "ordinary non-trigger",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33f: contract has no `- Profile:` field and no round anywhere has ever "
+        "declared `Loop continuation:`/`Predecessor:` -> zero loop-* violations "
+        "(mechanism not yet activated)"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33f-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        _g33_write_contract_no_profile(project)
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-contract-profile-missing" not in _loop_kinds(violations),
+            "G33f: no round anywhere in this project has ever declared `Loop "
+            "continuation:` or `Predecessor:` -- the mechanism is not yet activated, so "
+            f"a missing `Profile:` field has zero effect (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33g: same missing `- Profile:`, but round 0003 declares `- Predecessor: "
+        "0001` (no `Loop continuation:` anywhere) -> loop-contract-profile-missing; "
+        "adding `- Profile:` on the SAME fixture clears it"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33g-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0001")
+        _loop_round(project, "0003")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Feedback: positive\n")
+        _loop_write_decision(
+            project, "0003", "# Decision\n\n- Predecessor: 0001\n- Feedback: positive\n"
+        )
+        _g33_write_contract_no_profile(project)
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-contract-profile-missing" in _loop_kinds(violations),
+            "G33g: round 0003 declares `- Predecessor: 0001` -- no round anywhere "
+            "declares `- Loop continuation:` -- this alone must count as 'activated', "
+            "per Appendix F's inclusion of Predecessor alongside Loop continuation "
+            f"(got {sorted(_loop_kinds(violations))})",
+        )
+
+        _g33_write_contract(project, "standard", "yes")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            "loop-contract-profile-missing" not in _loop_kinds(violations),
+            "G33g mutation control: writing a `- Profile:` field on the SAME "
+            f"otherwise-unchanged fixture clears the violation (got {sorted(_loop_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33h: a fenced `- Profile: strict` example must never outrank the real, "
+        "unfenced `- Profile: standard` that follows it"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33h-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: positive\n")
+        fenced_contract = (
+            "# Control Contract\n\n"
+            "## Auto-Continue\n\n"
+            "Example of a bad declaration (do not do this):\n\n"
+            "```\n"
+            "- Profile: strict\n"
+            "```\n\n"
+            "- Profile: standard\n"
+            "- Auto-continue on positive: yes\n"
+            "- Auto-continue on negative/neutral remediation: no\n\n"
+            "Allowed when:\n\n"
+            "- Feedback class: positive\n"
+        )
+        _g33_write_contract_raw(project, fenced_contract)
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 1,
+            "G33h: the fenced `- Profile: strict` example must never shadow the real, "
+            f"unfenced `- Profile: standard` that follows it (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+
+        unfenced_contract = (
+            "# Control Contract\n\n"
+            "## Auto-Continue\n\n"
+            "Example of a bad declaration (do not do this):\n\n"
+            "- Profile: strict\n\n"
+            "- Profile: standard\n"
+            "- Auto-continue on positive: yes\n"
+            "- Auto-continue on negative/neutral remediation: no\n\n"
+            "Allowed when:\n\n"
+            "- Feedback class: positive\n"
+        )
+        _g33_write_contract_raw(project, unfenced_contract)
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33h mutation control: removing ONLY the fence markers (same two Profile "
+            "lines, same order, same everything else) makes the now-first `- Profile: "
+            f"strict` line win instead -> the anomaly clears (got {coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
+    print(
+        "  G33i: only the latest round is ever evaluated -- an older round satisfying "
+        "every condition does not count when the newest round's Feedback is negative"
+    )
+    g33_root = REPO_ROOT / ".tmp" / f"verify-fixture-g33i-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g33_root)
+        _loop_round(project, "0003")
+        _loop_round(project, "0007")
+        _loop_write_decision(project, "0003", "# Decision\n\n- Feedback: positive\n")
+        _loop_write_decision(project, "0007", "# Decision\n\n- Feedback: negative\n")
+        _g33_write_contract(project, "standard", "yes")
+        _g33_write_evidence_index(project, [_g33_evidence_row("E1", "valid")])
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("loop_autocontinue_anomaly") == 0,
+            "G33i: round 0003 (older) satisfies every anomaly condition, but round "
+            "0007 is this goal's latest round and its Feedback is negative -- OUT-list "
+            "item 4 (harnessloop-loop/SKILL.md): anomaly only ever looks at the newest "
+            "round, never retroactively judges an earlier one (got "
+            f"{coverage.get('loop_autocontinue_anomaly')!r})",
+        )
+    finally:
+        shutil.rmtree(g33_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")

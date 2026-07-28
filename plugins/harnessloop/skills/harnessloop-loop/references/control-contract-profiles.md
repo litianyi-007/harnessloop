@@ -8,6 +8,25 @@ All three profiles cover every leaf field; none is left blank. The `Blocker Clas
 - **`standard`** (default): positive feedback with fully-valid evidence auto-continues; evidence-contract and control-contract changes require a human.
 - **`strict`**: projects touching external systems or sensitive data. Human confirmation is required before continuing even when every automatic condition is met.
 
+## Canonical Auto-Continue Fields (machine-parsed)
+
+Three fields added by docs/loop-stop-record-spec-20260728.md §5 (Appendix
+B.1 restated): `verify_protocol.py`'s loop-autocontinue anomaly gate
+(`check_loop_autocontinue_anomaly`) parses these, not the free-text rows
+below, and they are **not** part of `check_setup.py`'s existing 24-leaf-field
+completeness manifest for `control-contract.md` — that manifest is
+unchanged by this addition, so an existing filled-in contract does not
+regress to "incomplete" merely for predating these three lines. `custom` has
+no preset row here (a hand-authored contract, not one of the three profiles
+`$harnessloop-setup` renders) but is still a legal `Profile:` value the gate
+recognizes.
+
+| Field | lite | standard (default) | strict |
+| --- | --- | --- | --- |
+| Profile | lite | standard | strict |
+| Auto-continue on positive | yes | yes | no (Human Confirmation below requires confirmation even when every condition is met, so nothing auto-continues on `positive` alone) |
+| Auto-continue on negative/neutral remediation | yes (Feedback class row already lists T2 auto-continue explicitly) | no (§0's corrected ruling: standard's Feedback class row lists only `positive`) | no |
+
 ## Auto-Continue (Allowed when)
 
 | Field | lite | standard (default) | strict |

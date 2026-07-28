@@ -5,6 +5,13 @@
 
 ## Auto-Continue
 
+Canonical fields (machine-parsed by `verify_protocol.py`'s loop-autocontinue
+anomaly gate; docs/loop-stop-record-spec-20260728.md §5, Appendix B.1):
+
+- Profile: lite | standard | strict | custom
+- Auto-continue on positive: yes | no
+- Auto-continue on negative/neutral remediation: yes | no
+
 Allowed when:
 
 - Feedback class:

@@ -375,6 +375,38 @@ This script enforces only machine-checkable rules:
   invisible pass. The optional free-text note after ` — ` is never content-
   checked.
 
+- Loop-autocontinue anomaly gate (batch 3 of the same spec, §4/§5, restated by
+  that spec's Appendix B.1/B.2/F.3; see `check_loop_autocontinue_anomaly`):
+  project-level (not per-round), computed once per run. For each goal's
+  *latest* round only (highest integer round-directory name -- being latest
+  already encodes "no successor round exists yet", so unlike the pre-Appendix-F
+  design this needs no `continued:`-shaped field of its own), reports one
+  `loop_autocontinue_anomaly` when all of the following are true: the
+  project's `.harnessloop/state/control-contract.md` declares `- Profile:` as
+  `lite` or `standard` (`strict`/`custom` excluded); it declares
+  `- Auto-continue on positive: yes`; that round's `- Feedback:` normalizes to
+  `positive`; and every data row of `.harnessloop/state/evidence-index.md`'s
+  table has `Artifact health` = `valid`. Deliberately conservative polarity
+  (fail-closed toward *silence*, the opposite of every fail-closed rule
+  elsewhere in this module): when any one condition cannot be mechanically
+  determined at all -- a field was never written, a value does not normalize,
+  `evidence-index.md` is missing, or its table cannot be parsed -- the anomaly
+  is never reported for that goal; unless some *other* condition is already
+  determinately false (Kleene three-valued AND: a known `False` wins over an
+  unknown), it is instead counted in `loop_anomaly_skipped_unparsable`, so
+  "this could not be judged" stays visible rather than collapsing silently
+  into an ordinary non-trigger. This is never a violation and never changes
+  the exit code (§4.2: promoting it to a hard gate needs its own
+  predegistration and pilot). Appendix B.1 pairs it with exactly one real
+  violation, `loop-contract-profile-missing`: once a project is "activated"
+  (any round anywhere in it has ever declared `- Loop continuation:` **or**
+  `- Predecessor:` -- Appendix F folded the latter in, since that is the field
+  a fresh round actually writes post-reversal), a `control-contract.md` with
+  no `- Profile:` field at all is fail-closed red, because an unwritten field
+  would otherwise be a switch held entirely by the party this gate checks (it
+  silently guarantees the anomaly can never fire). Before activation, a
+  missing `Profile:` field has zero effect.
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
@@ -3546,6 +3578,496 @@ def check_loop_continuation_declaration(
     return [], state
 
 
+# Loop-autocontinue anomaly gate (batch 3 of
+# docs/loop-stop-record-spec-20260728.md, §4/§5, restated by that spec's
+# Appendix B.1/B.2/F.3 -- see the module docstring's "Loop-autocontinue
+# anomaly gate" section and `check_loop_autocontinue_anomaly` below). Unlike
+# every gate above, this one is project-level (not per-round): its three
+# machine-parsed inputs are `.harnessloop/state/control-contract.md` (one
+# file per project) and `.harnessloop/state/evidence-index.md` (also one
+# file per project), plus, per goal, only that goal's *latest* round's
+# `- Feedback:`. `CONTROL_CONTRACT_PROFILE_ENUM` / `CONTROL_CONTRACT_
+# BOOLEAN_ENUM` are the recognized tokens for the three new canonical
+# `control-contract.md` fields §5 adds (`control-contract-template.md`'s
+# `## Auto-Continue` section, above its pre-existing free-text rows);
+# `EVIDENCE_ARTIFACT_HEALTH_ENUM` is transcribed verbatim from
+# `evidence-index-template.md`'s "Artifact Health Values" list.
+CONTROL_CONTRACT_PROFILE_ENUM = frozenset({"lite", "standard", "strict", "custom"})
+CONTROL_CONTRACT_BOOLEAN_ENUM = frozenset({"yes", "no"})
+EVIDENCE_ARTIFACT_HEALTH_ENUM = frozenset(
+    {"valid", "stale", "missing", "inconclusive", "blocked"}
+)
+
+
+def _parse_labeled_line(text: str, label: str) -> str | None:
+    """Shared implementation for the three control-contract canonical-field
+    parsers below. Same narrow convention every other field parser in this
+    module hand-rolls individually (`parse_feedback`,
+    `parse_loop_predecessor_declaration`, `parse_loop_continuation_
+    declaration`): a case-insensitive `- <label>:` line prefix,
+    `.strip().lower()`-matched, first occurrence wins, lines inside a
+    fenced code block never considered (`_uncoded_lines`) -- a
+    control-contract.md quoting `` - Profile: strict `` as a documentation
+    example inside a fence must never outrank the project's real, unfenced
+    declaration elsewhere in the file.
+
+    Factored out here, rather than three more hand-rolled copies, only
+    because these three fields are new together in this same batch and
+    share the identical shape; it deliberately does not retrofit onto the
+    existing per-field functions elsewhere in this module (this batch does
+    not change any already-shipped check's behavior).
+    """
+    prefix = f"- {label.strip().lower()}:"
+    for line in _uncoded_lines(text):
+        stripped = line.strip()
+        if stripped.lower().startswith(prefix):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def parse_control_contract_profile(contract_text: str) -> str | None:
+    """Extract the raw `- Profile:` value from `control-contract.md`, or
+    `None` when the field was never written at all (outside any fence) --
+    see `check_loop_autocontinue_anomaly` for why this project distinguishes
+    "never written" from "written but unrecognized" (Appendix B.1's
+    `loop-contract-profile-missing` fires only on the former, once
+    activated)."""
+    return _parse_labeled_line(contract_text, "Profile")
+
+
+def parse_control_contract_auto_continue_positive(contract_text: str) -> str | None:
+    """Extract the raw `- Auto-continue on positive:` value from
+    `control-contract.md`, or `None` when never written."""
+    return _parse_labeled_line(contract_text, "Auto-continue on positive")
+
+
+def parse_control_contract_auto_continue_remediation(contract_text: str) -> str | None:
+    """Extract the raw `- Auto-continue on negative/neutral remediation:`
+    value from `control-contract.md`, or `None` when never written.
+
+    Parsed for completeness with §5's full three-field set (and so a future
+    gate can consume it), but **not** read by this batch's
+    `check_loop_autocontinue_anomaly`: the §4 trigger condition set this
+    batch implements (docs/loop-stop-record-spec-20260728.md, restated per
+    Appendix F.3) checks only `- Auto-continue on positive:`, deliberately
+    not the full per-profile branching (lite's T2/remediation auto-continue
+    included) Appendix B.2 describes -- see this module's docstring and
+    `harnessloop-loop/SKILL.md`'s OUT column for what that narrower scope
+    leaves open.
+    """
+    return _parse_labeled_line(
+        contract_text, "Auto-continue on negative/neutral remediation"
+    )
+
+
+def _normalize_bare_enum(raw: str | None, known: frozenset[str]) -> str | None:
+    """Normalize `raw` with the same narrow discipline every enum-valued
+    field in this module already uses (`_normalize_feedback` et al.):
+    `.strip().lower()` only, no punctuation stripped. Returns `None` both
+    when `raw` is `None` (field never written) and when the normalized
+    value does not land in `known` (written but unrecognized) -- a caller
+    that must distinguish "absent" from "present but unrecognized" (e.g.
+    Appendix B.1's `loop-contract-profile-missing`, which fires only on
+    true absence) checks `raw is None` itself rather than relying on this
+    function's return value alone; for `check_loop_autocontinue_anomaly`'s
+    own tri-state (Kleene) condition logic, "absent" and "present but
+    unrecognized" are deliberately collapsed into the same "cannot be
+    mechanically determined" outcome (spec §4's conservative polarity: both
+    are reasons not to report an anomaly, not reasons to guess)."""
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    return normalized if normalized in known else None
+
+
+def _parse_markdown_table(text: str) -> tuple[list[str], list[list[str]]] | None:
+    """Parse the first well-formed pipe-delimited markdown table in `text`:
+    a header row immediately followed by a CommonMark-shaped separator row
+    (every cell matching `:?-+:?`, e.g. `---` or `:---:`), then zero or more
+    `|`-prefixed data rows until the first line that is not.
+
+    Returns `(header_cells, data_rows)` (each cell already `.strip()`ped),
+    or `None` if no such header+separator pair exists anywhere in `text` --
+    callers must treat `None` as "cannot be mechanically determined" (fail-
+    closed by absence, never a guessed partial table). This is a light,
+    single-purpose table reader for `check_evidence_index_all_valid` only
+    -- it does not track fenced code blocks (`_uncoded_lines`) the way this
+    module's `- <label>:` line parsers do, since `evidence-index.md` is a
+    structured table file, not free-form decision.md prose that quotes
+    field examples; a project that embeds a literal table-shaped code
+    example inside `evidence-index.md` is out of this function's scope.
+    """
+    lines = text.splitlines()
+    for i in range(len(lines) - 1):
+        header_line = lines[i].strip()
+        sep_line = lines[i + 1].strip()
+        if not (header_line.startswith("|") and sep_line.startswith("|")):
+            continue
+        sep_cells = [c.strip() for c in sep_line.strip("|").split("|")]
+        if not sep_cells or not all(re.fullmatch(r":?-+:?", c) for c in sep_cells):
+            continue
+        header_cells = [c.strip() for c in header_line.strip("|").split("|")]
+        if len(header_cells) != len(sep_cells):
+            continue
+        data_rows: list[list[str]] = []
+        j = i + 2
+        while j < len(lines):
+            row_line = lines[j].strip()
+            if not row_line.startswith("|"):
+                break
+            data_rows.append([c.strip() for c in row_line.strip("|").split("|")])
+            j += 1
+        return header_cells, data_rows
+    return None
+
+
+def check_evidence_index_all_valid(project: Path) -> tuple[bool | None, bool]:
+    """Evaluate whether `.harnessloop/state/evidence-index.md`'s table shows
+    every data row's `Artifact health` column = `valid`.
+
+    Returns `(all_valid, unparsable)`:
+
+    - `unparsable=True` (and `all_valid=None`) when the file does not exist
+      or cannot be read, no well-formed table can be found at all
+      (`_parse_markdown_table` returns `None`), no column header
+      case-insensitively equals `Artifact health`, the table has zero data
+      rows (nothing to certify "every row" against), a row is shorter than
+      the header (a malformed table), or any row's health value does not
+      normalize to a member of `EVIDENCE_ARTIFACT_HEALTH_ENUM` -- every one
+      of these is "cannot be mechanically determined", fail-closed toward
+      *not* reporting an anomaly (spec §4's polarity), never toward
+      guessing "probably fine".
+    - Otherwise `(all_valid, False)` where `all_valid` is `True` only if
+      every data row's health value is exactly `valid`.
+
+    This is the one precondition in `check_loop_autocontinue_anomaly` that
+    is genuinely project-wide evidence, not a per-goal signal -- there is
+    exactly one `evidence-index.md` per project, shared by every goal.
+    """
+    path = project / ".harnessloop" / "state" / "evidence-index.md"
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None, True
+
+    table = _parse_markdown_table(text)
+    if table is None:
+        return None, True
+    header_cells, data_rows = table
+
+    health_idx = None
+    for idx, cell in enumerate(header_cells):
+        if cell.strip().lower() == "artifact health":
+            health_idx = idx
+            break
+    if health_idx is None:
+        return None, True
+
+    if not data_rows:
+        return None, True
+
+    all_valid = True
+    for row in data_rows:
+        if health_idx >= len(row):
+            return None, True
+        value = row[health_idx].strip().lower()
+        if value not in EVIDENCE_ARTIFACT_HEALTH_ENUM:
+            return None, True
+        if value != "valid":
+            all_valid = False
+    return all_valid, False
+
+
+def _kleene_and(*conditions: "bool | None") -> "bool | None":
+    """Three-valued (Kleene) AND: a known `False` wins over an unknown
+    (`None`), which wins over `True`.
+
+    `check_loop_autocontinue_anomaly` uses this so a condition that is
+    *definitively* False (e.g. this project's evidence health legitimately
+    not all `valid`) produces a definitive "no anomaly" even when some
+    *other* condition is separately unparsable (e.g. `control-contract.md`
+    has no `- Profile:` field at all) -- the non-trigger is reported as an
+    intentional, explicable "no", not folded into
+    `loop_anomaly_skipped_unparsable`, which is reserved for the case where
+    *no* condition is known False and at least one cannot be determined at
+    all. This is the standard 3-valued semantics for "should we raise an
+    alarm" under partial information, and is exactly why this project's own
+    real run (Profile: unwritten, unparsable; evidence health: determinately
+    not all valid because of E4) reports zero anomalies attributed to the
+    evidence-health reason, not to the unparsable Profile field.
+    """
+    if any(c is False for c in conditions):
+        return False
+    if any(c is None for c in conditions):
+        return None
+    return True
+
+
+def _latest_round_decision_text(goal_dir: Path, project: Path) -> str | None:
+    """Return the `decision.md` text of the round with the highest integer
+    round-directory name under `goal_dir/rounds/`, or `None` when there is
+    no round directory under this goal at all whose name parses as an
+    integer, or that round's `decision.md` is missing or unreadable.
+
+    "Latest" is purely `int(round_dir.name)`, the same round-numbering
+    convention `check_loop_predecessor_declaration` already relies on; a
+    round directory whose name does not parse as an integer is skipped for
+    this purpose (mirrors that function's "left unvalidated rather than
+    crashing" treatment) rather than raising or silently winning a numeric
+    comparison it cannot meaningfully take part in.
+
+    G17 parity: every `round_dir` found under `rounds/` is
+    containment-checked (`_container_escape_violation`) before its name is
+    even considered for the "latest" comparison, exactly like
+    `verify_project`'s own round-walking loop checks each `round_dir`
+    before ever opening it -- this function runs its own, independent walk
+    (it does not reuse that loop's already-vetted `round_dir` values), so it
+    must repeat the same discipline itself rather than trust that some
+    other caller already did. The escape itself is never re-reported here
+    as a violation: `verify_project`'s existing top-level walk already
+    reports `round-container-escapes-project` for the same directory; this
+    function's check is a silent read-guard only, never a second source of
+    truth for that violation.
+    """
+    rounds_dir = goal_dir / "rounds"
+    if not rounds_dir.is_dir():
+        return None
+    numbered: list[tuple[int, Path]] = []
+    try:
+        entries = list(rounds_dir.iterdir())
+    except OSError:
+        return None
+    for round_dir in entries:
+        if _container_escape_violation(round_dir, project, round_dir) is not None:
+            continue
+        if not round_dir.is_dir():
+            continue
+        try:
+            numbered.append((int(round_dir.name), round_dir))
+        except ValueError:
+            continue
+    if not numbered:
+        return None
+    _, latest_round_dir = max(numbered, key=lambda pair: pair[0])
+    try:
+        return (latest_round_dir / "decision.md").read_text(
+            encoding="utf-8", errors="ignore"
+        )
+    except OSError:
+        return None
+
+
+def _loop_autocontinue_enabled(goals_dir: Path, project: Path) -> bool:
+    """True if any round anywhere in this project has ever declared
+    `- Loop continuation:` or `- Predecessor:` in its `decision.md` -- the
+    "activation" signal Appendix B.1 gates `loop-contract-profile-missing`
+    on. Appendix F reversed the direction of the loop-continuation record
+    (a *successor* round now declares `- Predecessor:` rather than a
+    predecessor round declaring `- Loop continuation: continued: ...`), so
+    this checks both fields, not just `- Loop continuation:` alone --
+    checking only the latter would let a project that has only ever written
+    `- Predecessor:` (the field a fresh round actually writes,
+    post-reversal) look permanently "not yet activated".
+
+    Presence alone is enough (valid or not, exactly like
+    `rounds_predecessor_declared`'s counting convention) -- this is an
+    on/off activation signal, not a validity check.
+
+    G17 parity: `goal_dir` and `round_dir` are each containment-checked
+    (`_container_escape_violation`) before being listed or read, same
+    rationale and same "silent guard, never a second violation source" as
+    `_latest_round_decision_text` above -- this function performs its own
+    independent walk of `goals_dir` and must not trust a symlink escape at
+    any level just because some other caller already vets its own copy of
+    the walk.
+    """
+    if not goals_dir.is_dir():
+        return False
+    try:
+        goal_entries = list(goals_dir.iterdir())
+    except OSError:
+        return False
+    for goal_dir in goal_entries:
+        if _container_escape_violation(goal_dir, project, goal_dir) is not None:
+            continue
+        if not goal_dir.is_dir():
+            continue
+        rounds_dir = goal_dir / "rounds"
+        if not rounds_dir.is_dir():
+            continue
+        try:
+            round_entries = list(rounds_dir.iterdir())
+        except OSError:
+            continue
+        for round_dir in round_entries:
+            if _container_escape_violation(round_dir, project, round_dir) is not None:
+                continue
+            if not round_dir.is_dir():
+                continue
+            try:
+                text = (round_dir / "decision.md").read_text(
+                    encoding="utf-8", errors="ignore"
+                )
+            except OSError:
+                continue
+            if parse_loop_continuation_declaration(text) is not None:
+                return True
+            if parse_loop_predecessor_declaration(text) is not None:
+                return True
+    return False
+
+
+def check_loop_autocontinue_anomaly(project: Path) -> tuple[list[dict], dict]:
+    """Loop-autocontinue anomaly gate (batch 3, §4/§5 as restated by Appendix
+    B.1/B.2/F.3 -- see this module's docstring for the full trigger
+    condition set and polarity rationale).
+
+    Project-level, computed once by `verify_project`: reads
+    `.harnessloop/state/control-contract.md`'s three canonical fields and
+    `.harnessloop/state/evidence-index.md`'s table exactly once, then loops
+    over every goal, evaluating only that goal's *latest* round's
+    `- Feedback:` (`_latest_round_decision_text`). Being the latest round
+    already means no successor round has appeared for that goal yet -- the
+    F.3 insight that makes a separate "did this round record `continued:`"
+    check unnecessary post-Appendix-F reversal.
+
+    Returns `(violations, extra_coverage)` where `violations` contains at
+    most one `loop-contract-profile-missing` entry (Appendix B.1: a
+    project-level violation, `"round"` key set to `str(project)` like this
+    module's other project-level violations, e.g. `external-root-
+    unavailable`) and `extra_coverage` has exactly the two new keys
+    `loop_autocontinue_anomaly` / `loop_anomaly_skipped_unparsable` (see
+    `_empty_coverage`). Every per-goal evaluation uses `_kleene_and`'s
+    three-valued logic over four conditions: Profile ∈ {lite, standard},
+    Auto-continue on positive == yes, this goal's latest round's Feedback ==
+    positive, and evidence-index health all-valid -- `True` increments
+    `loop_autocontinue_anomaly`, `None` (undeterminable, and no condition
+    already determinately `False`) increments
+    `loop_anomaly_skipped_unparsable`, `False` records nothing.
+
+    Deliberately **not** implemented in this batch (registered in
+    `harnessloop-loop/SKILL.md`'s OUT column, not silently dropped): the
+    spec's open-handoff and environment-self-check preconditions, so this
+    gate's anomaly count is an upper bound relative to the full spec, not
+    its exact signal; and the §4.2/Appendix B.3 acknowledgement consumption
+    loop (`$harnessloop-status`/`$harnessloop-continue` surfacing and
+    requiring acknowledgement of an anomaly) is SKILL-prose discipline only,
+    never mechanically enforced here.
+    """
+    extra_coverage = {
+        "loop_autocontinue_anomaly": 0,
+        "loop_anomaly_skipped_unparsable": 0,
+    }
+    violations: list[dict] = []
+
+    contract_path = project / ".harnessloop" / "state" / "control-contract.md"
+    try:
+        contract_text = contract_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        contract_text = None
+
+    profile_raw = (
+        parse_control_contract_profile(contract_text)
+        if contract_text is not None
+        else None
+    )
+    positive_raw = (
+        parse_control_contract_auto_continue_positive(contract_text)
+        if contract_text is not None
+        else None
+    )
+
+    goals_dir = project / ".harnessloop" / "goals"
+    # G17 parity: `goals_dir` itself is containment-checked before either
+    # helper below is ever allowed to list or read anything under it --
+    # same silent-guard-only discipline documented on
+    # `_loop_autocontinue_enabled`/`_latest_round_decision_text` above (this
+    # function's own independent walk must not trust a `goals_dir` symlink
+    # escape just because `verify_project`'s separate top-level check
+    # already reports it once).
+    goals_dir_escapes = _container_escape_violation(goals_dir, project, goals_dir) is not None
+    enabled = (not goals_dir_escapes) and _loop_autocontinue_enabled(goals_dir, project)
+    # Appendix B.1's `loop-contract-profile-missing` fires only when a real
+    # `control-contract.md` was read (`contract_text is not None`) and that
+    # file itself has no `- Profile:` field -- it is deliberately narrower
+    # than "no Profile value could be determined at all" (which also covers
+    # `control-contract.md` not existing on disk). A wholly missing
+    # `control-contract.md` is not a new concern this gate introduces:
+    # `check_setup.py`'s `gate_blocking` already treats that file's absence
+    # as blocking, on its own, unrelated terms; this gate does not duplicate
+    # that check under a different name, and none of this batch's own teeth
+    # (G33f/G33g) exercise "file absent" -- both use a real, written
+    # `control-contract.md` that simply omits the `- Profile:` line.
+    if enabled and contract_text is not None and profile_raw is None:
+        violations.append(
+            {
+                "round": str(project),
+                "kind": "loop-contract-profile-missing",
+                "detail": (
+                    f"{contract_path} has no `- Profile:` field, but this project has "
+                    "already activated the loop-continuation record gate (some round's "
+                    "decision.md declares `Loop continuation:` or `Predecessor:`) -- "
+                    "Appendix B.1 of docs/loop-stop-record-spec-20260728.md makes this a "
+                    "violation rather than a silent skip: an unwritten `Profile:` field "
+                    "would otherwise be a switch the audited party holds, since it "
+                    "guarantees `loop_autocontinue_anomaly` can never fire"
+                ),
+            }
+        )
+
+    profile_norm = _normalize_bare_enum(profile_raw, CONTROL_CONTRACT_PROFILE_ENUM)
+    condition_profile: bool | None = (
+        None if profile_norm is None else profile_norm in ("lite", "standard")
+    )
+
+    positive_norm = _normalize_bare_enum(positive_raw, CONTROL_CONTRACT_BOOLEAN_ENUM)
+    condition_positive: bool | None = (
+        None if positive_norm is None else positive_norm == "yes"
+    )
+
+    evidence_all_valid, evidence_unparsable = check_evidence_index_all_valid(project)
+    condition_evidence: bool | None = None if evidence_unparsable else evidence_all_valid
+
+    if goals_dir_escapes or not goals_dir.is_dir():
+        return violations, extra_coverage
+    try:
+        goal_entries = sorted(p for p in goals_dir.iterdir() if p.is_dir())
+    except OSError:
+        return violations, extra_coverage
+
+    for goal_dir in goal_entries:
+        # G17 parity, same silent-guard discipline as above: skip (never
+        # descend into) a goal directory that is itself a symlink escape.
+        if _container_escape_violation(goal_dir, project, goal_dir) is not None:
+            continue
+        decision_text = _latest_round_decision_text(goal_dir, project)
+        if decision_text is None:
+            # No round at all under this goal (or none whose directory name
+            # parses as an integer), or the latest one's decision.md is
+            # missing/unreadable -- nothing to evaluate for this goal, and
+            # not itself an "unparsable precondition" (mirrors every other
+            # decision.md-gated check in this module staying silent when
+            # decision.md does not exist at all).
+            continue
+        raw_feedback = parse_feedback(decision_text)
+        feedback_norm = (
+            _normalize_feedback(raw_feedback) if raw_feedback is not None else None
+        )
+        condition_feedback: bool | None = (
+            None if feedback_norm is None else feedback_norm == "positive"
+        )
+
+        overall = _kleene_and(
+            condition_profile, condition_positive, condition_feedback, condition_evidence
+        )
+        if overall is True:
+            extra_coverage["loop_autocontinue_anomaly"] += 1
+        elif overall is None:
+            extra_coverage["loop_anomaly_skipped_unparsable"] += 1
+
+    return violations, extra_coverage
+
+
 def _container_escape_violation(
     container: Path, project: Path, round_label: Path
 ) -> dict | None:
@@ -4144,6 +4666,24 @@ def _empty_coverage() -> dict:
         # violation) but is meant to be a visible, non-zero review signal.
         "rounds_stop_recorded": 0,
         "rounds_stop_unjustified": 0,
+        # Loop-autocontinue anomaly gate (`check_loop_autocontinue_anomaly`,
+        # batch 3 of the same spec, §4/§5): project-level, like
+        # `external_roots_*` below -- assigned exactly once by
+        # `verify_project` (before its round loop, since neither
+        # `control-contract.md` nor `evidence-index.md` is a per-round
+        # artifact), never accumulated per round. Every round's own local
+        # `coverage = _empty_coverage()` leaves both at 0, so the per-round
+        # accumulation loop only ever adds 0 to them here.
+        # `loop_autocontinue_anomaly` counts one per goal whose latest round
+        # satisfies every trigger condition and is not itself a violation
+        # (§4.2: an observation signal, never a hard gate).
+        # `loop_anomaly_skipped_unparsable` counts one per goal where at
+        # least one trigger condition could not be mechanically determined
+        # at all (and no other condition was already determinately false) --
+        # making "this could not be judged" visible rather than silently
+        # collapsing into an ordinary zero.
+        "loop_autocontinue_anomaly": 0,
+        "loop_anomaly_skipped_unparsable": 0,
         # RAE gate (`check_goal_eval_registry`): goal-level, not round-level --
         # `<goal>/evals.json` lives once per goal, not once per round, so this
         # field is incremented directly by `verify_project`'s goal loop (once
@@ -4238,6 +4778,25 @@ def collect_scope_lock_round_path_mismatch_notes(project: Path) -> list[str]:
 def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
     coverage = _empty_coverage()
+
+    # Loop-autocontinue anomaly gate (batch 3, docs/loop-stop-record-spec-
+    # 20260728.md §4/§5, Appendix B.1): project-level, computed exactly once
+    # regardless of whether `goals_dir` exists at all (mirrors
+    # `external_roots_*`'s placement in the no-goals early-return branch
+    # immediately below) -- assigned directly into `coverage`, never
+    # accumulated through the per-round loop further down, since neither
+    # `control-contract.md`'s canonical fields nor `evidence-index.md`'s
+    # table is a per-round artifact. `check_loop_autocontinue_anomaly`
+    # performs its own independent, G17-guarded walk of `goals_dir`/rounds
+    # (see that function's docstring), so calling it before the no-goals
+    # branch below is safe even when `goals_dir` does not exist or escapes
+    # the project.
+    anomaly_violations, anomaly_coverage = check_loop_autocontinue_anomaly(project)
+    coverage["loop_autocontinue_anomaly"] = anomaly_coverage["loop_autocontinue_anomaly"]
+    coverage["loop_anomaly_skipped_unparsable"] = anomaly_coverage[
+        "loop_anomaly_skipped_unparsable"
+    ]
+
     if not goals_dir.is_dir():
         # A project with no rounds yet still has a *declaration*, and the
         # declaration is a project-level fact -- reporting
@@ -4257,8 +4816,10 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         # a fresh project, which is when it is most likely to be wrong
         # (T-070 residual).
         root_violations.extend(_unavailable_root_violations(project, roots))
+        root_violations.extend(anomaly_violations)
         return root_violations, coverage
     violations: list[dict] = []
+    violations.extend(anomaly_violations)
 
     # G17 item 1 (external-citation-base-spec-20260727.md §3.1): the
     # container chain is checked top-down, level by level, *before* the
@@ -4464,6 +5025,8 @@ def main() -> int:
             f"predecessor_declared={coverage['rounds_predecessor_declared']} "
             f"stop_recorded={coverage['rounds_stop_recorded']} "
             f"stop_unjustified={coverage['rounds_stop_unjustified']} "
+            f"loop_autocontinue_anomaly={coverage['loop_autocontinue_anomaly']} "
+            f"loop_anomaly_skipped_unparsable={coverage['loop_anomaly_skipped_unparsable']} "
             f"external_roots_declared={coverage['external_roots_declared']} "
             f"external_roots_available={coverage['external_roots_available']} "
             f"external_citations_checked={coverage['external_citations_checked']} "
