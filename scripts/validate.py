@@ -4530,6 +4530,482 @@ def validate_protocol_gates() -> None:
         "that no flag-name grep would ever see (T-069 F5)",
     )
 
+    # -------------------------------------------------------------------
+    # G25: RAE (round-acceptance-eval) gate -- `<goal>/evals.json`,
+    # `<round>/evidence/runtime/acceptance-evals.json`, and the hard rule
+    # tying a round's own ledger to that same round's own decision.md
+    # Feedback (`verify_protocol.check_goal_eval_registry`,
+    # `check_round_eval_ledger`, and the `acceptance-eval-*` violations
+    # wired into `verify_round`). Every teeth below is a paired mutation:
+    # a fixture asserted to land on verdict X under the real implementation,
+    # then a specific, minimal change to that same fixture asserted to flip
+    # the verdict -- proving the check discriminates on the exact condition
+    # it claims to, not on some coincidental fixture property.
+    # -------------------------------------------------------------------
+
+    def _rae_project(tmp_root: Path) -> Path:
+        """A minimal RAE-gate project fixture: one round ('0001') with
+        `evidence/runtime/` ready and a parseable scope-lock.md (mirrors
+        `_pr3_project`)."""
+        project = tmp_root / "project"
+        round_dir = project / ".harnessloop" / "goals" / "20260101-001-rae" / "rounds" / "0001"
+        (round_dir / "evidence" / "runtime").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n",
+            encoding="utf-8",
+        )
+        return project
+
+    def _rae_round_dir(project: Path) -> Path:
+        return project / ".harnessloop" / "goals" / "20260101-001-rae" / "rounds" / "0001"
+
+    def _rae_goal_dir(project: Path) -> Path:
+        return project / ".harnessloop" / "goals" / "20260101-001-rae"
+
+    def _rae_ledger_path(project: Path) -> Path:
+        return _rae_round_dir(project) / "evidence" / "runtime" / "acceptance-evals.json"
+
+    def _rae_write_ledger(project: Path, obj) -> None:
+        text = obj if isinstance(obj, str) else json.dumps(obj)
+        _rae_ledger_path(project).write_text(text, encoding="utf-8")
+
+    def _rae_write_decision(project: Path, text: str) -> None:
+        (_rae_round_dir(project) / "decision.md").write_text(text, encoding="utf-8")
+
+    def _rae_write_registry(project: Path, obj) -> None:
+        text = obj if isinstance(obj, str) else json.dumps(obj)
+        (_rae_goal_dir(project) / "evals.json").write_text(text, encoding="utf-8")
+
+    print("  G25a/b: due-set eval outcome determines whether Feedback: positive survives (pass vs fail)")
+    g25_root = Path(tempfile.mkdtemp(prefix="hl-rae-g25-"))
+    try:
+        project = _rae_project(g25_root)
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G25a: due eval_id RAE-0001 has only a failing attempt, Feedback: positive -> "
+            "acceptance-eval-positive-without-pass (red)",
+        )
+
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G25b: flipping ONLY that entry's outcome to pass (same eval_id, same due set, same "
+            "Feedback: positive) turns it green -- mutation control proving G25a is not a "
+            "vacuous always-red",
+        )
+
+        print("  G25c: due eval_id entirely absent from entries (not even a failing attempt) + positive -> red")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-9999", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G25c: the ledger has a passing entry for a DIFFERENT eval_id (RAE-9999), but "
+            "nothing at all for the due id RAE-0001 -> red",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {"eval_id": "RAE-9999", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]},
+                    {"eval_id": "RAE-0001", "attempt_id": "0001-a2", "outcome": "pass", "frozen_due_set": ["RAE-0001"]},
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G25c mutation control: adding the missing due id's OWN passing entry (leaving the "
+            "unrelated RAE-9999 entry in place) turns it green -- proves the rule requires a "
+            "pass keyed on that specific eval_id, not merely the presence of some pass "
+            "somewhere in the ledger",
+        )
+
+        print("  G25d: attempt_id's leading 4 digits must equal the round directory name")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0002-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-attempt-id-round-mismatch" in kinds,
+            "G25d: attempt_id `0002-a1` inside round directory `0001` -> "
+            "eval-ledger-attempt-id-round-mismatch (red)",
+        )
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-attempt-id-round-mismatch" not in kinds,
+            "G25d mutation control: correcting the prefix to `0001` (matching the round "
+            "directory) clears the violation",
+        )
+
+        print("  G25e: frozen_due_set is ALWAYS required, even as [] -- only the key's absence is a violation")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass"}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-due-set-missing" in kinds,
+            "G25e: an entry with no `frozen_due_set` key at all -> eval-ledger-frozen-due-set-missing (red)",
+        )
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": []}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-due-set-missing" not in kinds,
+            "G25e mutation control: an explicit empty list `[]` satisfies 'always required' -- "
+            "only the KEY's absence is flagged, never an empty VALUE",
+        )
+
+        print("  G25f: two entries disagreeing on frozen_due_set is inconsistent; order alone is not")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]},
+                    {
+                        "eval_id": "RAE-0002",
+                        "attempt_id": "0001-a2",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001", "RAE-0002"],
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-due-set-inconsistent" in kinds,
+            "G25f: entry 1's frozen_due_set (`[RAE-0001]`) disagrees with entry 2's "
+            "(`[RAE-0001, RAE-0002]`) -> eval-ledger-frozen-due-set-inconsistent (red)",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001", "RAE-0002"],
+                    },
+                    {
+                        "eval_id": "RAE-0002",
+                        "attempt_id": "0001-a2",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001", "RAE-0002"],
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-due-set-inconsistent" not in kinds,
+            "G25f mutation control: aligning both entries' frozen_due_set removes the violation",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001", "RAE-0002"],
+                    },
+                    {
+                        "eval_id": "RAE-0002",
+                        "attempt_id": "0001-a2",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0002", "RAE-0001"],
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-due-set-inconsistent" not in kinds,
+            "G25f (order-insensitive): the same two eval_ids in a different order are the same "
+            "due SET, not flagged as inconsistent",
+        )
+
+        print("  G25g: acceptance-evals.json is not legal JSON -> red, never a silent zero-violation return")
+        naive_broken_loader_calls = []
+
+        def _naive_broken_loader(path: Path) -> list:
+            # The exact anti-pattern X1 forbids ("except: return []"), kept
+            # here only to prove the contrast -- never called by production
+            # code.
+            try:
+                json.loads(path.read_text(encoding="utf-8"))
+                return []
+            except Exception:
+                return []
+
+        _rae_ledger_path(project).write_text("{not valid json", encoding="utf-8")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-invalid" in kinds,
+            "G25g: malformed JSON ledger -> eval-ledger-invalid (red), not silently zero violations (X1)",
+        )
+        naive_broken_loader_calls.append(_naive_broken_loader(_rae_ledger_path(project)))
+        check(
+            naive_broken_loader_calls[0] == [],
+            "G25g destructive control: a naive `except Exception: return []` loader (the exact "
+            "anti-pattern X1 forbids) silently reports ZERO violations for this SAME malformed "
+            "file -- check_round_eval_ledger does not take that shortcut, which is the entire "
+            "reason this fixture is red instead of a silent pass",
+        )
+
+        print("  G25h: outcome must be exactly one of pass/fail/error/skipped -- no case-folding, no near-misses")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "PASS", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-invalid-outcome" in kinds,
+            "G25h: outcome `PASS` (wrong case) is not literally in {pass,fail,error,skipped} -> red",
+        )
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-invalid-outcome" not in kinds,
+            "G25h mutation control: lowercase `pass` is accepted",
+        )
+
+        print("  G25i: evals.json top-level unknown key invalidates the WHOLE file")
+        _rae_write_registry(
+            project,
+            {"evals": [{"eval_id": "RAE-0001", "activation_round": 1}], "extra_key": True},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-invalid" in kinds,
+            "G25i: evals.json declares an unknown top-level key (`extra_key`) alongside `evals` "
+            "-> rae-invalid (whole file invalidated, red)",
+        )
+        _rae_write_registry(project, {"evals": [{"eval_id": "RAE-0001", "activation_round": 1}]})
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-invalid" not in kinds,
+            "G25i mutation control: removing the unknown key clears the violation",
+        )
+
+        print("  G25j: eval_id must be unique within evals.json")
+        _rae_write_registry(
+            project,
+            {
+                "evals": [
+                    {"eval_id": "RAE-0001", "activation_round": 1},
+                    {"eval_id": "RAE-0001", "activation_round": 2},
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-duplicate-eval-id" in kinds,
+            "G25j: eval_id `RAE-0001` declared twice in evals.json -> rae-duplicate-eval-id (red)",
+        )
+        _rae_write_registry(
+            project,
+            {
+                "evals": [
+                    {"eval_id": "RAE-0001", "activation_round": 1},
+                    {"eval_id": "RAE-0002", "activation_round": 2},
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-duplicate-eval-id" not in kinds,
+            "G25j mutation control: giving the second entry a distinct eval_id clears the violation",
+        )
+
+        print("  G25 extra: activation_round must be int >= 1, and bool is explicitly excluded")
+        _rae_write_registry(project, {"evals": [{"eval_id": "RAE-0001", "activation_round": True}]})
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-invalid-activation-round" in kinds,
+            "G25 extra: activation_round: true (a bool) is rejected even though "
+            "isinstance(True, int) is True in Python -- red",
+        )
+        _rae_write_registry(project, {"evals": [{"eval_id": "RAE-0001", "activation_round": 1}]})
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "rae-invalid-activation-round" not in kinds,
+            "G25 extra mutation control: activation_round: 1 (a genuine int >= 1) is accepted",
+        )
+
+        print("  G25k: Feedback: negative with an unsatisfied due id does NOT fire the positive-only rule")
+        _rae_write_decision(project, "# Decision\n\n- Feedback: negative\n")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G25k: Feedback: negative with the SAME unsatisfied due eval_id -> the rule stays "
+            "silent (it only constrains positive)",
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G25k mutation control: flipping ONLY Feedback back to positive (identical ledger) "
+            "now fires the rule -- proves G25k's greenness was really about Feedback, not a "
+            "coincidence of ledger state",
+        )
+    finally:
+        shutil.rmtree(g25_root, ignore_errors=True)
+
+    print("  G25l: ledger file absent entirely -> zero violations from the RAE hard rule (OUT-list upper bound)")
+    g25l_root = Path(tempfile.mkdtemp(prefix="hl-rae-g25l-"))
+    try:
+        project = _rae_project(g25l_root)
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        # Deliberately no acceptance-evals.json written at all.
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds
+            and not any(k.startswith("eval-ledger-") for k in kinds)
+            and coverage["rounds_eval_ledger_present"] == 0,
+            "G25l: a round with `Feedback: positive` and NO acceptance-evals.json at all "
+            "produces zero violations from the RAE gate -- the OUT-list upper bound "
+            "'账本文件缺席 ⇒ 本规则零违规', pinned as an executable assertion",
+        )
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G25l mutation control: writing a ledger with an unsatisfied due id under the SAME "
+            "decision.md immediately turns it red -- proves G25l's greenness was specifically "
+            "about file absence, not a coincidental fixture blind spot",
+        )
+    finally:
+        shutil.rmtree(g25l_root, ignore_errors=True)
+
+    print("  G25m: acceptance-evals.json with a duplicate key -> red, proving object_pairs_hook is really wired")
+    g25m_root = Path(tempfile.mkdtemp(prefix="hl-rae-g25m-"))
+    try:
+        project = _rae_project(g25m_root)
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        dup_key_text = (
+            '{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", '
+            '"outcome": "pass", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]}'
+        )
+        _rae_write_ledger(project, dup_key_text)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-invalid" in kinds,
+            "G25m: acceptance-evals.json with a duplicate `outcome` key -> eval-ledger-invalid (red)",
+        )
+        naive = json.loads(dup_key_text)
+        check(
+            naive["entries"][0]["outcome"] == "fail",
+            "G25m destructive control: plain json.loads (the stdlib default, no "
+            "object_pairs_hook) silently accepts this EXACT duplicate-key document and keeps "
+            "only the LAST 'outcome' value ('fail') without complaint -- if "
+            "check_round_eval_ledger used plain json.loads instead of _load_strict_json, this "
+            "fixture would have gone GREEN instead of red",
+        )
+    finally:
+        shutil.rmtree(g25m_root, ignore_errors=True)
+
+    print("  G25n: Feedback with full-width punctuation is fail-closed unparsable, never silently 'not positive'")
+    g25n_root = Path(tempfile.mkdtemp(prefix="hl-rae-g25n-"))
+    try:
+        project = _rae_project(g25n_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive。\n")  # trailing full-width period
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-feedback-unparsable" in kinds,
+            "G25n: `Feedback: positive。` (trailing full-width period, U+3002) does not "
+            "normalize to a known value -> acceptance-eval-feedback-unparsable (red)",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G25n: the positive-without-pass rule does not ALSO fire when Feedback could not "
+            "be determined -- the two kinds are reported as distinct, non-overlapping facts",
+        )
+        naive_normalized = "positive。".strip().lower()
+        check(
+            naive_normalized not in verify_protocol.FEEDBACK_KNOWN_VALUES,
+            "G25n destructive control: the raw value genuinely fails a plain known-set "
+            "membership test after only strip/lower -- if _normalize_feedback's None were "
+            "instead treated as 'not positive' (fail-open) rather than its own violation, this "
+            "fixture would have silently produced zero violations from the RAE gate",
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-feedback-unparsable" not in kinds and "acceptance-eval-positive-without-pass" in kinds,
+            "G25n mutation control: fixing the spelling to plain ASCII `positive` clears the "
+            "unparsable violation and correctly promotes to positive-without-pass (same "
+            "unsatisfied due id, now recognized instead of silently ignored)",
+        )
+    finally:
+        shutil.rmtree(g25n_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[7/8] Round cost settlement smoke test (round_cost.py)")

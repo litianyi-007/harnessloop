@@ -283,6 +283,29 @@ This script enforces only machine-checkable rules:
   still does not decide (whether the review's content is any good, or
   whether a `none — <reason>` reason is adequate).
 
+- RAE (round-acceptance-eval) gate: `<goal>/evals.json` (today's registry,
+  see `check_goal_eval_registry`) and a round's own
+  `evidence/runtime/acceptance-evals.json` ledger (see
+  `check_round_eval_ledger`) are each validated only against their own
+  internal legitimacy — never against each other, and never against any
+  other round or goal (deliberately no cross-time-layer join). One hard
+  rule ties a round's own ledger to that same round's own `decision.md`:
+  every eval_id in the ledger's `frozen_due_set` must have an
+  `outcome == "pass"` entry somewhere in that same ledger, or the round's
+  `Feedback` may not be `positive` (`acceptance-eval-positive-without-pass`).
+  `Feedback` is read with the same `- <label>:` convention as
+  `parse_review_fields`/E4, then normalized (`_normalize_feedback`)
+  fail-closed: a value that does not land in the known
+  positive/negative/neutral/blocked set after only whitespace/case
+  normalization is `acceptance-eval-feedback-unparsable`, never silently
+  treated as "not positive" (this project's own decision.md files routinely
+  carry full-width punctuation, and silently waving that through was a
+  measured defect). See `check_round_eval_ledger`'s docstring for the two
+  upper bounds this gate does not close: a missing ledger produces zero
+  violations from this rule, and `frozen_due_set` is trusted as self-reported
+  by the very round being checked — this gate confirms internal
+  self-consistency, never that the due set is complete.
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
@@ -361,6 +384,32 @@ REVIEW_NONE_RE = re.compile(r"(?i)^none\b\s*(?:[-–—]+\s*)?(.*)$")
 # A `Review digest:` value: exactly 64 hex characters (sha256), so a
 # case-preserved comparison against a computed hexdigest is meaningful.
 REVIEW_DIGEST_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+# RAE (round-acceptance-eval) gate: `<goal>/evals.json` and
+# `<round>/evidence/runtime/acceptance-evals.json` (see `check_goal_eval_registry`,
+# `check_round_eval_ledger`, and the "acceptance-eval-positive-without-pass"
+# hard rule wired into `verify_round`). `RAE_EVAL_ID_RE` is shared by both
+# files: an eval_id in the goal-level registry and a frozen_due_set element
+# in a round ledger are the same identifier shape.
+RAE_EVAL_ID_RE = re.compile(r"^RAE-[0-9]{4}$")
+
+# A ledger `attempt_id`: exactly 4 digits (the round directory name it must
+# match), a literal `-a`, then 1-3 digits (the attempt number). The first
+# group is captured only so the round-prefix comparison in
+# `check_round_eval_ledger` does not have to re-slice the string; the regex
+# match itself is what proves the shape, not the slice.
+ATTEMPT_ID_RE = re.compile(r"^([0-9]{4})-a[0-9]{1,3}$")
+
+# The closed enum a ledger entry's `outcome` field must land in. Any other
+# value (including a near-miss like `"Pass"` or `"passed"`) is
+# `eval-ledger-invalid-outcome` -- this rule does not normalize case or
+# guess intent, unlike `_normalize_feedback` below, which exists specifically
+# because `Feedback:` prose is human-authored and `outcome` is not.
+LEDGER_OUTCOMES = frozenset({"pass", "fail", "error", "skipped"})
+
+# The closed enum a decision.md `Feedback:` value must normalize to (see
+# `_normalize_feedback`). Matches `decision-template.md`'s documented set.
+FEEDBACK_KNOWN_VALUES = frozenset({"positive", "negative", "neutral", "blocked"})
 
 # Noise directories excluded from the Rule B suffix-unique fallback index
 # (`build_suffix_index`): build output, vendored/installed dependencies, and
@@ -2002,6 +2051,447 @@ def _any_base_resolves(cited: str, bases: list[Path], project: Path, want_dir: b
     return False
 
 
+# ---------------------------------------------------------------------------
+# RAE (round-acceptance-eval) gate. Three shapes, one hard rule, all
+# operands from the same round -- deliberately no cross-time-layer join:
+# `<goal>/evals.json` (today's registry, validated only against itself),
+# `<round>/evidence/runtime/acceptance-evals.json` (this round's own
+# ledger, validated only against itself), and the rule tying a round's own
+# `decision.md` Feedback to that same round's own ledger. See
+# `check_goal_eval_registry`, `check_round_eval_ledger`, and the
+# `acceptance-eval-positive-without-pass` / `acceptance-eval-feedback-unparsable`
+# wiring in `verify_round` below.
+# ---------------------------------------------------------------------------
+
+
+def _no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict:
+    """`object_pairs_hook` for `json.load`/`json.loads`: raises `ValueError`
+    on the first duplicate key found in *any* JSON object in the document
+    (nested objects included -- this hook runs once per `{...}` the parser
+    encounters, at every nesting depth, not just the top level).
+
+    Plain `json.loads` (no hook) silently keeps the *last* value for a
+    repeated key and drops the rest without a trace -- exactly backwards for
+    a gate whose entire job is to disagree with a human skimming the file:
+    a reviewer reading `"outcome": "pass", ... "outcome": "fail"` in a diff
+    sees both lines, but `json.loads` hands the gate only `"fail"` (or only
+    `"pass"`, depending on which the parser happens to keep), so the value
+    a human argues about in review and the value the gate actually checks
+    can be one and the same key resolving to two different literal strings.
+    This is the hook that closes that gap for both RAE JSON files (see
+    `_load_strict_json`); it is not wired into any pre-existing JSON reader
+    in this module (`_load_versioned_roots`, `_load_local_bindings`) --
+    "只新增，不改任何已有检查的行为" means those keep their current,
+    unmodified `json.loads` behavior.
+    """
+    seen: set[str] = set()
+    result: dict = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError(f"duplicate key {key!r} in JSON object")
+        seen.add(key)
+        result[key] = value
+    return result
+
+
+def _load_strict_json(path: Path) -> tuple[object | None, str | None]:
+    """Read and parse `path` as JSON, rejecting any object with a duplicate
+    key at any nesting level (`_no_duplicate_keys`).
+
+    Returns `(data, None)` on success -- `data` is whatever `json.loads`
+    would have produced (a `dict`, `list`, or scalar; callers here always
+    expect a top-level `dict` and check that themselves) -- or `(None,
+    message)` on any failure: the file cannot be read, is not valid JSON at
+    all, or contains a duplicate key. This function never raises and never
+    returns partial data; it is the shared strict loader for both
+    `check_goal_eval_registry` and `check_round_eval_ledger`, so a
+    duplicate-key document is rejected identically by both (X1: "JSON
+    语法错误 ... 必须产出违规，绝不能 except: return []" -- the caller
+    turns this `(None, message)` into a violation, it is never swallowed).
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"cannot read {path} ({exc})"
+    try:
+        data = json.loads(text, object_pairs_hook=_no_duplicate_keys)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return None, f"{path} is not valid JSON ({exc})"
+    return data, None
+
+
+def parse_feedback(decision_text: str) -> str | None:
+    """Extract the raw (not yet normalized) `- Feedback:` value from a
+    decision.md.
+
+    Same narrow convention as `parse_review_fields` and the E4 inline
+    Verdict/Residuals parse: a case-insensitive `- <label>:` line prefix,
+    matched against `.strip().lower()`, first occurrence wins, no prose
+    parsing anywhere else in the file. Returns `None` when the field was
+    never written at all -- the caller must not conflate this with
+    `_normalize_feedback` returning `None` for a value that *was* written
+    but could not be recognized; "absent" and "unparsable" are different
+    facts with different consequences (absent: this rule is silent, exactly
+    like a decision.md predating the field; unparsable:
+    `acceptance-eval-feedback-unparsable`, a reported violation, never a
+    silent skip).
+    """
+    for line in decision_text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("- feedback:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def _normalize_feedback(raw: str) -> str | None:
+    """Normalize a raw `Feedback:` value to one of the four known tokens in
+    `FEEDBACK_KNOWN_VALUES`, or `None` if it cannot be confidently
+    normalized.
+
+    Deliberately narrow: only `str.strip()` (which already treats the
+    full-width ideographic space U+3000 as whitespace, verified directly --
+    `"　".isspace()` is `True` on CPython) and ASCII case-folding
+    (`.lower()`) are applied. No punctuation is stripped. This project's
+    own decision.md files routinely carry full-width punctuation (、。－ and
+    friends) around a value, and a naive normalizer that strips trailing
+    punctuation to force a match would silently turn `positive。` into
+    `positive` -- exactly the fail-open shape this function exists to
+    refuse. Instead, a value that does not land in the known set *as-is*
+    (after only whitespace/case normalization) returns `None`, and the
+    caller (`verify_round`) treats that `None` as "could not determine",
+    reporting `acceptance-eval-feedback-unparsable` -- never as "not
+    positive, so the rule does not apply". Conflating those two would let
+    a decision.md silently escape the positive-without-pass rule merely by
+    having a Feedback value the parser could not read, which is the
+    opposite of fail-closed.
+    """
+    normalized = raw.strip().lower()
+    return normalized if normalized in FEEDBACK_KNOWN_VALUES else None
+
+
+def check_goal_eval_registry(goal_dir: Path) -> tuple[list[dict], bool]:
+    """Validate `<goal>/evals.json` against only its own internal
+    legitimacy -- never against any round's data, and never against any
+    other goal (T-taxonomy: this is "today's layer", not a cross-time-layer
+    join; see the module-level RAE section comment above).
+
+    Schema: `{"evals": [{"eval_id": "RAE-0001", "activation_round": 1}]}`.
+
+    All-or-nothing, single `rae-invalid` violation, for anything that makes
+    the document's *shape* untrustworthy (mirrors `_load_versioned_roots`'s
+    "a single bad entry invalidates the entire file" philosophy): the file
+    is not readable JSON at all, contains a duplicate key at any nesting
+    level (`_load_strict_json`), the top level is not a JSON object, the top
+    level declares any key other than `evals` (explicitly required by this
+    gate's own spec: an unknown top-level key invalidates the whole file,
+    not just that key), `evals` is not a list, or any element of `evals` is
+    not itself an object. In every one of these cases exactly one
+    `rae-invalid` violation is returned and no further checks run --
+    reporting also `rae-duplicate-eval-id` for a document whose shape is
+    already untrustworthy would be checking a document this function does
+    not trust to mean anything.
+
+    Once the shape is trustworthy, each entry is checked independently
+    (itemized, not all-or-nothing -- one malformed entry does not stop the
+    others from being checked, unlike the shape failures above):
+
+    - `eval_id` must be a string matching `RAE_EVAL_ID_RE`
+      (`rae-invalid-eval-id` if not -- this also catches a missing
+      `eval_id`, since `dict.get` returns `None`, which is not a string).
+    - `eval_id` must be unique within the file (`rae-duplicate-eval-id`).
+    - `activation_round` must be an `int` and `>= 1`, with `bool` explicitly
+      excluded even though `isinstance(True, int)` is `True` in Python
+      (`rae-invalid-activation-round`).
+
+    A file that does not exist produces zero violations (`文件不存在 → 不报
+    违规` -- this vertical slice does not make the registry mandatory; see
+    the OUT-list entry in harnessloop-loop/SKILL.md).
+
+    Returns `(violations, present)`: `present` is whether the file exists at
+    all (used by the caller, `verify_project`, to accumulate the
+    `goals_eval_registry_present` coverage field -- once per goal, never
+    once per round, since this file lives at the goal level and
+    `verify_round` is called once per round under that goal).
+    """
+    path = goal_dir / "evals.json"
+    if not path.is_file():
+        return [], False
+
+    data, err = _load_strict_json(path)
+    if err is not None:
+        return [{"round": str(goal_dir), "kind": "rae-invalid", "detail": err}], True
+    if not isinstance(data, dict):
+        return (
+            [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: top level must be a JSON object"}],
+            True,
+        )
+    unknown_top = set(data) - {"evals"}
+    if unknown_top:
+        return (
+            [
+                {
+                    "round": str(goal_dir),
+                    "kind": "rae-invalid",
+                    "detail": f"{path}: unknown top-level key(s) {sorted(unknown_top)} -- only 'evals' is allowed",
+                }
+            ],
+            True,
+        )
+    evals_list = data.get("evals", [])
+    if not isinstance(evals_list, list):
+        return (
+            [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: 'evals' must be a list"}],
+            True,
+        )
+    for i, entry in enumerate(evals_list):
+        if not isinstance(entry, dict):
+            return (
+                [{"round": str(goal_dir), "kind": "rae-invalid", "detail": f"{path}: evals[{i}] must be an object"}],
+                True,
+            )
+
+    violations: list[dict] = []
+    seen_ids: set[str] = set()
+    for i, entry in enumerate(evals_list):
+        eval_id = entry.get("eval_id")
+        if not isinstance(eval_id, str) or not RAE_EVAL_ID_RE.match(eval_id):
+            violations.append(
+                {
+                    "round": str(goal_dir),
+                    "kind": "rae-invalid-eval-id",
+                    "detail": f"{path}: evals[{i}].eval_id {eval_id!r} does not match {RAE_EVAL_ID_RE.pattern}",
+                }
+            )
+        elif eval_id in seen_ids:
+            violations.append(
+                {
+                    "round": str(goal_dir),
+                    "kind": "rae-duplicate-eval-id",
+                    "detail": f"{path}: eval_id {eval_id!r} is declared more than once",
+                }
+            )
+        else:
+            seen_ids.add(eval_id)
+
+        activation_round = entry.get("activation_round")
+        if (
+            isinstance(activation_round, bool)
+            or not isinstance(activation_round, int)
+            or activation_round < 1
+        ):
+            violations.append(
+                {
+                    "round": str(goal_dir),
+                    "kind": "rae-invalid-activation-round",
+                    "detail": (
+                        f"{path}: evals[{i}].activation_round {activation_round!r} must be an "
+                        "int >= 1 (a bool is not accepted even though isinstance(True, int) is True)"
+                    ),
+                }
+            )
+    return violations, True
+
+
+def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
+    """Validate `<round>/evidence/runtime/acceptance-evals.json` against
+    only this round's own internal self-consistency.
+
+    Schema: `{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0003-a1",
+    "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]}`.
+
+    All-or-nothing, single `eval-ledger-invalid` violation (same philosophy
+    as `check_goal_eval_registry`'s `rae-invalid`), when the document's
+    shape itself is untrustworthy: unreadable/invalid JSON or a duplicate
+    key at any nesting level (`_load_strict_json`), top level not an
+    object, top level declares any key other than `entries`, `entries` not
+    a list, or any element of `entries` not itself an object.
+
+    Once the shape is trustworthy, each entry is checked independently and
+    itemized:
+
+    - `attempt_id` must be a string matching `ATTEMPT_ID_RE`
+      (`eval-ledger-invalid-attempt-id`), and its leading 4-digit group must
+      equal `round_dir.name` (`eval-ledger-attempt-id-round-mismatch`) --
+      this is a purely lexical, round-local comparison (the ledger's own
+      attempt IDs against the directory name it lives in), never a
+      cross-round join.
+    - `outcome` must be one of `LEDGER_OUTCOMES`
+      (`eval-ledger-invalid-outcome`).
+    - `frozen_due_set` must be present as a key at all -- **always
+      required**, even if the value is `[]` -- (`eval-ledger-frozen-due-set-missing`
+      when the key itself is absent); when present it must be a list of
+      strings (`eval-ledger-frozen-due-set-invalid-type`), each matching
+      `RAE_EVAL_ID_RE` (`eval-ledger-frozen-due-set-invalid-element`).
+    - Every entry's `frozen_due_set` must be identical to every other
+      entry's in this same ledger, compared as sets (order-insensitive --
+      "到期集合" is a set, not a sequence) -- `eval-ledger-frozen-due-set-inconsistent`
+      when two entries disagree. Only checked across entries whose own
+      `frozen_due_set` was itself well-shaped; an entry already flagged
+      `-missing` or `-invalid-type`/`-invalid-element` does not also
+      contribute a second, redundant inconsistency violation.
+
+    A file that does not exist produces zero violations from this
+    function -- deliberately: "账本文件缺席 ⇒ 本规则零违规" is one of the
+    two upper bounds this vertical slice registers in
+    harnessloop-loop/SKILL.md's OUT column, not a gap this function closes.
+
+    Returns `(violations, state)`. `state` keys: `present` (bool, whether
+    the file exists at all -- backs the `rounds_eval_ledger_present`
+    coverage field), `entries_checked` (int, the number of entries this
+    ledger declared, once its shape was trustworthy enough to count --
+    backs `eval_entries_checked`), `due_set` (`frozenset[str] | None`: the
+    single canonical `frozen_due_set` shared by every entry -- an empty
+    frozenset when the ledger declares zero entries, which is vacuously
+    consistent, not undetermined -- or `None` when it genuinely could not
+    be determined: the ledger is absent, shape-invalid, or its entries
+    disagree with each other), and `entries` (the raw,
+    already-validated-as-objects list of entry dicts, or `None`).
+    `verify_round`'s positive-without-pass rule reads
+    `due_set`/`entries` and does nothing when `due_set` is `None` -- it does
+    not re-derive a due set some other way, and it never reports a second,
+    speculative violation on top of whatever `-invalid`/`-inconsistent`
+    violation this function already reported for the same root cause.
+
+    What this function does **not** decide, restated at the one place a
+    reader is most likely to look for it: whether `frozen_due_set` is
+    *complete* -- i.e., whether some eval that *should* have come due this
+    round is missing from it entirely. `frozen_due_set` is written by the
+    same round this function is checking; this function only proves the
+    ledger agrees with itself about what it claims is due, never that the
+    claim is honest (second OUT-list upper bound).
+    """
+    path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+    state: dict = {"present": False, "entries_checked": 0, "due_set": None, "entries": None}
+    if not path.is_file():
+        return [], state
+    state["present"] = True
+
+    data, err = _load_strict_json(path)
+    if err is not None:
+        return [{"round": str(round_dir), "kind": "eval-ledger-invalid", "detail": err}], state
+    if not isinstance(data, dict):
+        return (
+            [{"round": str(round_dir), "kind": "eval-ledger-invalid", "detail": f"{path}: top level must be a JSON object"}],
+            state,
+        )
+    unknown_top = set(data) - {"entries"}
+    if unknown_top:
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-invalid",
+                    "detail": f"{path}: unknown top-level key(s) {sorted(unknown_top)} -- only 'entries' is allowed",
+                }
+            ],
+            state,
+        )
+    entries_list = data.get("entries", [])
+    if not isinstance(entries_list, list):
+        return (
+            [{"round": str(round_dir), "kind": "eval-ledger-invalid", "detail": f"{path}: 'entries' must be a list"}],
+            state,
+        )
+    for i, entry in enumerate(entries_list):
+        if not isinstance(entry, dict):
+            return (
+                [{"round": str(round_dir), "kind": "eval-ledger-invalid", "detail": f"{path}: entries[{i}] must be an object"}],
+                state,
+            )
+
+    state["entries_checked"] = len(entries_list)
+    state["entries"] = entries_list
+    round_label = round_dir.name
+
+    violations: list[dict] = []
+    clean_due_sets: list[frozenset] = []
+    for i, entry in enumerate(entries_list):
+        attempt_id = entry.get("attempt_id")
+        if not isinstance(attempt_id, str) or not ATTEMPT_ID_RE.match(attempt_id):
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-invalid-attempt-id",
+                    "detail": f"{path}: entries[{i}].attempt_id {attempt_id!r} does not match {ATTEMPT_ID_RE.pattern}",
+                }
+            )
+        else:
+            prefix = attempt_id.split("-", 1)[0]
+            if prefix != round_label:
+                violations.append(
+                    {
+                        "round": str(round_dir),
+                        "kind": "eval-ledger-attempt-id-round-mismatch",
+                        "detail": (
+                            f"{path}: entries[{i}].attempt_id {attempt_id!r} does not belong to "
+                            f"round {round_label!r} (leading 4 digits must equal the round directory name)"
+                        ),
+                    }
+                )
+
+        outcome = entry.get("outcome")
+        if outcome not in LEDGER_OUTCOMES:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-invalid-outcome",
+                    "detail": f"{path}: entries[{i}].outcome {outcome!r} is not one of {sorted(LEDGER_OUTCOMES)}",
+                }
+            )
+
+        if "frozen_due_set" not in entry:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-due-set-missing",
+                    "detail": f"{path}: entries[{i}] is missing required field 'frozen_due_set' (always required, even as [])",
+                }
+            )
+            continue
+        due = entry["frozen_due_set"]
+        if not isinstance(due, list) or not all(isinstance(d, str) for d in due):
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-due-set-invalid-type",
+                    "detail": f"{path}: entries[{i}].frozen_due_set must be a list of strings",
+                }
+            )
+            continue
+        bad_elements = [d for d in due if not RAE_EVAL_ID_RE.match(d)]
+        if bad_elements:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-due-set-invalid-element",
+                    "detail": f"{path}: entries[{i}].frozen_due_set contains invalid eval_id(s) {bad_elements}",
+                }
+            )
+            continue
+        clean_due_sets.append(frozenset(due))
+
+    if entries_list and len(clean_due_sets) == len(entries_list):
+        distinct = {frozenset(s) for s in clean_due_sets}
+        if len(distinct) > 1:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-due-set-inconsistent",
+                    "detail": f"{path}: entries disagree on frozen_due_set -- this ledger's due set must be one single set",
+                }
+            )
+        else:
+            state["due_set"] = next(iter(distinct))
+    elif not entries_list:
+        # A ledger declaring zero entries has no frozen_due_set to disagree
+        # about -- vacuously a single, empty canonical due set, not "cannot
+        # determine". `entries_checked` is already 0 (see above), so this
+        # is honestly reported as "0 entries, 0 due" rather than "unknown".
+        state["due_set"] = frozenset()
+
+    return violations, state
+
+
 def parse_review_fields(decision_text: str) -> dict[str, str | None]:
     """Extract the four B2a review-declaration fields from a decision.md.
 
@@ -2411,6 +2901,19 @@ def verify_round(
                     }
                 )
 
+    # RAE gate, part 1: this round's own ledger
+    # (`evidence/runtime/acceptance-evals.json`), checked unconditionally --
+    # like scope-lock above, independent of whether the round has any other
+    # evidence/review artifacts, and independent of whether decision.md
+    # exists at all. `ledger_state` is threaded into the decision.md block
+    # below so the positive-without-pass rule never re-reads or re-parses
+    # the ledger a second time.
+    ledger_violations, ledger_state = check_round_eval_ledger(round_dir)
+    violations.extend(ledger_violations)
+    if ledger_state["present"]:
+        coverage["rounds_eval_ledger_present"] = 1
+    coverage["eval_entries_checked"] = ledger_state["entries_checked"]
+
     if checked_files and spans:
         coverage["rule_a_files"] = len(checked_files)
         for file_path in checked_files:
@@ -2609,6 +3112,67 @@ def verify_round(
         if review_state["digest_declared"]:
             coverage["rounds_review_digest_declared"] += 1
 
+        # RAE gate, part 2: the hard rule. Every operand here comes from
+        # this same round -- `decision_text` (already read above) and
+        # `ledger_state` (already computed, unconditionally, earlier in
+        # this function) -- never a prior round's ledger, never the goal's
+        # `evals.json` (that file is validated only against itself by
+        # `check_goal_eval_registry`, called once per goal by
+        # `verify_project`; it is never read here).
+        #
+        # Feedback is read with the same narrow convention as
+        # `parse_review_fields`/E4: absent means this rule stays silent
+        # (zero-migration, exactly like E4) -- it is only a *written but
+        # unrecognized* value that is fail-closed
+        # (`acceptance-eval-feedback-unparsable`), never a silent skip.
+        raw_feedback = parse_feedback(decision_text)
+        if raw_feedback is not None:
+            normalized_feedback = _normalize_feedback(raw_feedback)
+            if normalized_feedback is None:
+                violations.append(
+                    {
+                        "round": str(round_dir),
+                        "kind": "acceptance-eval-feedback-unparsable",
+                        "detail": (
+                            f"{decision} declares `Feedback: {raw_feedback}`, which does not "
+                            "normalize to one of positive/negative/neutral/blocked -- the "
+                            "acceptance-eval positive-without-pass rule cannot be evaluated for "
+                            "this round and is not silently skipped (fail-closed: full-width "
+                            "punctuation or other unrecognized spelling must be reported, not "
+                            "quietly treated as 'not positive')"
+                        ),
+                    }
+                )
+            elif normalized_feedback == "positive" and ledger_state["due_set"] is not None:
+                # Only evaluated when this round's own ledger produced a
+                # single, self-consistent frozen_due_set (see
+                # `check_round_eval_ledger`'s docstring) -- when the ledger
+                # is absent, shape-invalid, or internally inconsistent,
+                # `due_set` is `None` and this rule stays silent for this
+                # round: the ledger's own problem (or its plain absence,
+                # the first OUT-list upper bound) is not compounded with a
+                # second, speculative violation about a due set this
+                # function cannot actually determine.
+                pass_ids = {
+                    entry.get("eval_id")
+                    for entry in (ledger_state["entries"] or [])
+                    if entry.get("outcome") == "pass" and isinstance(entry.get("eval_id"), str)
+                }
+                unsatisfied = sorted(ledger_state["due_set"] - pass_ids)
+                if unsatisfied:
+                    ledger_path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+                    violations.append(
+                        {
+                            "round": str(round_dir),
+                            "kind": "acceptance-eval-positive-without-pass",
+                            "detail": (
+                                f"{decision} declares `Feedback: positive` but "
+                                f"{ledger_path} has no outcome==\"pass\" entry for "
+                                f"frozen_due_set eval_id(s) {unsatisfied}"
+                            ),
+                        }
+                    )
+
     return violations, coverage
 
 
@@ -2631,6 +3195,21 @@ def _empty_coverage() -> dict:
         "rounds_review_none": 0,
         "rounds_review_missing_fields": 0,
         "rounds_review_digest_declared": 0,
+        # RAE gate (`check_round_eval_ledger`, wired into `verify_round`):
+        # ordinary per-round fields, accumulated by the same
+        # `coverage[key] += round_coverage[key]` loop `verify_project` already
+        # runs over every other per-round field.
+        "rounds_eval_ledger_present": 0,
+        "eval_entries_checked": 0,
+        # RAE gate (`check_goal_eval_registry`): goal-level, not round-level --
+        # `<goal>/evals.json` lives once per goal, not once per round, so this
+        # field is incremented directly by `verify_project`'s goal loop (once
+        # per goal whose registry file exists), never by the per-round
+        # accumulation loop below. Every round's own local `coverage =
+        # _empty_coverage()` leaves this at 0 (mirrors how `external_roots_*`
+        # stays 0 through that same per-round loop -- see the comment on
+        # those fields immediately below).
+        "goals_eval_registry_present": 0,
         # PR-3 (external-citation-base-spec-20260727.md §2.7): the two
         # `external_roots_*` fields are project-level and assigned exactly
         # once by `verify_project`, *after* its round loop -- never
@@ -2740,6 +3319,18 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         if escape is not None:
             violations.append(escape)
             continue
+
+        # RAE gate: `<goal>/evals.json` lives once per goal, not once per
+        # round -- checked here, once per goal_dir, rather than inside
+        # `verify_round` (which runs once per round under this same goal
+        # and would otherwise re-validate, and re-count, the identical file
+        # once per round). See `check_goal_eval_registry`'s docstring for
+        # exactly what "only its own internal legitimacy" means here.
+        eval_registry_violations, eval_registry_present = check_goal_eval_registry(goal_dir)
+        violations.extend(eval_registry_violations)
+        if eval_registry_present:
+            coverage["goals_eval_registry_present"] += 1
+
         rounds_dir = goal_dir / "rounds"
         if not rounds_dir.is_dir():
             continue
@@ -2880,6 +3471,9 @@ def main() -> int:
             f"review_none={coverage['rounds_review_none']} "
             f"review_missing_fields={coverage['rounds_review_missing_fields']} "
             f"review_digest_declared={coverage['rounds_review_digest_declared']} "
+            f"goals_eval_registry_present={coverage['goals_eval_registry_present']} "
+            f"rounds_eval_ledger_present={coverage['rounds_eval_ledger_present']} "
+            f"eval_entries_checked={coverage['eval_entries_checked']} "
             f"external_roots_declared={coverage['external_roots_declared']} "
             f"external_roots_available={coverage['external_roots_available']} "
             f"external_citations_checked={coverage['external_citations_checked']} "
