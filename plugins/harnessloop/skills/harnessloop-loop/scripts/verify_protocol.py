@@ -4882,6 +4882,103 @@ def collect_scope_lock_round_path_mismatch_notes(project: Path) -> list[str]:
     return notes
 
 
+def collect_zero_inspected_round_notes(project: Path) -> list[str]:
+    """Break `rounds_zero_inspected` down by round, for `main()`'s CLI
+    display only -- the same rationale as
+    `collect_scope_lock_round_path_mismatch_notes` above: a second,
+    independent, human-mode-only pass rather than a third value threaded
+    through `verify_project`'s two-value return (see that function's own
+    docstring for why growing the tuple is avoided).
+
+    Evolution-issues precedent for *why* this exists (this project's own
+    TH-0026 write-up): "诚实的计数器 + 无人消费 = 与不存在几乎等价" -- an
+    honest count that names no rounds and backs no decision is barely
+    distinguishable from not existing at all. This adds no judgment
+    `verify_round` did not already make when it set
+    `coverage["rounds_zero_inspected"]` for that same round (mirrored here
+    via the same `_container_escape_violation` + `_scan_round_artifacts`
+    pair `verify_round` itself uses), so a round reported here is always
+    exactly one of the rounds that already incremented the real coverage
+    field -- never a second, drifting definition of "zero-inspected".
+
+    Zero inspection is a documented boundary, never a violation
+    (harnessloop-loop/SKILL.md: a round with nothing under `evidence/` or
+    `reviews/` "still exits 0 and is counted in rounds_zero_inspected,
+    which means 'nothing to check', not 'checked and clean'"). Every note
+    this returns says so explicitly so the breakdown cannot be misread as
+    "these rounds have a problem" -- it is the opposite: it is telling the
+    reader exactly which rounds were never a claim about cleanliness in
+    the first place.
+
+    Each zero-inspected round is classified into exactly one of three
+    mechanically-decided reasons (never a fourth, never a judgment call):
+      - neither `evidence/` nor `reviews/` exists as a directory;
+      - both exist but contain zero files between them (via
+        `_scan_round_artifacts`, so a dangling/escaping symlink entry is
+        correctly not counted as a file, same as the real gate);
+      - exactly one of the two exists (the other does not), and between
+        them there are zero files.
+    A container whose containment check itself fails
+    (`_container_escape_violation`) is folded into "does not exist" for
+    this note's purposes -- `verify_round` never scans it either, so it
+    contributes no files here just as it contributes none there; the
+    escape itself is already reported loudly as its own
+    `round-container-escapes-project` violation, so this hint-only note
+    does not need a fourth reason tier to say the same thing twice.
+
+    Never raises on a malformed tree -- worst case is a missed note, never
+    a crash of the real gate (same discipline as the sibling collector
+    above).
+    """
+    notes: list[str] = []
+    goals_dir = project / ".harnessloop" / "goals"
+    if not goals_dir.is_dir():
+        return notes
+    for goal_dir in sorted(p for p in goals_dir.iterdir() if p.is_dir()):
+        rounds_dir = goal_dir / "rounds"
+        if not rounds_dir.is_dir():
+            continue
+        for round_dir in sorted(p for p in rounds_dir.iterdir() if p.is_dir()):
+            exists: dict[str, bool] = {}
+            file_count = 0
+            for sub in ("evidence", "reviews"):
+                container = round_dir / sub
+                if _container_escape_violation(container, project, round_dir) is not None:
+                    exists[sub] = False
+                    continue
+                exists[sub] = container.is_dir()
+                if exists[sub]:
+                    files, _artifact_violations = _scan_round_artifacts(
+                        container, project, round_dir
+                    )
+                    file_count += len(files)
+            if file_count > 0:
+                continue
+
+            if not exists["evidence"] and not exists["reviews"]:
+                reason = "evidence/ and reviews/ neither exists"
+            elif exists["evidence"] and exists["reviews"]:
+                reason = "evidence/ and reviews/ both exist but contain zero files between them"
+            else:
+                present = "evidence/" if exists["evidence"] else "reviews/"
+                reason = (
+                    f"only {present} exists (the other does not), and between them "
+                    "there are zero files"
+                )
+
+            try:
+                round_label = str(round_dir.relative_to(project))
+            except ValueError:
+                round_label = str(round_dir)
+            notes.append(
+                f"round {round_label} had nothing to inspect — {reason}. This is the "
+                'boundary SKILL.md documents ("nothing to check" is not "checked and '
+                'clean") -- not a violation, and it does not mean this round has a '
+                "problem."
+            )
+    return notes
+
+
 def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
     coverage = _empty_coverage()
@@ -5152,6 +5249,15 @@ def main() -> int:
         if coverage["rounds_scope_lock_round_path_mismatch"] > 0:
             for note in collect_scope_lock_round_path_mismatch_notes(project):
                 print(f"  note (non-blocking, TH-0026): {note}")
+        # Same boundary as the TH-0026 block above -- human mode only, never
+        # affects exit code, violations, or the `--json` coverage schema.
+        # `rounds_zero_inspected` was already an honest count before this;
+        # this only makes it legible by naming which rounds contributed and
+        # why (`collect_zero_inspected_round_notes`), per this project's own
+        # "诚实的计数器 + 无人消费 = 与不存在几乎等价" finding (TH-0026).
+        if coverage["rounds_zero_inspected"] > 0:
+            for note in collect_zero_inspected_round_notes(project):
+                print(f"  note (non-blocking, informational): {note}")
         if args.show_root_paths:
             # Deliberately the *only* place a reference root's local path is
             # ever printed (G20 pins violation detail / coverage line /

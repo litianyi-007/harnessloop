@@ -7499,6 +7499,108 @@ def validate_protocol_gates() -> None:
         "blind spot as bare \\d) -- pinned language-behavior fact",
     )
 
+    # -------------------------------------------------------------------
+    # G36: teeth for `collect_zero_inspected_round_notes` (this task's own
+    # change) -- `rounds_zero_inspected` broken down by round, by name, in
+    # human-mode output. This adds no new violation kind, no new coverage
+    # key, and no exit-code change; this batch exists to prove exactly that
+    # boundary holds while the breakdown itself does what it claims (reuses
+    # G32's `_loop_project` / `_loop_round` / `_loop_round_dir` fixture
+    # helpers above).
+    # -------------------------------------------------------------------
+
+    print(
+        "  G36a: a round with neither evidence/ nor reviews/ -> zero new "
+        "violations, rounds_zero_inspected == 1; adding one file under "
+        "reviews/ -> 0 (reverse mutation)"
+    )
+    g36_root = REPO_ROOT / ".tmp" / f"verify-fixture-g36a-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g36_root)
+        _loop_round(project, "0001")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G36a: a round with a valid scope-lock and no evidence/ or reviews/ at "
+            f"all produces zero violations (got {violations})",
+        )
+        check(
+            coverage.get("rounds_zero_inspected") == 1,
+            "G36a: rounds_zero_inspected counts this round exactly once (got "
+            f"{coverage.get('rounds_zero_inspected')!r})",
+        )
+
+        (_loop_round_dir(project, "0001") / "reviews").mkdir(parents=True, exist_ok=True)
+        (_loop_round_dir(project, "0001") / "reviews" / "review.md").write_text(
+            "reviewed.\n", encoding="utf-8"
+        )
+        _, coverage = verify_protocol.verify_project(project)
+        check(
+            coverage.get("rounds_zero_inspected") == 0,
+            "G36a reverse mutation: adding ONE file under reviews/ (evidence/ still "
+            "absent) clears rounds_zero_inspected to 0 -- proves the count genuinely "
+            "depended on both being empty, not a vacuous always-1 path (got "
+            f"{coverage.get('rounds_zero_inspected')!r})",
+        )
+    finally:
+        shutil.rmtree(g36_root, ignore_errors=True)
+
+    print(
+        "  G36b: two zero-inspected rounds -> rounds_zero_inspected == 2 "
+        "(summed per round, not a saturating boolean)"
+    )
+    g36_root = REPO_ROOT / ".tmp" / f"verify-fixture-g36b-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g36_root)
+        _loop_round(project, "0001")
+        _loop_round(project, "0002")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            f"G36b: two clean, empty rounds produce zero violations (got {violations})",
+        )
+        check(
+            coverage.get("rounds_zero_inspected") == 2 and coverage.get("rounds") == 2,
+            "G36b: rounds_zero_inspected sums across rounds (both empty -> 2), not "
+            f"a saturating boolean (got {coverage.get('rounds_zero_inspected')!r} of "
+            f"{coverage.get('rounds')!r} rounds)",
+        )
+
+        notes = verify_protocol.collect_zero_inspected_round_notes(project)
+        check(
+            len(notes) == 2
+            and any("0001" in n for n in notes)
+            and any("0002" in n for n in notes),
+            f"G36b: collect_zero_inspected_round_notes names both rounds, not just "
+            f"the last one checked (got {notes!r})",
+        )
+    finally:
+        shutil.rmtree(g36_root, ignore_errors=True)
+
+    print(
+        "  G36c: a project with only zero-inspected rounds and nothing else "
+        "wrong -- verify_protocol.py's real subprocess exit code is still 0"
+    )
+    g36_root = REPO_ROOT / ".tmp" / f"verify-fixture-g36c-{uuid.uuid4().hex}"
+    try:
+        project = _loop_project(g36_root)
+        _loop_round(project, "0001")
+        result = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(project))
+        check(
+            result.returncode == 0,
+            "G36c: verify_protocol.py's real subprocess exit code is 0 for a "
+            f"project whose only round is zero-inspected (got {result.returncode}, "
+            f"stdout={result.stdout!r}, stderr={result.stderr!r})",
+        )
+        check(
+            "passed, but not a clean sweep" in result.stdout
+            and "note (non-blocking, informational): round" in result.stdout,
+            "G36c: human-mode stdout still carries the qualified banner and the new "
+            f"per-round breakdown note (got stdout={result.stdout!r})",
+        )
+    finally:
+        shutil.rmtree(g36_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")
