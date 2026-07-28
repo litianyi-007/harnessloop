@@ -956,6 +956,102 @@ def _case_fixture_class(wiki, alt) -> str:
     return "usable"
 
 
+def _classify_dotdot_symlink_resolution(resolved, outside_target, inside_target) -> str:
+    """Pure classification: given an already-`.resolve()`d candidate and the
+    two possible (already-resolved) landing spots for a `link/../probe.txt`
+    round-trip, decide which of T-064 MUST-FIX C's two real-world platform
+    semantics it matches. Split out from `_dotdot_symlink_semantics` (which
+    builds the real on-disk scenario) so G30a can drive both branches from
+    fabricated inputs -- anything duck-typed enough to support `==` -- on
+    every platform, instead of needing two physically different
+    filesystems.
+
+    - "canonical": `resolved` is the *outside* target -- `Path.resolve()`
+      followed the symlink to its real location before applying the
+      trailing `..` (matches macos-latest/ubuntu-latest).
+    - "lexical": `resolved` is the *inside* target (or, in the real
+      probe, simply does not exist) -- `..` was erased before the symlink
+      was ever consulted, so the round-trip never left the symlink's own
+      lexical parent (matches windows-latest).
+    - "unrecognized": neither -- a third semantics this module does not
+      yet model. Callers must fail loudly on this, not silently skip.
+    """
+    if resolved == outside_target:
+        return "canonical"
+    if resolved == inside_target:
+        return "lexical"
+    return "unrecognized"
+
+
+def _dotdot_symlink_semantics(tmp_root: Path) -> str:
+    """Classify, via a real on-disk symlink + `..` round-trip (never
+    `sys.platform`), whether THIS platform's path resolution treats a
+    project-internal symlink pointing outside the project, cited as
+    `link/../probe.txt`, canonically or lexically -- computed ONCE and
+    shared by all three T-064 MUST-FIX C counterexamples below
+    (`symlink_dotdot_normpath_order`: direct base x2, `.gitmodules` base
+    x1) so they classify the same way instead of each re-probing (and
+    risking three different verdicts about the same platform).
+
+    Builds `inside/link -> outside/sub` (a project-internal symlink to an
+    outside directory -- exactly the T-064 shape) plus a same-named probe
+    file on both sides of the boundary, then resolves
+    `inside/link/../probe.txt` with `Path.resolve(strict=False)` (the same
+    primitive `_canonical`/`_is_contained` use) and classifies which file
+    it actually lands on via `_classify_dotdot_symlink_resolution`:
+
+    - "canonical" (matches macos-latest/ubuntu-latest): lands on
+      `outside/probe.txt`. Confirmed directly from the `posixpath` source
+      (`_joinrealpath`), not merely inferred: it walks the path
+      component-by-component, resolving symlinks in place and applying a
+      following `..` against the *already-resolved* accumulator -- exactly
+      what the kernel itself does. The T-064 MUST-FIX C fixtures below
+      reproduce their documented escape end-to-end on this platform.
+    - "lexical" (matches windows-latest): lands on `inside/probe.txt` (or
+      resolves to a nonexistent path under `inside/`). Confirmed directly
+      from the `ntpath` source, not merely inferred: `ntpath.realpath`'s
+      first executable statement is `path = normpath(path)` -- a pure
+      string collapse with zero filesystem access -- run *before*
+      `_getfinalpathname` (the actual reparse-point-following call) is
+      ever reached, so a symlink fully cancelled by a matching `..` is
+      erased from the string before the OS gets a chance to substitute
+      it. The specific "symlink-then-`..`" shape is not constructible via
+      this primitive on this platform; the fixtures below skip that
+      specific shape honestly. This does NOT mean the project boundary
+      itself goes unchecked here: T-063 MUST-FIX 2
+      (`symlink_containment_escape`) already covers a symlink escape that
+      does not involve `..` (the `link/pkg/ghost.py` fixture above, plus
+      G30b below), live, on every platform -- unaffected by this
+      lexical-vs-canonical distinction since there is no `..` for lexical
+      processing to erase.
+    - "unsupported": `os.symlink` unavailable or failed on this
+      filesystem -- mirrors the existing `symlinks_supported` skip path
+      used throughout this file.
+    """
+    if not hasattr(os, "symlink"):
+        return "unsupported"
+    probe_root = tmp_root / f"dotdot-semantics-probe-{uuid.uuid4().hex}"
+    inside = probe_root / "inside"
+    outside = probe_root / "outside"
+    try:
+        inside.mkdir(parents=True)
+        (outside / "sub").mkdir(parents=True)
+        (outside / "probe.txt").write_text("outside\n", encoding="utf-8")
+        (inside / "probe.txt").write_text("inside\n", encoding="utf-8")
+        try:
+            (inside / "link").symlink_to(outside / "sub", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            return "unsupported"
+        resolved = (inside / "link/../probe.txt").resolve(strict=False)
+        return _classify_dotdot_symlink_resolution(
+            resolved,
+            (outside / "probe.txt").resolve(strict=False),
+            (inside / "probe.txt").resolve(strict=False),
+        )
+    finally:
+        shutil.rmtree(probe_root, ignore_errors=True)
+
+
 def validate_protocol_gates() -> None:
     print("[7/9] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
@@ -2265,6 +2361,21 @@ def validate_protocol_gates() -> None:
 
     print("  T-064: suffix downgrade to hint-only + MUST-FIX B/C (final decision, user-confirmed 2026-07-26)")
 
+    # Computed ONCE and shared by both T-064 MUST-FIX C counterexamples below
+    # (direct base and .gitmodules base) -- see `_dotdot_symlink_semantics`
+    # docstring. A runtime probe, not a `sys.platform` check: this is what
+    # lets the three fixtures below tell an actual, still-live escape apart
+    # from a platform where the specific `..`-cancellation shape they test
+    # cannot be constructed at all.
+    _dotdot_semantics = _dotdot_symlink_semantics(REPO_ROOT / ".tmp")
+    check(
+        _dotdot_semantics in ("canonical", "lexical", "unsupported"),
+        f"_dotdot_symlink_semantics returned a recognized classification (got {_dotdot_semantics!r}) "
+        "-- 'unrecognized' would mean this platform's symlink-then-`..` resolution matches "
+        "neither modeled semantics and the T-064 MUST-FIX C fixtures below need a human to look "
+        "at this platform, not a silent skip",
+    )
+
     # T-064 MUST-FIX C counterexample 1/2: symlink_dotdot_normpath_order, direct base.
     # `link/../escape.md` where `link` is a project-internal symlink pointing OUTSIDE
     # the project. Pre-fix, `_resolve_in_project` normpath-folded the join BEFORE
@@ -2314,32 +2425,64 @@ def validate_protocol_gates() -> None:
                     "erases `link/..` and lands on the coincidentally-named in-project "
                     "`escape.md`, reporting it contained (proves MUST-FIX C is load-bearing)",
                 )
-                resolved = verify_protocol._resolve_in_project(
-                    order_project, "link/../escape.md", order_project
-                )
-                check(
-                    resolved is None,
-                    "_resolve_in_project rejects `link/../escape.md`: canonical-first "
-                    "resolution follows `link` to its real (outside-the-project) target "
-                    "before applying `..`, instead of silently accepting a "
-                    "coincidentally-named in-project file (T-064 MUST-FIX C: "
-                    "symlink_dotdot_normpath_order, direct base)",
-                )
+                if _dotdot_semantics == "canonical":
+                    resolved = verify_protocol._resolve_in_project(
+                        order_project, "link/../escape.md", order_project
+                    )
+                    check(
+                        resolved is None,
+                        "_resolve_in_project rejects `link/../escape.md`: canonical-first "
+                        "resolution follows `link` to its real (outside-the-project) target "
+                        "before applying `..`, instead of silently accepting a "
+                        "coincidentally-named in-project file (T-064 MUST-FIX C: "
+                        "symlink_dotdot_normpath_order, direct base)",
+                    )
 
-                (round_dir9 / "reviews" / "order.md").write_text(
-                    "Citation escaping through a symlink-then-`..` round-trip, must NOT "
-                    "resolve (and must not silently land on the coincidentally-named "
-                    "in-project file of the same basename):\n"
-                    "- `link/../escape.md`\n",
-                    encoding="utf-8",
-                )
-                violations, _cov = verify_protocol.verify_project(order_project)
-                check(
-                    any("link/../escape.md" in v["detail"] for v in violations),
-                    "verify reports `link/../escape.md` as dangling instead of resolving "
-                    "it against the wrong coincidentally-named project-internal file "
-                    "(T-064 MUST-FIX C: symlink_dotdot_normpath_order, end-to-end direct base)",
-                )
+                    (round_dir9 / "reviews" / "order.md").write_text(
+                        "Citation escaping through a symlink-then-`..` round-trip, must NOT "
+                        "resolve (and must not silently land on the coincidentally-named "
+                        "in-project file of the same basename):\n"
+                        "- `link/../escape.md`\n",
+                        encoding="utf-8",
+                    )
+                    violations, _cov = verify_protocol.verify_project(order_project)
+                    check(
+                        any("link/../escape.md" in v["detail"] for v in violations),
+                        "verify reports `link/../escape.md` as dangling instead of resolving "
+                        "it against the wrong coincidentally-named project-internal file "
+                        "(T-064 MUST-FIX C: symlink_dotdot_normpath_order, end-to-end direct base)",
+                    )
+                elif _dotdot_semantics == "lexical":
+                    print(
+                        "  (skipped: symlink_dotdot_normpath_order direct-base counterexample -- "
+                        "this platform's own path resolution treats `link/..` lexically (verified "
+                        "via a live probe, `_dotdot_symlink_semantics`, not sys.platform): `..` is "
+                        "erased from the string before `link` is ever recognized as a symlink, so "
+                        "`link/../escape.md` never reaches through the symlink at all -- there is "
+                        "no escape shape to detect here on this platform. Cross-platform coverage "
+                        "is not lost: T-063 MUST-FIX 2 (symlink_containment_escape, "
+                        "`link/pkg/ghost.py` above, and G30b below) still runs live on every "
+                        "platform and rejects the genuinely dangerous shape -- a project-internal "
+                        "symlink cited WITHOUT `..` -- which this lexical-vs-canonical distinction "
+                        "does not affect.)"
+                    )
+                elif _dotdot_semantics == "unsupported":
+                    # Rare inconsistency window: the shared probe's own (separate)
+                    # symlink attempt failed even though this fixture's just succeeded.
+                    # Fall back to the pre-existing honest skip rather than asserting
+                    # something the probe could not classify.
+                    print(
+                        "  (skipped: symlinks unsupported per the shared "
+                        "_dotdot_symlink_semantics probe -- symlink_dotdot_normpath_order "
+                        "direct-base counterexample)"
+                    )
+                else:
+                    check(
+                        False,
+                        "T-064 MUST-FIX C direct-base counterexample: _dotdot_symlink_semantics "
+                        f"returned {_dotdot_semantics!r} for this platform, neither 'canonical' "
+                        "nor 'lexical' -- this needs a human to look at, not a silent skip",
+                    )
             else:
                 print("  (skipped: symlinks unsupported -- symlink_dotdot_normpath_order direct-base counterexample)")
         finally:
@@ -2386,20 +2529,70 @@ def validate_protocol_gates() -> None:
                 )
 
                 # Mutation control: reproduce the pre-fix order verbatim and confirm it
-                # WOULD accept this .gitmodules path as a resolution base.
-                old_style_candidate = Path(os.path.normpath(str(gm_project / "smod/../mod")))
-                raw_candidate = gm_project / "smod/../mod"
-                check(
-                    verify_protocol._is_contained(old_style_candidate, gm_project)
-                    and raw_candidate.is_dir()
-                    and verify_protocol._canonical(raw_candidate) == verify_protocol._canonical(gm_outside / "mod"),
-                    "mutation control: the pre-T-064 order containment-checks a "
-                    "normpath-folded (always 'inside') copy while accepting the RAW "
-                    "candidate's is_dir() (which follows the symlink to the real, "
-                    "escaping `outside/mod`) -- the two disagree, proving MUST-FIX C is "
-                    "load-bearing for the .gitmodules path too",
-                )
+                # WOULD accept this .gitmodules path as a resolution base. Gated on
+                # `_dotdot_semantics` (not the fixture below it, which stays live either
+                # way -- see the "lexical" branch comment): the disagreement this
+                # mutation control demonstrates is specifically `_canonical()` (which
+                # goes through `Path.resolve()`) folding `smod/..` away lexically while
+                # `is_dir()` follows the symlink for real. On a platform where THIS
+                # module's probe classifies as "lexical" (windows-latest), Windows's own
+                # path-canonicalization step already erases `smod/..` for every Win32
+                # file API `Path.is_dir()`/`os.stat()` eventually calls too (not just
+                # `Path.resolve()`) -- so `raw_candidate.is_dir()` is also `False` there,
+                # both sides agree (safely: nothing is found, not "found and accepted"),
+                # and this specific disagreement-shaped assertion does not hold, though
+                # no escape happens either (see the roots/end-to-end checks below, which
+                # stay live and passing on this platform for exactly that reason).
+                if _dotdot_semantics == "canonical":
+                    old_style_candidate = Path(os.path.normpath(str(gm_project / "smod/../mod")))
+                    raw_candidate = gm_project / "smod/../mod"
+                    check(
+                        verify_protocol._is_contained(old_style_candidate, gm_project)
+                        and raw_candidate.is_dir()
+                        and verify_protocol._canonical(raw_candidate) == verify_protocol._canonical(gm_outside / "mod"),
+                        "mutation control: the pre-T-064 order containment-checks a "
+                        "normpath-folded (always 'inside') copy while accepting the RAW "
+                        "candidate's is_dir() (which follows the symlink to the real, "
+                        "escaping `outside/mod`) -- the two disagree, proving MUST-FIX C is "
+                        "load-bearing for the .gitmodules path too",
+                    )
+                elif _dotdot_semantics == "lexical":
+                    print(
+                        "  (skipped: symlink_dotdot_normpath_order .gitmodules-base mutation "
+                        "control -- this platform's own path canonicalization erases `smod/..` "
+                        "lexically for `is_dir()` too (verified via a live probe, "
+                        "`_dotdot_symlink_semantics`, not sys.platform), so `is_dir()` and "
+                        "`_canonical()` agree instead of disagreeing -- there is nothing here "
+                        "for MUST-FIX C to be load-bearing against on this platform. The actual "
+                        "protection (submodule_roots correctly excluding the escaping root, and "
+                        "verify correctly reporting the citation dangling, both checked "
+                        "unconditionally below) still holds -- just because this platform never "
+                        "lets the traversal reach `outside/mod` via ANY API, not because "
+                        "harnessloop's own containment check caught it here.)"
+                    )
+                elif _dotdot_semantics == "unsupported":
+                    # Rare inconsistency window: the shared probe's own (separate)
+                    # symlink attempt failed even though this fixture's just succeeded.
+                    print(
+                        "  (skipped: symlinks unsupported per the shared "
+                        "_dotdot_symlink_semantics probe -- symlink_dotdot_normpath_order "
+                        ".gitmodules-base mutation control)"
+                    )
+                else:
+                    check(
+                        False,
+                        "T-064 MUST-FIX C .gitmodules-base mutation control: "
+                        f"_dotdot_symlink_semantics returned {_dotdot_semantics!r} for this "
+                        "platform, neither 'canonical' nor 'lexical' -- this needs a human to "
+                        "look at, not a silent skip",
+                    )
 
+                # These two stay live and unconditional on every platform (unlike the
+                # mutation control above): they assert the *outcome* -- root excluded,
+                # citation dangling -- and that outcome holds on both semantics, just via
+                # different mechanisms (canonical: containment catches it; lexical:
+                # `is_dir()` never reaches through `smod` at all, so `submodule_roots`
+                # never accepts the root in the first place -- see the comment above).
                 roots = verify_protocol.submodule_roots(gm_project)
                 check(
                     all(
@@ -4913,6 +5106,81 @@ def validate_protocol_gates() -> None:
         "string classifies as usable (matches macos-latest/APFS default) -- the full G22a "
         "fixture (premise + samefile + shadow-alias detection) runs for real",
     )
+
+    print("  G30: symlink-then-`..` platform semantics (windows-latest T-064 MUST-FIX C teeth)")
+    # G30a: _classify_dotdot_symlink_resolution's own branch selection, tested on
+    # every platform (including this one) via fabricated resolved-path triples --
+    # rather than trusting that both real branches ("canonical"/"lexical") get
+    # exercised just because more than one CI runner exists. The function only
+    # compares its three inputs with `==`, so plain `Path` objects stand in for
+    # real, resolved filesystem paths without touching a filesystem at all.
+    _g30_outside_target = Path("/fake/outside/probe.txt")
+    _g30_inside_target = Path("/fake/inside/probe.txt")
+    check(
+        _classify_dotdot_symlink_resolution(_g30_outside_target, _g30_outside_target, _g30_inside_target)
+        == "canonical",
+        "G30a: a resolution landing on the outside target classifies as 'canonical' "
+        "(matches macos-latest/ubuntu-latest) -- Path.resolve() followed the symlink "
+        "before applying the trailing `..`",
+    )
+    check(
+        _classify_dotdot_symlink_resolution(_g30_inside_target, _g30_outside_target, _g30_inside_target)
+        == "lexical",
+        "G30a: a resolution landing on the inside target classifies as 'lexical' "
+        "(matches windows-latest) -- `..` was erased before the symlink was ever "
+        "consulted",
+    )
+    check(
+        _classify_dotdot_symlink_resolution(
+            Path("/fake/neither/probe.txt"), _g30_outside_target, _g30_inside_target
+        )
+        == "unrecognized",
+        "G30a: a resolution matching NEITHER known target classifies as 'unrecognized' "
+        "rather than silently defaulting to one of the two known semantics -- callers "
+        "must fail loudly on this, not guess",
+    )
+
+    # G30b: the genuinely cross-platform half of T-064 MUST-FIX C's protection --
+    # a project-internal symlink cited with NO `..` at all (`link/escape.md`) has
+    # nothing for lexical `..` processing to erase, so it must be rejected under
+    # BOTH semantics `_dotdot_symlink_semantics` can classify. Deliberately a
+    # minimal, self-contained fixture (no git dependency, unlike the T-063
+    # `symlink_containment_escape` fixture above whose equivalent assertion is
+    # gated behind `git_available`) so this specific assertion is truly
+    # unconditional on every platform where `os.symlink` works at all -- a live
+    # check, never a skip.
+    if hasattr(os, "symlink"):
+        g30_root = REPO_ROOT / ".tmp" / f"verify-fixture-g30-pure-symlink-{uuid.uuid4().hex}"
+        g30_project = g30_root / "project"
+        g30_outside = g30_root / "outside"
+        try:
+            g30_project.mkdir(parents=True)
+            g30_outside.mkdir(parents=True)
+            try:
+                (g30_project / "link").symlink_to(g30_outside, target_is_directory=True)
+                g30_supported = True
+            except (OSError, NotImplementedError):
+                g30_supported = False
+            if g30_supported:
+                check(
+                    verify_protocol._resolve_in_project(g30_project, "link/escape.md", g30_project)
+                    is None,
+                    "G30b: a pure symlink escape with NO `..` at all (`link/escape.md`, `link` "
+                    "a project-internal symlink pointing outside the project) is rejected by "
+                    "_resolve_in_project on the CURRENT platform -- unlike the `..`-cancellation "
+                    "shape T-064 MUST-FIX C tests above, this vector has nothing for lexical `..` "
+                    "processing to erase, so it must hold under both the 'canonical' and "
+                    "'lexical' semantics _dotdot_symlink_semantics classifies -- a live, "
+                    "unconditional assertion, proving the project boundary itself (not merely "
+                    "this one `..` shape) is still enforced on every platform (T-063 MUST-FIX 2: "
+                    "symlink_containment_escape)",
+                )
+            else:
+                print("  (skipped G30b: symlinks unsupported on this filesystem)")
+        finally:
+            shutil.rmtree(g30_root, ignore_errors=True)
+    else:
+        print("  (skipped G30b: os.symlink unavailable on this platform)")
 
     print("  G19-strengthened: no escape knob, by shape rather than by three literal flag names")
     src = (LOOP_SCRIPTS / "verify_protocol.py").read_text(encoding="utf-8")
