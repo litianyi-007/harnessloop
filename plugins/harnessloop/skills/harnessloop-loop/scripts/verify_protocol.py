@@ -439,6 +439,66 @@ This script enforces only machine-checkable rules:
   silently guarantees the anomaly can never fire). Before activation, a
   missing `Profile:` field has zero effect.
 
+- Decision-field label ASCII probe (TH-0029 defect 1, evolution-issues/
+  0029-rae-hard-rule-two-live-bypasses.md; see `check_decision_field_
+  label_ascii`/`known_decision_field_labels`): every decision.md line that
+  survives `_uncoded_lines` (live prose, not fenced) is tested against the
+  set of `- <label>:` fields decision.md's own parsers already recognize --
+  computed straight from `parse_feedback` / `parse_review_fields` /
+  `parse_acceptance_eval_declaration` / `parse_loop_predecessor_declaration`
+  / `parse_loop_continuation_declaration`'s own source
+  (`known_decision_field_labels`), never a second, hand-typed label list
+  living beside them to drift out of sync -- the same "discover it from the
+  real mechanism, don't re-enumerate it" discipline this file's own test
+  suite already uses for manifest versions (G28) and shipped scripts (G39).
+  A line that does not match one of those `- <label>:` prefixes as written,
+  but *would* match one after `_fold_ascii_label_probe`'s normalization
+  (Unicode `Cf`/format-character removal, then whitespace folding, then
+  NFKC -- a full-width colon, a full-width list-marker dash, full-width
+  label letters, a TAB in place of the marker's space, or a zero-width
+  space embedded in the label word -- this project's own decision.md files
+  have produced every one of these), is reported
+  `decision-field-label-not-ascii`. This is a **fail-closed detector, not a
+  lenient acceptor**: the folded text is used only to decide whether to
+  report a violation, never to feed a normalized value back into
+  `parse_feedback` or any other parser -- the mis-encoded line stays
+  genuinely unread by this round's real field parsers, exactly as before
+  this check existed. This closes the *label*-side variant of the same
+  class of bug v0.29.0 already closed on the *value* side (`positive。` ->
+  `unparsable`, fail-closed rather than lenient) and v0.26.0 closed for an
+  inline-code-span ignore marker -- the fourth live instance of "the same
+  class of bug reappears at a new position" this module's history keeps
+  finding, and, by deliberate decision, the last one this boundary will be
+  patched for: a cross-script homoglyph (e.g. Cyrillic `Ф` for Latin `F`)
+  still bypasses this probe, confirmed live, and is registered as a closed
+  upper bound rather than fixed -- see `check_decision_field_label_ascii`'s
+  docstring and the OUT column of `harnessloop-loop/SKILL.md` for the full
+  argument. The risk direction of every widening so far is over-reporting,
+  not a new bypass: the probe only fires when the *entire* stripped line,
+  after folding, begins with one of the known prefixes, so ordinary prose
+  that merely mentions full-width punctuation, TABs, or invisible
+  characters is not at risk.
+
+- Eval-ledger-without-decision gate (TH-0029 defect 2, same issue; wired
+  directly into `verify_round`): a round whose own
+  `evidence/runtime/acceptance-evals.json` ledger is present
+  (`ledger_state["present"]`, already computed unconditionally earlier in
+  `verify_round`, independent of `decision.md`) but whose `decision.md`
+  does not exist at all is reported `eval-ledger-without-decision`. Before
+  this, `decision.md`'s total absence silently turned off every check
+  gated behind `decision.exists()` -- E4, B2a, and both RAE declaration
+  checks, not only the RAE hard rule itself -- for a round that
+  unmistakably has acceptance-eval accounting to answer for (deleting
+  decision.md was, in effect, the RAE hard rule's off switch). **This does
+  not require every round to have a decision.md**: the condition is
+  anchored entirely on this **same round's own** ledger presence, never on
+  "every round must declare `decision.md`", so a round with neither a
+  ledger nor a decision.md stays silent from this gate -- exactly the
+  zero-migration polarity E1 already established, never a retroactive
+  judgment of a round that predates either file. Both operands --
+  `decision.exists()` and `ledger_state["present"]` -- come from round N
+  only, so this stays a same-round check, never a cross-round join.
+
 Exit codes: 0 = pass, 1 = violations found, 2 = usage error.
 """
 
@@ -446,11 +506,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 CODE_SPAN = re.compile(r"`([^`]+)`")
@@ -2696,6 +2758,248 @@ def _uncoded_lines(text: str) -> list[str]:
             fence_char = None
             fence_len = 0
     return out
+
+
+# `- <label>:` prefix literal, as it appears written inside one of decision.md's
+# own field-parser functions below, e.g. `startswith("- review verdict:")`.
+# Used only by `known_decision_field_labels` to *discover* those parsers'
+# labels from their own source -- see that function's docstring for why this
+# is a discovery mechanism, not a second hand-typed list of field names.
+_LABEL_LITERAL_RE = re.compile(r'startswith\(\s*"- ([a-z][a-z \-]*):"\s*\)')
+
+
+def _decision_field_label_functions() -> list:
+    """Discover every module-level function that parses a decision.md
+    `- <label>:` field, without hand-listing their names.
+
+    The distinguishing signal used here already exists in the code, it is
+    not invented for this check: every one of decision.md's five field
+    parsers (`parse_feedback`, `parse_review_fields`,
+    `parse_acceptance_eval_declaration`, `parse_loop_predecessor_declaration`,
+    `parse_loop_continuation_declaration`) is named `parse_*` and takes its
+    first positional parameter named `decision_text` -- while the module's
+    other three `parse_control_contract_*` functions parse a *different*
+    file (`control-contract.md`) and take `contract_text` instead. Filtering
+    on "name starts with `parse_` AND first parameter is named
+    `decision_text`" picks out exactly the first group and none of the
+    second, using a distinction the code already draws for an unrelated
+    reason (their signatures genuinely differ because they read different
+    files), rather than a distinction manufactured only for this probe.
+
+    Consequence: a sixth decision.md field parser added later under this
+    same `parse_*(decision_text, ...)` convention is picked up automatically
+    the next time this runs -- there is nothing here to remember to update.
+    Same "discover it from what actually exists, don't re-enumerate it"
+    discipline `validate.py`'s G28 (manifest discovery via filesystem walk)
+    and G39 (shipped-`.sh`-script discovery via `rglob`) already use; this
+    is the source-introspection analogue for a module's own functions,
+    since there is no filesystem artifact to walk for "which fields does
+    this module parse".
+    """
+    module = sys.modules[__name__]
+    found = []
+    for name, obj in vars(module).items():
+        if not name.startswith("parse_") or not inspect.isfunction(obj):
+            continue
+        params = list(inspect.signature(obj).parameters)
+        if params and params[0] == "decision_text":
+            found.append(obj)
+    return found
+
+
+def known_decision_field_labels() -> frozenset[str]:
+    """Compute the set of `- <label>:` field names decision.md's own line
+    parsers already recognize (lowercase, e.g. `"review verdict"`), read
+    straight out of those parsers' own source via `inspect.getsource` +
+    `_LABEL_LITERAL_RE` -- never a hand-typed list living beside them that
+    could silently drift out of sync with what the parsers actually check.
+
+    See `_decision_field_label_functions` for exactly which functions are
+    scanned and why. Today this yields eight labels: `feedback`, `review`,
+    `reviewer`, `review verdict`, `review digest`, `acceptance evals`,
+    `predecessor`, `loop continuation` -- but that count is a consequence
+    of what is in the source today, not asserted here as a constant; adding
+    a parser under the same convention changes this function's output with
+    no edit needed in this function itself.
+    """
+    labels: set[str] = set()
+    for fn in _decision_field_label_functions():
+        source = inspect.getsource(fn)
+        for match in _LABEL_LITERAL_RE.finditer(source):
+            labels.add(match.group(1))
+    return frozenset(labels)
+
+
+def _fold_ascii_label_probe(text: str) -> str:
+    """Round-trip normalization fed *only* to `check_decision_field_label_
+    ascii`'s detector -- never a general-purpose text normalizer, and never
+    used to accept or extract a value (see that function's "detector, not
+    acceptor" discipline, which this helper is bound by identically). Three
+    passes, always in this order:
+
+    1. Drop every character whose Unicode general category is `Cf`
+       (format) -- zero-width space (U+200B), zero-width non-joiner/joiner
+       (U+200C/U+200D), and BOM/zero-width no-break space (U+FEFF) are all
+       `Cf`. These are deleted outright, not folded to anything, so a label
+       word an editor, a browser copy-paste, or a chat client silently
+       split with an invisible character reads back as its plain spelling.
+    2. Fold every character for which `str.isspace()` is true to a single
+       ASCII space. Deliberately broader than "collapse whitespace runs":
+       TAB, the full-width space U+3000, and NBSP (U+00A0) all satisfy
+       `isspace()`, but plain NFKC folds none of them to U+0020 on its own
+       (`unicodedata.normalize("NFKC", "　")` returns U+3000
+       unchanged) -- this pass exists specifically to cover what NFKC does
+       not.
+    3. `unicodedata.normalize("NFKC", ...)` last, exactly as the single
+       call this helper replaces -- folds full-width digits/letters/
+       punctuation (colon, hyphen-minus, Latin letters) to their ASCII
+       compatibility forms.
+
+    Widening this helper widens what gets *reported*, never what gets
+    *accepted*: its output is fed to nothing but a `.lower().startswith(...)`
+    probe in the caller, exactly like the plain NFKC call it replaces.
+
+    Deliberately does **not** attempt cross-script confusable folding (a
+    Cyrillic `Ф` standing in for a Latin `F` does not become one under any
+    step above, by design) -- see `check_decision_field_label_ascii`'s
+    docstring and the OUT column of `harnessloop-loop/SKILL.md` for why
+    that is a closed, not a deferred, boundary.
+    """
+    no_format = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    space_folded = "".join(" " if ch.isspace() else ch for ch in no_format)
+    return unicodedata.normalize("NFKC", space_folded)
+
+
+def check_decision_field_label_ascii(round_dir: Path, decision_text: str) -> list[dict]:
+    """TH-0029 defect 1: detect a decision.md `- <label>:` line that only
+    parses as one of decision.md's known fields (`known_decision_field_
+    labels`) after `_fold_ascii_label_probe`'s normalization (Unicode `Cf`
+    -- format -- character removal, then whitespace folding, then NFKC) --
+    i.e. it does not parse as written, because its separator, its label
+    letters, or the whitespace around them use a Unicode form this
+    project's real parsers do not treat as ASCII.
+
+    Live, reproduced bypasses this closes, across four rounds of patching
+    the same parsing surface:
+
+    - v0.26.0: an inline code span used as a discussion marker was read
+      identically to a real declaration (fixed separately, `- Feedback:`
+      inside `` `...` ``).
+    - v0.29.0: a fenced code block quoting `- Feedback:` as a literal
+      example outranked the round's real, unfenced declaration (fixed via
+      `_uncoded_lines`'s fence tracking, reused here too).
+    - This release, full-width separators/letters: `- Feedback：positive`
+      (full-width colon U+FF1A), `－ Feedback: positive` (full-width
+      list-marker dash U+FF0D), and `- Ｆeedback: positive` (full-width
+      letter U+FF26).
+    - This release, format characters and whitespace variants (the
+      `_fold_ascii_label_probe` widening): a TAB in place of the space
+      after the list marker (`-\tFeedback: positive`), and a zero-width
+      space embedded inside the label word itself (`- Feed​back:
+      positive`) -- both invisible or near-invisible in a rendered editor,
+      both plausible products of an ordinary copy-paste, and both silent
+      before this widening.
+
+    Every one of these fails the real parsers' `.startswith("- feedback:")`
+    check exactly like a decision.md that never wrote `- Feedback:` at all
+    -- "field absent" is the *correct*, zero-migration reading for a
+    genuinely absent field, but the *wrong* reading for a field an author
+    plainly did write. Read as "absent", the field silently drops out of
+    every rule gated on it -- most importantly `acceptance-eval-positive-
+    without-pass`, this module's flagship hard rule.
+
+    **Detector, not acceptor -- the one discipline this function must never
+    violate:** `_fold_ascii_label_probe`'s output is used *only* to decide
+    whether to report `decision-field-label-not-ascii`. It is never split
+    on `:`, never returned as a value, and never fed to `_normalize_
+    feedback` or any other parser -- accepting the folded form as if it
+    were the real declaration would be exactly the "sprawling,
+    ever-widening acceptance" shape v0.29.0's own docstring (`_normalize_
+    feedback`) already refused for the *value* side of `- Feedback:`; this
+    function refuses it identically for the *label* side. The round's real
+    field parsers still see the line as unparsed and still treat the field
+    as absent -- this function's only effect is to make that fact loud
+    (a reported violation) instead of silent.
+
+    Deliberately narrow to lines that survive `_uncoded_lines` (fenced
+    lines are dropped first, exactly like every other `- <label>:` parser
+    in this module) and to lines whose *entire* stripped text, after
+    `_fold_ascii_label_probe`'s normalization, begins with one of the
+    known `- <label>:` prefixes -- not merely lines that *contain*
+    full-width punctuation, format characters, or odd whitespace anywhere.
+    A decision.md that discusses full-width colons or TABs in ordinary
+    prose, or that already writes a field correctly in ASCII, never
+    matches this check (see the G40d/G40e/G40l teeth in `validate.py`):
+    the risk this function's existence adds is over-reporting a line that
+    happens to fold into a label-like shape, never a new way to bypass
+    anything the way a lenient acceptor would.
+
+    **Registered upper bound, not a gap, and the last one accepted on this
+    boundary (see the OUT column of `harnessloop-loop/SKILL.md` for the
+    full argument): a cross-script homoglyph substituted for a Latin
+    letter in the label word -- e.g. `- Фeedback: positive` (Cyrillic
+    U+0424) in place of `- Feedback:` -- still reads as "field absent".**
+    Confirmed, not theoretical (see G40k in `validate.py`). Neither NFKC
+    nor any step `_fold_ascii_label_probe` adds folds one script's letter
+    onto a different script's visually similar letter -- Unicode
+    compatibility decomposition only relates compatibility variants of the
+    *same* character. Closing this would require a confusables table
+    (Unicode TR39 or an ad-hoc subset) or fuzzy/edit-distance matching
+    against the known label set, and every shape of that idea repeats the
+    same failure this module has already refused twice: it stops being a
+    detector of a specific character-level mismatch and becomes a guesser
+    about authorial intent, with its own false-positive surface (ordinary
+    prose that happens to fuzzy-match a label) growing every time the
+    guesser is made more generous. The three defects already fixed here
+    are *accidental* -- a full-width IME, an editor's smart punctuation, a
+    stray zero-width character from a copy-paste -- and fixing them had
+    real payoff. A Cyrillic letter substituted for a Latin one inside a
+    field label is not an accident anyone stumbles into; it is deliberate,
+    and a character-level detector was never the layer that could stop
+    deliberate evasion (TH-0008's `fixed-by-demotion` precedent; TH-0025's
+    conclusion that a mechanism like this owns neither the data, the
+    timing, nor any enforcement power over what an adversarial author
+    writes -- both apply here unchanged). This function will not gain a
+    fifth patch on this boundary.
+
+    Returns a list of `decision-field-label-not-ascii` violation dicts
+    (empty when nothing matches); this function is a pure, coverage-agnostic
+    helper, exactly like `check_review_declaration` et al. -- `verify_round`
+    folds a nonzero result into its own coverage counter.
+    """
+    decision_path = round_dir / "decision.md"
+    labels = sorted(known_decision_field_labels())
+    violations: list[dict] = []
+    for line in _uncoded_lines(decision_text):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        low = stripped.lower()
+        if any(low.startswith(f"- {label}:") for label in labels):
+            # Already recognized as written by the real parsers -- nothing
+            # for this fail-closed probe to add for this line.
+            continue
+        normalized_low = _fold_ascii_label_probe(stripped).lower()
+        hit = next(
+            (label for label in labels if normalized_low.startswith(f"- {label}:")),
+            None,
+        )
+        if hit is not None:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "decision-field-label-not-ascii",
+                    "detail": (
+                        f"{decision_path} has a line ({stripped!r}) that only parses as "
+                        f"the `{hit}` field after Unicode format-character removal, "
+                        "whitespace folding, and NFKC normalization -- as written, "
+                        "none of this module's field parsers recognize it, so it is silently "
+                        "treated as absent rather than read (fail-closed: use an ASCII "
+                        f"`- {hit}:` separator/label so the field is actually read)"
+                    ),
+                }
+            )
+    return violations
 
 
 def parse_feedback(decision_text: str) -> str | None:
@@ -5047,6 +5351,22 @@ def verify_round(
         # or citations_checked — a declared review file is accounted for,
         # not scanned.
         decision_text = decision.read_text(encoding="utf-8", errors="ignore")
+
+        # TH-0029 defect 1: fail-closed NFKC probe for a `- <label>:` line
+        # whose separator or label letters use full-width Unicode forms
+        # instead of ASCII (see `check_decision_field_label_ascii`'s
+        # docstring). Deliberately unconditional across every known field
+        # (Feedback, Review/Reviewer/Review verdict/Review digest,
+        # Acceptance evals, Predecessor, Loop continuation) and run once,
+        # here, ahead of every field-specific check below -- a
+        # mis-encoded line among any of those fields is still read by every
+        # parser below as "field absent", exactly as it was before this
+        # check existed; this only makes that fact loud instead of silent.
+        label_ascii_violations = check_decision_field_label_ascii(round_dir, decision_text)
+        violations.extend(label_ascii_violations)
+        if label_ascii_violations:
+            coverage["rounds_decision_field_label_not_ascii"] += 1
+
         review_violations, review_state = check_review_declaration(round_dir, project, decision_text)
         violations.extend(review_violations)
         if review_state["missing_fields"]:
@@ -5166,6 +5486,35 @@ def verify_round(
             coverage["rounds_stop_recorded"] += 1
             if continuation_state["reason"] == "unjustified-stop":
                 coverage["rounds_stop_unjustified"] += 1
+    else:
+        # TH-0029 defect 2: `decision.md`'s total absence used to silently
+        # turn off every check gated behind `decision.exists()` above (E4,
+        # B2a, both RAE declaration checks, and the RAE hard rule itself) --
+        # including for a round that unmistakably has acceptance-eval
+        # accounting to answer for. Anchored entirely on this **same
+        # round's own** `ledger_state["present"]` (already computed
+        # unconditionally earlier in this function, before this
+        # `if`/`else`) -- never "every round must have a decision.md",
+        # which would retroactively judge every already-closed round that
+        # predates either file (the E1 trap). A round with neither a
+        # ledger nor a decision.md stays silent here, exactly like before.
+        if ledger_state["present"]:
+            coverage["rounds_eval_ledger_without_decision"] += 1
+            ledger_path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-without-decision",
+                    "detail": (
+                        f"{decision} does not exist, but {ledger_path} does -- a round with "
+                        "an acceptance-eval ledger must have a decision.md, or E4/B2a/the RAE "
+                        "hard rule/both RAE declaration checks silently stop being asked "
+                        "anything about this round at all (this is reported regardless of "
+                        "what `Feedback` this round's ledger would otherwise imply; the RAE "
+                        "hard rule itself still cannot fire without a `Feedback` value to read)"
+                    ),
+                }
+            )
 
     return violations, coverage
 
@@ -5193,6 +5542,15 @@ def _empty_coverage() -> dict:
         "citations_ignored_explicit": 0,
         "citations_shape_dropped": 0,
         "review_files_with_ignore": 0,
+        # TH-0029 defect 1 (`check_decision_field_label_ascii`, wired into
+        # `verify_round` right before the review-declaration fields below,
+        # since it runs across every known decision.md field, not only
+        # Review/Reviewer/Review verdict/Review digest): counts a round
+        # only once, regardless of how many mis-encoded label lines its
+        # decision.md carries (mirrors `rounds_scope_lock_round_path_
+        # mismatch`'s 0/1-per-round shape, not a raw violation count) --
+        # each individual line still reported once via the violations list.
+        "rounds_decision_field_label_not_ascii": 0,
         "rounds_review_declared": 0,
         "rounds_review_none": 0,
         "rounds_review_missing_fields": 0,
@@ -5203,6 +5561,16 @@ def _empty_coverage() -> dict:
         # runs over every other per-round field.
         "rounds_eval_ledger_present": 0,
         "eval_entries_checked": 0,
+        # TH-0029 defect 2 (wired into `verify_round`'s `else` branch of
+        # `if decision.exists():`): 0/1 per round, exactly like
+        # `rounds_scope_lock_round_path_mismatch` above -- set when this
+        # round's ledger is present (`ledger_state["present"]`) but its
+        # `decision.md` does not exist at all. Unlike that mismatch field,
+        # this one *is* a real violation (`eval-ledger-without-decision`),
+        # not a hint; it exists as its own coverage counter purely for the
+        # same visibility every other RAE field gets, not because the
+        # violations list alone would be insufficient.
+        "rounds_eval_ledger_without_decision": 0,
         # Third RAE vertical slice (requirement (3) of the eval-declaration
         # chain, `check_round_eval_ledger`'s `evidence` field checks): same
         # per-round accumulation. `eval_entries_with_evidence` counts every
@@ -5734,6 +6102,7 @@ def main() -> int:
             f"citations_ignored_explicit={coverage['citations_ignored_explicit']} "
             f"citations_shape_dropped={coverage['citations_shape_dropped']} "
             f"review_files_with_ignore={coverage['review_files_with_ignore']} "
+            f"decision_field_label_not_ascii={coverage['rounds_decision_field_label_not_ascii']} "
             f"zero_inspected={coverage['rounds_zero_inspected']} "
             f"scope_lock_round_path_mismatch={coverage['rounds_scope_lock_round_path_mismatch']} "
             f"review_declared={coverage['rounds_review_declared']} "
@@ -5742,6 +6111,7 @@ def main() -> int:
             f"review_digest_declared={coverage['rounds_review_digest_declared']} "
             f"goals_eval_registry_present={coverage['goals_eval_registry_present']} "
             f"rounds_eval_ledger_present={coverage['rounds_eval_ledger_present']} "
+            f"rounds_eval_ledger_without_decision={coverage['rounds_eval_ledger_without_decision']} "
             f"eval_entries_checked={coverage['eval_entries_checked']} "
             f"eval_entries_with_evidence={coverage['eval_entries_with_evidence']} "
             f"eval_entries_evidence_null={coverage['eval_entries_evidence_null']} "

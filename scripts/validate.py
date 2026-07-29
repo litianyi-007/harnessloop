@@ -8024,6 +8024,23 @@ def validate_protocol_gates() -> None:
     g38_root = Path(tempfile.mkdtemp(prefix="hl-rae-g38-"))
     try:
         project = _rae_project(g38_root)
+        # TH-0029 defect 2 (`eval-ledger-without-decision`, G40 below) means a
+        # round with a ledger but no decision.md at all is no longer silent --
+        # every G38 fixture below writes a ledger, so a fully compliant
+        # decision.md (Feedback: neutral -- never `positive`, so it can never
+        # interact with the RAE hard rule any G38 subtest's ledger outcomes
+        # might otherwise trip; every other gated field declared too, so B2a
+        # and the acceptance-eval declaration check both stay green) is
+        # written once, up front, purely so the `evidence`-field checks this
+        # section actually exercises stay the only violation each assertion
+        # sees -- never touched again by any subtest below.
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: neutral\n"
+            "- Review: none — G38 exercises the eval-ledger evidence field, not review "
+            "declaration\n- Reviewer: fixture\n- Review verdict: not-applicable\n"
+            "- Acceptance evals: ran\n",
+        )
         _g38_write_evidence_file(project, "evidence/rae-0001-run.log")
         _rae_write_ledger(
             project,
@@ -8408,6 +8425,455 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g38_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G40 (TH-0029, evolution-issues/0029-rae-hard-rule-two-live-bypasses.md):
+    # the RAE flagship hard rule's two live total-silence bypasses --
+    # (1) a full-width separator/label on the *label* side of a `- <label>:`
+    # line (the value side was already fail-closed since v0.29.0; the label
+    # side never was), and (2) decision.md's total absence silently turning
+    # off E4/B2a/both RAE declaration checks/the hard rule itself for a round
+    # that has an acceptance-eval ledger. Reuses `_rae_project`/
+    # `_rae_round_dir`/`_rae_ledger_path`/`_rae_write_ledger`/
+    # `_rae_write_decision` from the G25 fixtures above; every letter below
+    # is a paired mutation, same discipline as every other lettered group in
+    # this file.
+    # -------------------------------------------------------------------
+
+    print("  G40a: full-width colon in `- Feedback：positive` (label side, not value side) -> decision-field-label-not-ascii, never silence")
+    g40_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40-"))
+    try:
+        project = _rae_project(g40_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback：positive\n")  # full-width colon U+FF1A
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            f"G40a: `- Feedback：positive` (full-width colon) with a failing due ledger -> "
+            f"decision-field-label-not-ascii, not silence (got {sorted(kinds)})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G40a: the RAE hard rule itself still does not fire here -- the real field parser "
+            "genuinely cannot read this line as `Feedback` (fail-closed detector, not a lenient "
+            f"acceptor), so `Feedback` still reads as absent, exactly as before this check "
+            f"existed (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_decision_field_label_not_ascii"] == 1,
+            "G40a: coverage counts rounds_decision_field_label_not_ascii == 1 "
+            f"(got {coverage['rounds_decision_field_label_not_ascii']})",
+        )
+
+        # Reverse mutation: switch to a half-width colon (same failing
+        # ledger, untouched) -- decision-field-label-not-ascii must clear,
+        # and THIS SAME ledger now correctly trips the RAE hard rule --
+        # proving G40a's redness was specifically about the full-width
+        # separator, not a coincidental fixture property.
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            "G40a mutation control: an ASCII colon clears decision-field-label-not-ascii "
+            f"(got {sorted(kinds)})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G40a mutation control: the SAME failing ledger now correctly trips the RAE hard "
+            f"rule once Feedback is actually readable (got {sorted(kinds)})",
+        )
+
+        print("  G40b: full-width list-marker dash (`－ Feedback: positive`) -> decision-field-label-not-ascii")
+        _rae_write_decision(project, "# Decision\n\n－ Feedback: positive\n")  # full-width hyphen-minus U+FF0D
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            "G40b: a full-width list-marker dash before an otherwise-correct `Feedback:` line -> "
+            f"decision-field-label-not-ascii (got {sorted(kinds)})",
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            f"G40b mutation control: an ASCII '-' list marker clears the violation (got {sorted(kinds)})",
+        )
+
+        print("  G40c: full-width LETTERS in the label word itself (`- Ｆeedback: positive`) -> decision-field-label-not-ascii (proves NFKC, not a colon/dash-only scan)")
+        _rae_write_decision(project, "# Decision\n\n- Ｆeedback: positive\n")  # full-width 'F', U+FF26
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            "G40c: a full-width LETTER inside the label word itself -- no full-width punctuation "
+            "anywhere in the line -- still trips the check, proving the detector genuinely "
+            "normalizes with NFKC rather than hand-enumerating full-width colon/dash characters "
+            f"(got {sorted(kinds)})",
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            f"G40c mutation control: an all-ASCII label clears the violation (got {sorted(kinds)})",
+        )
+
+        print("  G40d: a fully ASCII, fully compliant decision.md must never false-positive (the anti-false-positive control)")
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: positive\n- Review: none — n/a\n- Reviewer: me\n"
+            "- Review verdict: pass\n- Acceptance evals: ran\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds
+            and coverage["rounds_decision_field_label_not_ascii"] == 0,
+            "G40d: an all-ASCII decision.md declaring Feedback/Review/Reviewer/Review verdict/"
+            "Acceptance evals -- every field this fixture's own ledger and B2a/RAE-declaration "
+            "checks make relevant -- produces zero decision-field-label-not-ascii violations "
+            "and a zero coverage count; this is the anti-false-positive control, and it is run "
+            f"against a fixture with a real, failing due eval so `acceptance-eval-positive-"
+            f"without-pass` legitimately still fires (proving this is a real project state, not "
+            f"an artificially inert one) while decision-field-label-not-ascii specifically does "
+            f"not (got kinds={sorted(kinds)}, "
+            f"coverage={coverage['rounds_decision_field_label_not_ascii']})",
+        )
+
+        print("  G40e: a full-width label line INSIDE a fenced code block must not report (reuses v0.29.0's _uncoded_lines fence filter)")
+        _rae_write_decision(
+            project,
+            "# Decision\n\n```\n- Feedback：positive\n```\n\n- Feedback: positive\n"
+            "- Review: none — n/a\n- Reviewer: me\n- Review verdict: pass\n"
+            "- Acceptance evals: ran\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            "G40e: a full-width `- Feedback：positive` line sitting INSIDE a fenced code block is "
+            "never treated as live prose -- proves this check is wired behind `_uncoded_lines`, "
+            "the same fence filter v0.29.0 built for the other field parsers, not a raw "
+            f"line-by-line scan that would also see fenced content (got {sorted(kinds)})",
+        )
+        # Destructive control: the SAME full-width line, unfenced this time,
+        # still reports -- proving G40e's greenness above was really about
+        # the fence, not about this fixture dodging the check some other way.
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback：positive\n\n- Feedback: positive\n"
+            "- Review: none — n/a\n- Reviewer: me\n- Review verdict: pass\n"
+            "- Acceptance evals: ran\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            "G40e destructive control: the SAME full-width line, once UNFENCED, does report "
+            f"(got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g40_root, ignore_errors=True)
+
+    print("  G40f/g/h: decision.md's total absence used to be the RAE hard rule's off switch -- a round with a ledger but no decision.md must no longer be fully silent")
+    g40fgh_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40fgh-"))
+    try:
+        project = _rae_project(g40fgh_root)
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "fail",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        # Deliberately no decision.md written at all.
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-without-decision" in kinds,
+            "G40f: a round with an acceptance-eval ledger but NO decision.md at all -> "
+            f"eval-ledger-without-decision (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_eval_ledger_without_decision"] == 1,
+            "G40f: coverage counts rounds_eval_ledger_without_decision == 1 "
+            f"(got {coverage['rounds_eval_ledger_without_decision']})",
+        )
+
+        # G40h: same fixture state as G40f above (a due, failing eval and no
+        # decision.md) -- the RAE hard rule itself still cannot fire, because
+        # it needs a `Feedback` value to read and there is no decision.md to
+        # read one from. The point of this teeth is narrower than "the hard
+        # rule is fixed": it is "no longer completely silent" -- pinned by
+        # asserting the total violation count is nonzero while
+        # acceptance-eval-positive-without-pass specifically stays absent.
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G40h: acceptance-eval-positive-without-pass never fires here -- this is not the "
+            "hard rule being repaired, it structurally cannot read a Feedback value with no "
+            f"decision.md to read it from (got {sorted(kinds)})",
+        )
+        check(
+            len(violations) > 0,
+            "G40h: the total violation count must be nonzero even though the hard rule "
+            "specifically stays silent -- this is what 'no longer fully silent' means, not "
+            f"'the flagship rule itself now fires' (got {violations})",
+        )
+
+        # Reverse mutation (G40f): writing a decision.md (same ledger,
+        # untouched) clears eval-ledger-without-decision -- proves it is
+        # really about the file's absence, not a coincidental fixture
+        # property.
+        _rae_write_decision(project, "# Decision\n\n- Feedback: neutral\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-without-decision" not in kinds,
+            f"G40f mutation control: writing decision.md clears eval-ledger-without-decision "
+            f"(got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_eval_ledger_without_decision"] == 0,
+            "G40f mutation control: coverage returns to 0 "
+            f"(got {coverage['rounds_eval_ledger_without_decision']})",
+        )
+
+        print("  G40g: NO ledger and NO decision.md -> zero violations (anchored on THIS round's own ledger presence, never 'every round needs decision.md' -- the E1 trap)")
+        _rae_ledger_path(project).unlink()
+        (_rae_round_dir(project) / "decision.md").unlink()
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations and coverage["rounds_eval_ledger_without_decision"] == 0,
+            "G40g: a round with neither a ledger nor a decision.md stays fully silent from this "
+            "gate -- the condition is anchored entirely on THIS round's own ledger presence, "
+            "never on 'every round must have a decision.md' (which would retroactively judge "
+            "every already-closed historical round that predates both files, the same E1 trap "
+            f"this module's zero-migration checks already avoid) (got violations={violations}, "
+            f"coverage={coverage['rounds_eval_ledger_without_decision']})",
+        )
+    finally:
+        shutil.rmtree(g40fgh_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G40i/j/k/l (TH-0029 addendum, same evolution-issues/0029-rae-hard-rule-
+    # two-live-bypasses.md): the fourth and final widening of the label-side
+    # ASCII probe, `_fold_ascii_label_probe` -- Cf (format-character) removal
+    # and str.isspace() folding, run ahead of NFKC. G40i/j pin the two newly
+    # closed shapes (TAB list-marker separator, zero-width space inside the
+    # label word); G40k pins the one shape deliberately left open (cross-
+    # script homoglyph) as a registered upper bound, not a bug -- the
+    # assertion direction is the inverse of every other G40 letter; G40l is
+    # the anti-false-positive control this widening specifically needs,
+    # since the fold is now strictly more aggressive than plain NFKC.
+    # -------------------------------------------------------------------
+
+    print("  G40i: TAB in place of the list-marker's space (`-\\tFeedback: positive`) -> decision-field-label-not-ascii (`_fold_ascii_label_probe`'s whitespace-fold widening)")
+    g40i_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40i-"))
+    try:
+        project = _rae_project(g40i_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(project, "# Decision\n\n-\tFeedback: positive\n")  # TAB, not a space
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            f"G40i: a TAB in place of the ASCII space after the list marker "
+            f"(`-\\tFeedback: positive`) with a failing due ledger -> decision-field-label-not-ascii "
+            f"(got {sorted(kinds)})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G40i: the real field parser still cannot read this line as `Feedback` -- fail-closed "
+            f"detector, not a lenient acceptor, exactly like every other G40 letter (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_decision_field_label_not_ascii"] == 1,
+            "G40i: coverage counts rounds_decision_field_label_not_ascii == 1 "
+            f"(got {coverage['rounds_decision_field_label_not_ascii']})",
+        )
+
+        # Reverse mutation: the SAME failing ledger, only the TAB replaced by
+        # an ordinary ASCII space -- must clear, and the hard rule must now
+        # correctly fire, proving G40i's redness was specifically about the
+        # TAB and not a coincidental fixture property.
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            f"G40i mutation control: an ordinary ASCII space clears decision-field-label-not-ascii "
+            f"(got {sorted(kinds)})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G40i mutation control: the SAME failing ledger now correctly trips the RAE hard rule "
+            f"once Feedback is actually readable (got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g40i_root, ignore_errors=True)
+
+    print("  G40j: zero-width space (U+200B, category Cf) embedded inside the label word (`- Feed\\u200bback: positive`) -> decision-field-label-not-ascii")
+    g40j_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40j-"))
+    try:
+        project = _rae_project(g40j_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feed​back: positive\n")  # ZWSP mid-word
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" in kinds,
+            f"G40j: a zero-width space (U+200B) embedded inside the label word itself -- no "
+            f"full-width punctuation or whitespace variant anywhere in the line -- still trips "
+            f"the check, proving the Cf-removal pass genuinely deletes format characters rather "
+            f"than only folding whitespace (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_decision_field_label_not_ascii"] == 1,
+            "G40j: coverage counts rounds_decision_field_label_not_ascii == 1 "
+            f"(got {coverage['rounds_decision_field_label_not_ascii']})",
+        )
+
+        # Reverse mutation: delete the zero-width space -- must clear.
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            f"G40j mutation control: deleting the zero-width space clears the violation "
+            f"(got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g40j_root, ignore_errors=True)
+
+    print("  G40k: cross-script homoglyph (`- \\u0424eedback: positive`, Cyrillic Ф) still does NOT report -- registered OUT-column upper bound, not a gap (see harnessloop-loop/SKILL.md OUT column + check_decision_field_label_ascii docstring)")
+    g40k_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40k-"))
+    try:
+        project = _rae_project(g40k_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(project, "# Decision\n\n- Фeedback: positive\n")  # Cyrillic CAPITAL EF, U+0424
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        # NOT a bug and NOT an undiscovered gap -- this is the registered,
+        # deliberate upper bound of `check_decision_field_label_ascii` /
+        # `_fold_ascii_label_probe`, pinned here rather than left as an
+        # implicit assumption. A cross-script confusable substituted for a
+        # Latin letter (Cyrillic U+0424 "Ф" visually resembles Latin "F" but
+        # is a different character in a different script) neither matches
+        # the ASCII prefix as written nor folds to it under any step of the
+        # probe: Cf-removal deletes format characters (this is a letter, not
+        # one), whitespace-folding only touches characters where
+        # `str.isspace()` is true (this is not one), and NFKC only relates
+        # compatibility variants of the SAME character (a full-width "Ｆ" and
+        # ASCII "F" are the same letter in two encodings; Cyrillic "Ф" and
+        # Latin "F" are two different letters that merely look alike -- NFKC
+        # has no opinion about cross-script visual similarity at all). So
+        # this line reads as "field absent" exactly like a decision.md that
+        # never wrote `- Feedback:` at all, and the RAE hard rule
+        # (`acceptance-eval-positive-without-pass`) stays silent behind it,
+        # unchanged from before this whole check existed.
+        #
+        # This is the FOURTH and LAST patch accepted on this parsing surface
+        # (inline code span -> fenced block -> full-width separators/letters
+        # -> format characters/whitespace, this same release). Closing the
+        # homoglyph case would require a confusables table (Unicode TR39) or
+        # fuzzy/edit-distance matching against the known label set -- both
+        # repeat a failure this module's own docstrings already refuse for
+        # the *value* side (`_normalize_feedback`): every version of that
+        # idea stops being a detector of one specific character-level
+        # mismatch and becomes a guesser about authorial intent, with its
+        # own false-positive surface (ordinary prose that happens to
+        # fuzzy-match a label) growing every time it is made more generous.
+        # The three defects already fixed here are accidental (a full-width
+        # IME, an editor's smart punctuation, a stray invisible character
+        # from a copy-paste); a cross-script homoglyph is deliberate evasion,
+        # and a character-level detector reading decision.md was never the
+        # layer that could stop deliberate evasion by the same party who
+        # authors that file -- see TH-0008's `fixed-by-demotion` precedent
+        # (move an unreliable mechanism to where it cannot manufacture a
+        # false green, rather than re-fighting its boundary a fourth time)
+        # and TH-0025's conclusion (a check like this owns neither the data,
+        # the timing, nor any enforcement power over what an adversarial
+        # author writes), both cited in check_decision_field_label_ascii's
+        # docstring and the OUT column of harnessloop-loop/SKILL.md. This
+        # assertion is deliberately the INVERSE of every other G40 letter:
+        # it pins the boundary as closed, not a bug left open to fix later.
+        check(
+            "decision-field-label-not-ascii" not in kinds,
+            "G40k: a cross-script homoglyph (Cyrillic Ф standing in for Latin F) still is NOT "
+            "reported -- a registered, deliberate upper bound (the fourth and final patch to this "
+            "detector was format-characters/whitespace, not confusables/homoglyphs), not an "
+            f"undiscovered gap; see the comment immediately above this check (got {sorted(kinds)})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" not in kinds,
+            "G40k: the RAE hard rule also stays silent -- the field reads as absent, exactly as "
+            f"if `- Feedback:` had never been written at all (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_decision_field_label_not_ascii"] == 0,
+            "G40k: coverage stays 0 for this same reason "
+            f"(got {coverage['rounds_decision_field_label_not_ascii']})",
+        )
+    finally:
+        shutil.rmtree(g40k_root, ignore_errors=True)
+
+    print("  G40l: anti-false-positive control -- an ordinary decision.md with a Chinese prose bullet that is NOT a known field name must report zero (the widened, strictly more aggressive fold raises false-positive risk relative to plain NFKC)")
+    g40l_root = Path(tempfile.mkdtemp(prefix="hl-rae-g40l-"))
+    try:
+        project = _rae_project(g40l_root)
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "fail", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: positive\n- Review: none — n/a\n- Reviewer: me\n"
+            "- Review verdict: pass\n- Acceptance evals: ran\n"
+            "- 说明：这是中文说明，不是任何已知字段\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "decision-field-label-not-ascii" not in kinds
+            and coverage["rounds_decision_field_label_not_ascii"] == 0,
+            "G40l: an ordinary Chinese prose bullet (`- 说明：这是中文说明，不是任何已知字段`, "
+            "itself containing a full-width colon -- exactly the kind of ordinary content the "
+            "widened, more aggressive fold could plausibly over-match) sitting alongside a fully "
+            "ASCII-compliant declaration of every field this fixture's ledger and B2a checks make "
+            "relevant must never be reported: it does not fold into any known `- <label>:` prefix "
+            f"under Cf-removal, whitespace-folding, or NFKC (got kinds={sorted(kinds)}, "
+            f"coverage={coverage['rounds_decision_field_label_not_ascii']})",
+        )
+        check(
+            "acceptance-eval-positive-without-pass" in kinds,
+            "G40l: this fixture's real, failing due eval still legitimately trips the RAE hard "
+            "rule -- proving this is a real, active project state and not an artificially inert "
+            f"one that would make the zero above meaningless (got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g40l_root, ignore_errors=True)
 
 
 def validate_round_cost_smoke() -> None:
