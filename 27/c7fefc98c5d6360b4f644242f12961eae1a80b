@@ -1,0 +1,69 @@
+.claude-plugin/marketplace.json
+  s_c587ecf7bbc3e2::t_84c15cbeb00ea6 13
+plugins/harnessloop/skills/harnessloop-loop/SKILL.md
+  s_c587ecf7bbc3e2::t_f9b0a4883b68d6 553-554,558
+  s_c587ecf7bbc3e2::t_ac27b38de89c46 509
+  s_c587ecf7bbc3e2::t_053bf63f19c391 463
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_34a9babdbb60b6 365-370
+  s_c587ecf7bbc3e2::t_20cc690aa795ea 115-138,151-167,170,172,175-211,213,219-238
+  s_c587ecf7bbc3e2::t_2f1486c7804fd8 299,303-306
+  s_c587ecf7bbc3e2::t_35c10555b0eece 343,346,348,355
+  s_c587ecf7bbc3e2::t_f342e9fd270a46 391,393-395,408
+  s_c587ecf7bbc3e2::t_fcdc1c764bec85 1434-1661
+  s_c587ecf7bbc3e2::t_5ebe8d7bf86427 464,469,478-482
+  s_c587ecf7bbc3e2::t_1c86ba0e5ae995 487-601
+  s_c587ecf7bbc3e2::t_fde637850bc6a2 424-428
+  s_c587ecf7bbc3e2::t_4697531be6bbb6 1825-1831,1833-1880,1902-1904,1924-1925
+  s_c587ecf7bbc3e2::t_5574a3ad7ac655 307,483-484,10139-10578
+  s_c587ecf7bbc3e2::t_34b906f8c82178 9370-10138
+  s_b85ad4e83942fb::t_7c67057e13e53a 485-486
+plugins/harnessloop/.codex-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_b738861f28d847 3
+package.json
+  s_c587ecf7bbc3e2::t_0db44c5d6a2355 3
+plugins/harnessloop/.claude-plugin/plugin.json
+  s_c587ecf7bbc3e2::t_46227ddeef88eb 4
+plugins/harnessloop/skills/harnessloop-loop/scripts/verify_protocol.py
+  s_c587ecf7bbc3e2::t_c81efda6509b9a 1492-1497
+  s_c587ecf7bbc3e2::t_7f6db890aa83ab 4675-4688
+  s_c587ecf7bbc3e2::t_fff870ba0f6465 1336-1345
+  s_c587ecf7bbc3e2::t_cb96507355ad07 4837-4859,4887,4889
+  s_c587ecf7bbc3e2::t_aa6f0e80a867ff 2650-2660
+  s_c587ecf7bbc3e2::t_356b749f729498 4704-4723,4725
+  s_c587ecf7bbc3e2::t_27563d8f6aee80 773-799,801-804
+  s_c587ecf7bbc3e2::t_95347d5af43f0a 5031-5037,5039-5064,5070-5081
+  s_c587ecf7bbc3e2::t_ea5768faa98d04 4630-4641
+  s_c587ecf7bbc3e2::t_8fc2e0f246523d 436-444
+  s_c587ecf7bbc3e2::t_13a65767dc60e5 1722-1723,1727-1744
+  s_c587ecf7bbc3e2::t_a95b6c0a659691 2738,2740-2758,2763-2776
+  s_c587ecf7bbc3e2::t_6bd948dfa02f0b 2250-2263
+  s_c587ecf7bbc3e2::t_6b8ca24f060847 520
+  s_c587ecf7bbc3e2::t_8e4c98ebf33ac1 5520-5535,5539
+  s_c587ecf7bbc3e2::t_991a2c31a7b04c 2683-2696
+  s_c587ecf7bbc3e2::t_bc6f16b3cd6ba6 1724-1726
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "27c7fefc98c5d6360b4f644242f12961eae1a80b",
+  "prompts": {},
+  "sessions": {
+    "s_b85ad4e83942fb": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f2fb59e4-005a-4647-84e9-94003c1bbbb1",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    },
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-fable-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
