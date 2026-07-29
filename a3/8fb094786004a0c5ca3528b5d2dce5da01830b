@@ -1,0 +1,26 @@
+scripts/validate.py
+  s_c587ecf7bbc3e2::t_fda42996b68d5f 9709-9714,9716-9717,9719,9721-9732
+  s_c587ecf7bbc3e2::t_0e1253089e981c 9648-9665
+  s_c587ecf7bbc3e2::t_78f5a046db3776 10585-10599
+  s_c587ecf7bbc3e2::t_563b6172bd18ad 9770-9775,9777-9778,9780,9782-9794
+  s_c587ecf7bbc3e2::t_82a393cb1474a9 10433-10439,10441-10454
+  s_c587ecf7bbc3e2::t_1c2685dcb17275 1281-1408
+  s_c587ecf7bbc3e2::t_c5c7c7aabf0e19 1790-1827
+  s_c587ecf7bbc3e2::t_e464bd92145a40 10779-10877
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "a38fb094786004a0c5ca3528b5d2dce5da01830b",
+  "prompts": {},
+  "sessions": {
+    "s_c587ecf7bbc3e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b39f5bf8-f328-41b3-b5fd-eb01a465a399",
+        "model": "claude-opus-5"
+      },
+      "human_author": "litianyi <litianyi@corp.netease.com>"
+    }
+  }
+}
