@@ -112,6 +112,30 @@ VERSION_SCAN_EXCLUDE_DIR_NAMES = frozenset({".git", "node_modules", ".tmp", "__p
 # comparison below on a false pretense.
 SEMVER_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
+# B2: a manifest matched by VERSION_MANIFEST_FILENAMES that structurally
+# carries zero "version" keys anywhere in its JSON is, by default, a
+# problem (see `discover_manifest_versions`) -- the whole point of this
+# guard is that every manifest this repo's release process is supposed to
+# keep in lockstep must be visibly checked, never silently skipped the
+# moment its version field goes missing. Deleting a manifest's "version" key
+# outright makes it structurally indistinguishable, by content alone, from
+# a manifest that legitimately never had one -- so the two can only be told
+# apart by a small, explicit, hand-audited exemption list here, never by
+# guessing intent from the file's own current content. Path strings are
+# root-relative, POSIX-separated. Keep this list tiny and comment every
+# entry: it is an *exemption* from an otherwise fail-closed default (any
+# newly-added manifest is, by default, expected to carry a valid version),
+# not a return to G28's original sin of a hardcoded inclusion list.
+VERSION_MANIFEST_VERSIONLESS_EXEMPT = frozenset(
+    {
+        # Codex marketplace entry carries policy/source metadata only, no
+        # "version" of its own anywhere in the file -- see validate_manifests()
+        # and this module's own docstring. Confirmed structurally empty of
+        # any "version" key (not merely unparsed) as of this writing.
+        ".agents/plugins/marketplace.json",
+    }
+)
+
 
 def _iter_version_manifest_paths(root: Path):
     """Walk `root` and yield every package.json / plugin.json / marketplace.json,
@@ -124,40 +148,94 @@ def _iter_version_manifest_paths(root: Path):
                 yield Path(dirpath) / filename
 
 
-def _collect_semver_values(node: object, out: list[str]) -> None:
-    """Recursively walk a parsed JSON value, collecting every STRING value
-    keyed "version" that looks like a semantic version (`[0-9]+.[0-9]+.[0-9]+`).
-    Integer schema-version fields such as `"version": 1` (real examples exist
-    in this repo, e.g. reference-roots-template.json) are excluded by
-    construction: the value must be a `str` AND match SEMVER_VERSION_RE."""
+def _collect_version_key_values(node: object, out: list[object]) -> None:
+    """Recursively walk a parsed JSON value, collecting the raw value of
+    every key literally named "version" -- ANY JSON type, not just strings
+    that already look like a semver.
+
+    Contrast the prior `_collect_semver_values`, which filtered at
+    collection time: a value that did not already look like a semver was
+    simply never appended, making a malformed value indistinguishable from
+    a key that was never there in the first place. That blind spot is
+    exactly what B2 found live, six different ways, all producing the same
+    "nothing found here" result under the old collector: `"0.11.0 "`
+    (trailing space), `"v0.11.0"`, `""`, `"0.11.0-rc1"`, full-width digits
+    (`"０.１１.０"`), and deleting the key outright. Collecting the raw
+    value regardless of shape lets `discover_manifest_versions` tell "no
+    version key at all" apart from "a version key with a bad value" and
+    report each as its own explicit problem instead of silently dropping
+    both into the same invisible non-entry."""
     if isinstance(node, dict):
         for key, value in node.items():
-            if key == "version" and isinstance(value, str) and SEMVER_VERSION_RE.match(value):
+            if key == "version":
                 out.append(value)
-            _collect_semver_values(value, out)
+            _collect_version_key_values(value, out)
     elif isinstance(node, list):
         for item in node:
-            _collect_semver_values(item, out)
+            _collect_version_key_values(item, out)
 
 
-def discover_manifest_versions(root: Path) -> dict[Path, list[str]]:
-    """Discover {manifest_path: [semver strings found in it]} for every
-    package.json / plugin.json / marketplace.json under `root`. A manifest
-    that yields zero qualifying semver strings (e.g. .agents/plugins/marketplace.json,
-    which currently carries no "version" key at all, or a pure integer
-    schema-version file) is simply omitted -- it has nothing to be
-    inconsistent with."""
+def discover_manifest_versions(root: Path) -> tuple[dict[Path, list[str]], list[str]]:
+    """Discover {manifest_path: [valid semver strings found in it]} for every
+    package.json / plugin.json / marketplace.json under `root`, plus a list
+    of human-readable *problems* for manifests that do not cleanly fit that
+    shape (B2 -- see this function's history for why "cleanly fit" needs its
+    own return channel instead of silent omission).
+
+    A manifest contributes to the returned dict only when it carries at
+    least one "version" key. Every value found under that key (there may be
+    more than one, e.g. a marketplace manifest with both a top-level
+    `version` and a nested `plugins[*].version`) is independently classified:
+
+    - Non-string values (`int`, `bool`, `float`, ...) are silently ignored,
+      not reported as problems and not counted as a valid version. A JSON
+      integer under a "version" key is, by convention across this repo, a
+      *schema*-version field (e.g. `reference-roots-template.json`'s
+      `"version": 1`), a different concept entirely from a release semver
+      string -- conflating the two was never the bug B2 describes, and
+      remains correctly excluded, unchanged from before.
+    - A string value that matches `SEMVER_VERSION_RE` is a valid release
+      version and is added to that manifest's list in the returned dict.
+    - A string value that does NOT match `SEMVER_VERSION_RE` is a problem:
+      the manifest declared a release-version-shaped field but the value is
+      malformed (covers all five string-shaped B2 bypasses: trailing
+      whitespace, a `v`-prefix, an empty string, a `-rc1`-style suffix, and
+      full-width digits that a bare `\\d`/`isdigit()` check would have
+      missed but `SEMVER_VERSION_RE`'s explicit `[0-9]` does not).
+
+    A manifest that carries **no** "version" key anywhere in its JSON is
+    also a problem, UNLESS its root-relative path is listed in
+    `VERSION_MANIFEST_VERSIONLESS_EXEMPT` -- this is what catches the sixth
+    B2 bypass (deleting the key outright), which is structurally
+    indistinguishable from "never had one" by content alone.
+    """
     discovered: dict[Path, list[str]] = {}
+    problems: list[str] = []
     for path in _iter_version_manifest_paths(root):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        found: list[str] = []
-        _collect_semver_values(data, found)
-        if found:
-            discovered[path] = found
-    return discovered
+        raw_values: list[object] = []
+        _collect_version_key_values(data, raw_values)
+        rel = path.relative_to(root).as_posix()
+
+        if not raw_values:
+            if rel not in VERSION_MANIFEST_VERSIONLESS_EXEMPT:
+                problems.append(f"{rel}: has no 'version' key at all")
+            continue
+
+        valid: list[str] = []
+        for value in raw_values:
+            if not isinstance(value, str):
+                continue
+            if SEMVER_VERSION_RE.match(value):
+                valid.append(value)
+            else:
+                problems.append(f"{rel}: 'version' value {value!r} is not a valid X.Y.Z semantic version")
+        if valid:
+            discovered[path] = valid
+    return discovered, problems
 
 
 def _g28_write_fixture_manifest(root: Path, rel: str, data: dict) -> None:
@@ -218,9 +296,14 @@ def validate_version_consistency() -> None:
     # G28a: real repo state. discover_manifest_versions() is a filesystem
     # walk keyed on basename (package.json / plugin.json / marketplace.json),
     # not a hardcoded list -- see G28c for the fixture that proves this.
-    discovered = discover_manifest_versions(REPO_ROOT)
+    discovered, problems = discover_manifest_versions(REPO_ROOT)
     rel_report = ", ".join(
         f"{path.relative_to(REPO_ROOT)}={versions}" for path, versions in sorted(discovered.items())
+    )
+    check(
+        not problems,
+        "G28a: every manifest matched by the basename walk either carries a valid "
+        f"X.Y.Z version or is on VERSION_MANIFEST_VERSIONLESS_EXEMPT (problems: {problems})",
     )
     check(
         len(discovered) >= 3,
@@ -257,19 +340,19 @@ def validate_version_consistency() -> None:
             fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
         )
 
-        baseline = discover_manifest_versions(fixture_root)
+        baseline, baseline_problems = discover_manifest_versions(fixture_root)
         baseline_versions = sorted({v for versions in baseline.values() for v in versions})
         check(
-            baseline_versions == ["1.2.3"],
+            baseline_versions == ["1.2.3"] and not baseline_problems,
             f"G28b baseline: freshly-built 4-manifest fixture (all 1.2.3) is internally "
-            f"consistent before mutation (found {baseline_versions})",
+            f"consistent before mutation (found {baseline_versions}, problems {baseline_problems})",
         )
 
         mutated_path = fixture_root / "plugins" / "harnessloop" / ".codex-plugin" / "plugin.json"
         _g28_write_fixture_manifest(
             fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "9.9.9"}
         )
-        mutated = discover_manifest_versions(fixture_root)
+        mutated, mutated_problems = discover_manifest_versions(fixture_root)
         mutated_versions = sorted({v for versions in mutated.values() for v in versions})
         offenders = sorted(str(p.relative_to(fixture_root)) for p, vs in mutated.items() if "9.9.9" in vs)
         check(
@@ -278,6 +361,12 @@ def validate_version_consistency() -> None:
             f"other manifests untouched at 1.2.3) makes the guard red AND the offending "
             f"file is nameable from the discovery result (versions found: {mutated_versions}, "
             f"offenders: {offenders})",
+        )
+        check(
+            not mutated_problems,
+            f"G28b: 9.9.9 is itself a well-formed X.Y.Z string, so this mutation is caught "
+            f"by cross-manifest inconsistency alone, not by the problems channel "
+            f"(problems: {mutated_problems})",
         )
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
@@ -299,10 +388,11 @@ def validate_version_consistency() -> None:
             fixture_root, "plugins/harnessloop/.codex-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
         )
 
-        baseline = discover_manifest_versions(fixture_root)
+        baseline, baseline_problems = discover_manifest_versions(fixture_root)
         check(
-            sorted({v for vs in baseline.values() for v in vs}) == ["1.2.3"],
-            "G28c baseline: 4-manifest fixture is consistent before the new manifest is added",
+            sorted({v for vs in baseline.values() for v in vs}) == ["1.2.3"] and not baseline_problems,
+            f"G28c baseline: 4-manifest fixture is consistent before the new manifest is "
+            f"added (problems: {baseline_problems})",
         )
 
         new_manifest_rel = "plugins/harnessloop/.someother-plugin/plugin.json"
@@ -315,7 +405,7 @@ def validate_version_consistency() -> None:
             fixture_root, new_manifest_rel, {"name": "harnessloop-someother", "version": "4.5.6"}
         )
 
-        after = discover_manifest_versions(fixture_root)
+        after, after_problems = discover_manifest_versions(fixture_root)
         new_path = fixture_root / Path(new_manifest_rel)
         after_versions = sorted({v for vs in after.values() for v in vs})
         check(
@@ -330,6 +420,11 @@ def validate_version_consistency() -> None:
             f"pre-existing manifests still at 1.2.3) turns the consistency guard red "
             f"(discovered versions: {after_versions}) -- if this were green instead, the "
             "implementation would be an enumeration with a blind spot, not a discovery",
+        )
+        check(
+            not after_problems,
+            f"G28c: 4.5.6 is itself well-formed, so this is caught by cross-manifest "
+            f"inconsistency alone (problems: {after_problems})",
         )
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
@@ -366,12 +461,12 @@ def validate_version_consistency() -> None:
             "the value level, not by skipping the file",
         )
 
-        result = discover_manifest_versions(fixture_root)
+        result, result_problems = discover_manifest_versions(fixture_root)
         check(
             schema_path not in result,
             "G28d: ...but it contributes zero entries to the version-bearing result, "
             "because its only \"version\" value is the int 1, which fails the "
-            "isinstance(str) + semver-regex test",
+            "isinstance(str) test",
         )
         all_versions = sorted({v for vs in result.values() for v in vs})
         check(
@@ -379,6 +474,130 @@ def validate_version_consistency() -> None:
             f"G28d: the nested integer schema version does not get pulled into the "
             f"semantic version set alongside the real 1.2.3 manifests (discovered "
             f"versions: {all_versions}) -- the guard stays green",
+        )
+        check(
+            not result_problems,
+            "G28d: an int-valued \"version\" key is a schema-version field by this "
+            "repo's convention, not a malformed release version -- B2's 'has a version "
+            f"key but it is invalid' problem must never fire for it (problems: {result_problems})",
+        )
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+
+    # G44 (B2): six live bypasses that all silently vanished under the old
+    # collector -- `discovered` losing one manifest still cleared
+    # `len(discovered) >= 3` (the real repo has exactly 4, one unit of
+    # slack) and, for the five string-shaped bypasses, the survivors stayed
+    # mutually consistent, so the whole guard reported green while one
+    # manifest's version tracking silently went dark. Each of the five
+    # malformed-string bypasses gets its own fixture, red (problem reported,
+    # manifest excluded from the comparison set) then green (restoring a
+    # valid value clears the problem and restores the manifest to the set).
+    print("  G44: six B2 bypasses (malformed version string x5 + deleted key x1)")
+    g44_bad_values = {
+        "trailing_space": "0.11.0 ",
+        "v_prefix": "v0.11.0",
+        "empty_string": "",
+        "rc_suffix": "0.11.0-rc1",
+        "fullwidth_digits": "０.１１.０",  # "０.１１.０"
+    }
+    mutated_rel = "plugins/harnessloop/.codex-plugin/plugin.json"
+    for bypass_name, bad_value in g44_bad_values.items():
+        fixture_root = Path(tempfile.mkdtemp(prefix=f"harnessloop-g44-{bypass_name}-"))
+        try:
+            _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "version": "1.2.3"})
+            _g28_write_fixture_manifest(
+                fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "version": "1.2.3"}]}
+            )
+            _g28_write_fixture_manifest(
+                fixture_root, "plugins/harnessloop/.claude-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+            )
+            _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "version": bad_value})
+
+            discovered, problems = discover_manifest_versions(fixture_root)
+            mutated_path = fixture_root / Path(mutated_rel)
+            check(
+                any(mutated_rel in p and repr(bad_value) in p for p in problems),
+                f"G44 ({bypass_name}): version value {bad_value!r} in {mutated_rel} is "
+                f"reported as an explicit problem, not silently dropped from the comparison "
+                f"set (problems: {problems})",
+            )
+            check(
+                mutated_path not in discovered,
+                f"G44 ({bypass_name}): the malformed manifest contributes zero valid "
+                "versions -- it must not silently count as internally consistent",
+            )
+
+            # Reverse mutation: restoring a real, valid value on the SAME file
+            # clears the problem and puts the manifest back in the comparison
+            # set -- proves the assertions above are load-bearing, not vacuous.
+            _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "version": "1.2.3"})
+            fixed_discovered, fixed_problems = discover_manifest_versions(fixture_root)
+            check(
+                not fixed_problems and fixed_discovered.get(mutated_path) == ["1.2.3"],
+                f"G44 ({bypass_name}) reverse mutation: restoring a valid '1.2.3' on the "
+                f"same file clears the problem and restores the manifest to the "
+                f"comparison set (problems: {fixed_problems}, discovered: "
+                f"{fixed_discovered.get(mutated_path)})",
+            )
+        finally:
+            shutil.rmtree(fixture_root, ignore_errors=True)
+
+    # Sixth bypass: deleting the "version" key outright rather than writing a
+    # malformed value -- structurally indistinguishable, by content alone,
+    # from a manifest that legitimately never had one (VERSION_MANIFEST_
+    # VERSIONLESS_EXEMPT is what tells the two apart).
+    fixture_root = Path(tempfile.mkdtemp(prefix="harnessloop-g44-deleted-key-"))
+    try:
+        _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "version": "1.2.3"})
+        _g28_write_fixture_manifest(
+            fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "version": "1.2.3"}]}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root, "plugins/harnessloop/.claude-plugin/plugin.json", {"name": "harnessloop", "version": "1.2.3"}
+        )
+        _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop"})  # no "version" key at all
+
+        discovered, problems = discover_manifest_versions(fixture_root)
+        mutated_path = fixture_root / Path(mutated_rel)
+        check(
+            any(mutated_rel in p and "no 'version' key at all" in p for p in problems),
+            f"G44 (deleted_key): a manifest matched by the walk with its 'version' key "
+            f"deleted outright is reported as an explicit problem, since {mutated_rel!r} "
+            f"is not on VERSION_MANIFEST_VERSIONLESS_EXEMPT (problems: {problems})",
+        )
+        check(
+            mutated_path not in discovered,
+            "G44 (deleted_key): the key-deleted manifest contributes zero entries to the "
+            "comparison set",
+        )
+
+        # Reverse mutation: restoring the "version" key on the same file clears
+        # the problem.
+        _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "version": "1.2.3"})
+        fixed_discovered, fixed_problems = discover_manifest_versions(fixture_root)
+        check(
+            not fixed_problems and fixed_discovered.get(mutated_path) == ["1.2.3"],
+            f"G44 (deleted_key) reverse mutation: restoring the 'version' key clears the "
+            f"problem and restores the manifest to the comparison set (problems: "
+            f"{fixed_problems})",
+        )
+
+        # Mutation control, opposite direction: the SAME zero-version-key shape,
+        # at a path that genuinely IS on the exemption list, must never be
+        # reported -- proving the exemption is load-bearing, not "any manifest
+        # with zero version keys is now always red" (which would make the real
+        # repo's own .agents/plugins/marketplace.json a permanent false
+        # positive -- see G28a above, which asserts the opposite for that exact
+        # file).
+        exempt_rel = next(iter(VERSION_MANIFEST_VERSIONLESS_EXEMPT))
+        _g28_write_fixture_manifest(fixture_root, exempt_rel, {"name": "harnessloop-someother"})
+        _, problems_with_exempt = discover_manifest_versions(fixture_root)
+        check(
+            not any(exempt_rel in p for p in problems_with_exempt),
+            f"G44 (deleted_key) mutation control: a manifest with zero 'version' keys "
+            f"whose path IS on VERSION_MANIFEST_VERSIONLESS_EXEMPT ({exempt_rel!r}) is "
+            f"never reported as a problem (problems: {problems_with_exempt})",
         )
     finally:
         shutil.rmtree(fixture_root, ignore_errors=True)
@@ -1212,6 +1431,234 @@ def _iter_repo_py_files(root: Path):
                 yield Path(dirpath) / filename
 
 
+# ---------------------------------------------------------------------------
+# G52: structural (AST-based, discovery-not-hardcoded-list) sweep for the D2
+# bool/float `!= 1` version-check bug class -- same principle as G35a's
+# bare-`\d` sweep, applied to a different bug shape. This round found the
+# SAME bug (bare `!= 1`, silently accepting `True`/`1.0` because `bool` is an
+# `int` subclass and `float` compares numerically across types) at two more
+# sites beyond the one G48 already covers (`_load_external_systems_file`):
+# `_load_versioned_roots` and `_load_local_bindings` (G51b/G51c below). Fixing
+# found sites one at a time, with no structural guard, just defers the next
+# occurrence to the next person who happens to grep for it by hand -- exactly
+# the shape G35a exists to prevent for the bare-\d class.
+# ---------------------------------------------------------------------------
+
+# Sites explicitly exempted from G52a after individual review. Empty by
+# design: every real `!= 1`-shaped version comparison in this repo (three
+# sites, after this round) uses the `isinstance(v, bool) or not
+# isinstance(v, int) or v != 1` idiom this detector recognizes as guarded --
+# there is no known site that legitimately needs an exemption. If one is
+# ever added, it must name the exact `path:lineno` and carry a comment
+# explaining why that site cannot use the standard idiom -- do not silently
+# loosen the detector itself to accommodate it.
+G52_WHITELIST: frozenset[str] = frozenset()
+
+
+def _g52_is_version_key_access(node: ast.AST) -> bool:
+    """True if `node` is `<expr>.get("version"[, ...])` or `<expr>["version"]`
+    -- the two syntactic shapes a JSON-schema loader in this repo uses to
+    read a declared 'version' field."""
+    if isinstance(node, ast.Subscript):
+        key = node.slice
+        return isinstance(key, ast.Constant) and key.value == "version"
+    if isinstance(node, ast.Call):
+        func = node.func
+        return (
+            isinstance(func, ast.Attribute)
+            and func.attr == "get"
+            and bool(node.args)
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value == "version"
+        )
+    return False
+
+
+def _g52_is_non_bool_int_constant(node: ast.AST) -> bool:
+    """True for an `int` literal that is not `True`/`False` -- `bool` is an
+    `ast.Constant` with an `int` subclass value too, so this must be checked
+    explicitly, not just `isinstance(node.value, int)`."""
+    return isinstance(node, ast.Constant) and isinstance(node.value, int) and not isinstance(node.value, bool)
+
+
+def _g52_isinstance_bool_call(node: ast.AST, name: str) -> bool:
+    """True if `node` is a direct (not `not`-negated -- a negated form would
+    mean 'exclude everything that is NOT bool', the wrong direction)
+    `isinstance(<Name matching `name`>, bool)` call -- the exclusion shape
+    every real fix in this repo uses."""
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "isinstance"):
+        return False
+    if len(node.args) != 2:
+        return False
+    target, type_arg = node.args
+    return (
+        isinstance(target, ast.Name)
+        and target.id == name
+        and isinstance(type_arg, ast.Name)
+        and type_arg.id == "bool"
+    )
+
+
+def _g52_find_version_ne_violations(text: str, *, filename: str = "<string>") -> list[str]:
+    """AST-scan `text` for a `<expr>.get("version") != <int literal>` /
+    `<expr>["version"] != <int literal>` comparison -- directly, or via a
+    same-file local variable previously assigned `name = <version-get-expr>`
+    -- that lacks a sibling `isinstance(<value>, bool)` exclusion in the same
+    `or`-chain (the shape every real fix in this repo uses:
+    `isinstance(v, bool) or not isinstance(v, int) or v != 1`). Returns a
+    list of `f"{filename}:{lineno}"` strings, one per violation.
+
+    AST-based, not text-regex-based, for the same reason G35a is (see its
+    module comment): a `!= 1` example quoted inside a `#` comment or a
+    docstring must not be misread as live code.
+
+    Discovery, not a hardcoded site list (same principle as G35a and G28):
+    this walks every `!=` comparison in the file and classifies each one by
+    shape, rather than checking a fixed list of known function names -- a
+    comparison at a brand new call site is caught exactly the same way the
+    real ones this round found were.
+
+    The "is this Name a version-derived value" question is answered
+    file-wide, not function-scoped: a local variable assigned from a
+    version-get expression anywhere in the file is treated as
+    version-derived everywhere in the file. This could in principle miss a
+    real violation if an unrelated variable in a different function
+    coincidentally shared the exact name AND itself lacked its own
+    `isinstance(..., bool)` guard -- a real but narrow limitation, no
+    different in spirit from G35a's own admitted "no nested `[]` handling"
+    scope note in `_pattern_has_bare_backslash_d`.
+    """
+    try:
+        tree = ast.parse(text, filename=filename)
+    except SyntaxError:
+        return []
+
+    parent_of: dict[int, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent_of[id(child)] = node
+
+    version_names: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and _g52_is_version_key_access(node.value)
+        ):
+            version_names.add(node.targets[0].id)
+
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        if len(node.ops) != 1 or not isinstance(node.ops[0], ast.NotEq):
+            continue
+        left, right = node.left, node.comparators[0]
+        for value_side, other_side in ((left, right), (right, left)):
+            is_version = _g52_is_version_key_access(value_side) or (
+                isinstance(value_side, ast.Name) and value_side.id in version_names
+            )
+            if not (is_version and _g52_is_non_bool_int_constant(other_side)):
+                continue
+            covered = False
+            if isinstance(value_side, ast.Name):
+                parent = parent_of.get(id(node))
+                if isinstance(parent, ast.BoolOp) and isinstance(parent.op, ast.Or):
+                    covered = any(
+                        v is not node and _g52_isinstance_bool_call(v, value_side.id) for v in parent.values
+                    )
+            if not covered:
+                hits.append(f"{filename}:{node.lineno}")
+            break
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# G53: a narrower, deliberately scoped structural guard for the A2 embedded-
+# NUL-byte crash class (see G42 above, and G51a below). Unlike G35a/G52a,
+# this is NOT a blanket "every `.resolve(` call must handle ValueError"
+# sweep -- see G53's own module comment (right before its teeth, in
+# `validate_protocol_gates`) for why that broader version was rejected as
+# either vacuous (needing a whitelist nearly as large as its hit list) or
+# unreliable (still missing the shape that would matter). This is scoped to
+# the one signature that is both mechanical AND matches every real historical
+# instance: a `try` whose `body` contains a `.resolve(` call, where at least
+# one `except` clause already names `OSError` and/or `RuntimeError` (the
+# unambiguous sign this try exists specifically to catch resolution
+# failures) but none of its handlers cover `ValueError`.
+# ---------------------------------------------------------------------------
+
+G53_WHITELIST: frozenset[str] = frozenset()
+
+
+def _g53_is_resolve_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve"
+
+
+def _g53_handler_names(handler_type: ast.AST | None) -> set[str] | None:
+    """Flatten one except-clause's type expression into the set of names it
+    catches, or `None` to mean "catches everything" (a bare `except:`, or an
+    explicit `except Exception`/`except BaseException`)."""
+    if handler_type is None:
+        return None
+    if isinstance(handler_type, ast.Name):
+        if handler_type.id in ("Exception", "BaseException"):
+            return None
+        return {handler_type.id}
+    if isinstance(handler_type, ast.Tuple):
+        names: set[str] = set()
+        for elt in handler_type.elts:
+            if isinstance(elt, ast.Name):
+                if elt.id in ("Exception", "BaseException"):
+                    return None
+                names.add(elt.id)
+        return names
+    return set()
+
+
+def _g53_find_missing_valueerror(text: str, *, filename: str = "<string>") -> list[str]:
+    """AST-scan `text` for a `try` block whose `body` calls `.resolve(`,
+    where some handler already names `OSError`/`RuntimeError` but none
+    covers `ValueError`. Returns `f"{filename}:{lineno}"` per hit (the
+    `try`'s own line).
+
+    Deliberately does NOT flag a `.resolve(` call with no enclosing
+    try/except at all -- see the module comment above and the report this
+    task produced for why a guard that broad would need a whitelist as
+    long as its hit list (every CLI-arg-derived and hardcoded `.resolve(`
+    call in this repo is unwrapped today, and provably safe by construction
+    for reasons a syntax tree cannot see) and is therefore left out.
+    """
+    try:
+        tree = ast.parse(text, filename=filename)
+    except SyntaxError:
+        return []
+
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        has_resolve = any(_g53_is_resolve_call(n) for stmt in node.body for n in ast.walk(stmt))
+        if not has_resolve:
+            continue
+        signature_present = False
+        valueerror_present = False
+        for handler in node.handlers:
+            names = _g53_handler_names(handler.type)
+            if names is None:
+                signature_present = True
+                valueerror_present = True
+                continue
+            if names & {"OSError", "RuntimeError"}:
+                signature_present = True
+            if "ValueError" in names:
+                valueerror_present = True
+        if signature_present and not valueerror_present:
+            hits.append(f"{filename}:{node.lineno}")
+    return hits
+
+
 def validate_protocol_gates() -> None:
     print("[7/9] Mechanical protocol gates (verify_protocol.py)")
     mock_project = REPO_ROOT / "examples" / "mock-project"
@@ -1375,20 +1822,62 @@ def validate_protocol_gates() -> None:
         f"was performed — such a field can only degrade into boilerplate (found: {ossify_hits})",
     )
 
-    # G39 (TH-0025, evolution-issues/0025-*.md): the shipped plugin tree
-    # (`plugins/harnessloop/`) must never name a `.sh` script as some other
-    # party's job/responsibility for a gate the plugin itself declines to
-    # cover. TH-0025's adversarial ruling found exactly two such sentences
-    # (harnessloop-loop/SKILL.md's OUT column and verify_protocol.py's
-    # `check_external_systems` docstring), both pointing at
-    # `check-secrets.sh` -- a file that exists only in this validating
+    # G39 (TH-0025, evolution-issues/0025-evidence-write-no-secret-guard.md):
+    # the shipped plugin tree (`plugins/harnessloop/`) must never name a
+    # `.sh` script as some other party's job/responsibility for a gate the
+    # plugin itself declines to cover. TH-0025's adversarial ruling found
+    # exactly two such sentences (harnessloop-loop/SKILL.md's OUT column and
+    # verify_protocol.py's `check_external_systems` docstring), both pointing
+    # at `check-secrets.sh` -- a file that exists only in this validating
     # project (test-harnessloop), never inside the plugin tree the plugin
-    # actually ships to an installed project. The ruling: the plugin owns
-    # neither the data nor the timing nor the enforcement such a gate would
-    # need, so it may describe what it does *not* do (first-person, about
-    # itself) but must never assert that some *other* named file is doing
-    # it instead -- that reads as "someone is guarding this" when nobody
-    # is, for any project this plugin is installed into.
+    # actually ships to an installed project.
+    #
+    # DOWNGRADED (E, this batch): this used to be documented as "teeth
+    # against recidivism" for the TH-0025 ownership-claim class. It is not
+    # that, and never fully was -- it is a narrow, easily-bypassed lint that
+    # catches exactly one shape: a literal orphan `.sh` filename token
+    # sitting within 60 characters of one of a small, fixed list of
+    # ownership-flavored English words. Confirmed live, both directions:
+    #
+    # 1. It cannot see the very sentence it exists to prevent recurring.
+    #    The ORIGINAL (pre-v0.36.0) SKILL.md:480 false assurance -- "Secret-
+    #    shaped text ... is this repository's own secret-scanning hook's
+    #    job" -- names no `.sh` file at all (it says "hook", not
+    #    "check-secrets.sh"). `sh_reference_pat` never fires on it, so
+    #    `ownership_word_pat` is never even consulted; that exact sentence
+    #    could be reintroduced verbatim and this check would stay green.
+    # 2. The word list is trivially paraphrased around: "performed by",
+    #    "duty of", "protects", "enforced via" (`enforces?` matches
+    #    "enforce"/"enforces" but not the past tense "enforced"),
+    #    "responsible for" (`responsibilit(?:y|ies)` does not match the
+    #    adjective "responsible" at all), and "takes care of" all name an
+    #    orphan `.sh` file as another party's job while none of them match
+    #    `ownership_word_pat` -- confirmed by pasting each into a fixture and
+    #    observing this check stay green.
+    #
+    # Both of these are left as registered, *undone* upper bounds, not
+    # silently patched over by growing the word list further: doing so would
+    # be the same kind of solve-by-enumeration this project's TH-0029 stop
+    # line already rejected for character-level parsing boundaries (SKILL.md
+    # OUT column), just applied to English phrasing instead of Unicode
+    # variants -- there is no principled place to stop adding synonyms, and
+    # every synonym added is a synonym not yet found. What this check
+    # verifiably does: catch a literal, unmodified `.sh` filename that does
+    # not exist in the shipped plugin tree, appearing near one of `job` /
+    # `responsibility` / `responsibilities` / `handle(s)` / `own(s)`
+    # (excluding the first-person self-referential "its own" / "my own" /
+    # "our own" / "their own" / "his own" / "her own" / "your own" -- see
+    # below) / `guard(s)` / `enforce(s)`. Nothing more.
+    #
+    # False-positive fix (E, this batch): `\bowns?\b` alone matched "own"
+    # inside "its own" -- so "Harnessloop ... does not ship its own
+    # check-secrets.sh", the accepted first-person self-referential negation
+    # phrasing this same TH-0025 ruling explicitly designates as LEGAL
+    # ("关于 Harnessloop 自己不做什么的第一人称陈述是自指规则，合法"), was
+    # misreported as an ownership claim about a THIRD party. The five
+    # negative lookbehinds below exclude exactly that shape (a possessive
+    # determiner immediately before "own"/"owns") without touching any other
+    # word in the list and without adding new coverage.
     #
     # The expected set below is *computed*, not a hardcoded list: every
     # `.sh` filename that actually exists anywhere under the shipped plugin
@@ -1410,7 +1899,9 @@ def validate_protocol_gates() -> None:
     # registers, rather than silently pretends to cover, the rest.
     sh_reference_pat = re.compile(r"\b([A-Za-z0-9_-]+\.sh)\b")
     ownership_word_pat = re.compile(
-        r"\bjob\b|\bresponsibilit(?:y|ies)\b|\bhandles?\b|\bowns?\b|\bguards?\b|\benforces?\b",
+        r"\bjob\b|\bresponsibilit(?:y|ies)\b|\bhandles?\b"
+        r"|(?<!\bits\b )(?<!\bmy\b )(?<!\bour\b )(?<!\btheir\b )(?<!\bhis\b )(?<!\bher\b )(?<!\byour\b )\bowns?\b"
+        r"|\bguards?\b|\benforces?\b",
         re.IGNORECASE,
     )
     shipped_sh_scripts = {p.name for p in PLUGIN_ROOT.rglob("*.sh")}
@@ -1430,7 +1921,8 @@ def validate_protocol_gates() -> None:
         not orphan_sh_ownership_hits,
         "no shipped-plugin text (plugins/harnessloop/**/*.{md,py}) names a `.sh` "
         "script that does not exist in the plugin tree as another party's "
-        f"job/responsibility (TH-0025) (found: {orphan_sh_ownership_hits})",
+        "job/responsibility, using this check's own (narrow, non-exhaustive -- "
+        f"see the comment above) word list (TH-0025) (found: {orphan_sh_ownership_hits})",
     )
 
     # E1<->E2 一致性（teeth #4）：SKILL.md 的 Mechanical Gate Boundary "IN" 列
@@ -8874,6 +9366,1215 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g40l_root, ignore_errors=True)
+
+    # =====================================================================
+    # G41-G50: teeth for the v0.38.0 defect batch (A1/A2 crashes, B1/B2
+    # Unicode/guard bypasses, C1/C2 fence-tracking misses, D1/D2/D3 logic
+    # bugs, E's G39 downgrade). Every block below proves a positive
+    # (red under the bug's exact trigger condition) and, where the
+    # underlying defect can be independently reproduced without a global
+    # monkeypatch, an explicit mutation control showing the pre-fix
+    # behavior really would have gotten this wrong -- not merely that the
+    # post-fix behavior looks plausible.
+    # =====================================================================
+
+    # -------------------------------------------------------------------
+    # G41 (A1, BLOCKER): a `kind` written as a JSON array/object in
+    # external-systems.json used to crash the WHOLE gate -- `kind not in
+    # EXTERNAL_SYSTEM_KINDS` (frozenset membership) raises `TypeError:
+    # unhashable type` for an unhashable left operand instead of returning
+    # `False`, and nothing between `_load_external_systems_file` and
+    # `main()` ever caught it -- exit=1 with ZERO stdout, worse than any
+    # reported violation (a `--json` consumer gets nothing at all).
+    # Contrast `kind: "websocket"` (G37c above): out-of-enum but hashable,
+    # so `in` just returns False and this correctly, uneventfully produces
+    # `external-system-invalid` -- the crash is specific to an unhashable
+    # `kind`, not to "any invalid kind".
+    # -------------------------------------------------------------------
+    print("  G41 (A1): a list/dict `kind` in external-systems.json must not crash the gate")
+    g41_root = Path(tempfile.mkdtemp(prefix="hl-a1-"))
+    try:
+        project = _rae_project(g41_root)
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": ["not", "a", "string"], "description": "", "params": []}
+                ],
+            },
+        )
+        result = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(project), "--json")
+        check(
+            result.returncode == 1,
+            f"G41: process exits 1 (a reported violation), same code a normal violation "
+            f"produces on its own -- see the stdout check below for the real distinguishing "
+            f"signal (got {result.returncode})",
+        )
+        check(
+            bool(result.stdout.strip()),
+            "G41: stdout is non-empty -- the crash's signature was exit=1 with ZERO stdout "
+            "(nothing after `verify_project()` raised ever ran); a populated --json payload "
+            f"proves this is a normal reported violation, not the historical crash "
+            f"(stderr: {result.stderr[:2000]!r})",
+        )
+        payload = json.loads(result.stdout)  # a crash's stdout would not even parse as JSON
+        kinds = {v["kind"] for v in payload["violations"]}
+        check(
+            "external-system-invalid" in kinds,
+            f"G41: a list-valued `kind` collapses to the same external-system-invalid "
+            f"violation every other malformed `kind` already produces (got {sorted(kinds)})",
+        )
+
+        # dict-valued kind: same crash shape, same fix.
+        _write_ext_systems(
+            project,
+            {
+                "version": 1,
+                "systems": [
+                    {"id": "staging-api", "kind": {"nested": "object"}, "description": "", "params": []}
+                ],
+            },
+        )
+        result2 = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(project), "--json")
+        check(
+            result2.returncode == 1 and bool(result2.stdout.strip()),
+            f"G41: a dict-valued `kind` is likewise handled without crashing (returncode="
+            f"{result2.returncode}, stdout empty={not result2.stdout.strip()})",
+        )
+        payload2 = json.loads(result2.stdout)
+        kinds2 = {v["kind"] for v in payload2["violations"]}
+        check(
+            "external-system-invalid" in kinds2,
+            f"G41: a dict-valued `kind` also collapses to external-system-invalid (got {sorted(kinds2)})",
+        )
+    finally:
+        shutil.rmtree(g41_root, ignore_errors=True)
+
+    # Mutation control (in-process, no subprocess needed): confirm this
+    # exact fixture's `kind` value really is one the PRE-FIX bare
+    # `kind not in EXTERNAL_SYSTEM_KINDS` expression would have raised
+    # TypeError on -- proving G41's positive assertions above are a real
+    # regression test, not coincidentally green.
+    try:
+        _ = ["not", "a", "string"] not in verify_protocol.EXTERNAL_SYSTEM_KINDS
+        g41_control_raised = False
+    except TypeError:
+        g41_control_raised = True
+    check(
+        g41_control_raised,
+        "G41 mutation control: the pre-fix bare `kind not in EXTERNAL_SYSTEM_KINDS` "
+        "expression really does raise TypeError for a list-valued kind, confirming G41's "
+        "fixture is a genuine repro of the historical crash, not a vacuous one",
+    )
+
+    # -------------------------------------------------------------------
+    # G42 (A2, HIGH): a path-shaped string containing an embedded NUL byte
+    # used to crash the whole gate -- `Path.resolve(strict=False)` raises
+    # `ValueError: embedded null byte`, uncaught, anywhere containment is
+    # checked (`_canonical` / `_is_contained` / `_is_contained_pinned`).
+    # Two real entry points reach this before any prior validation: an
+    # eval ledger's `evidence` field, and an ordinary review markdown
+    # Rule B citation span (the wider entry point).
+    # -------------------------------------------------------------------
+    print("  G42 (A2): an embedded NUL byte in a path-shaped string must not crash the gate (fail-closed violation instead)")
+
+    print("    entry point 1/2: eval ledger `evidence` field")
+    g42a_root = Path(tempfile.mkdtemp(prefix="hl-a2-eval-"))
+    try:
+        project = _rae_project(g42a_root)
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: positive\n- Review: none — n/a\n- Reviewer: me\n"
+            "- Review verdict: pass\n- Acceptance evals: ran\n",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "runtime/mod\x00.json",
+                    }
+                ]
+            },
+        )
+        result = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(project), "--json")
+        check(
+            result.returncode == 1,
+            f"G42 (eval-ledger evidence): process exits 1 -- a reported violation (got {result.returncode})",
+        )
+        check(
+            bool(result.stdout.strip()),
+            "G42 (eval-ledger evidence): stdout is non-empty -- the crash's signature was "
+            f"exit=1 with ZERO stdout (stderr: {result.stderr[:2000]!r})",
+        )
+        payload = json.loads(result.stdout)
+        kinds = {v["kind"] for v in payload["violations"]}
+        check(
+            "eval-ledger-evidence-outside-round" in kinds,
+            f"G42 (eval-ledger evidence): the NUL-byte evidence path fails containment and is "
+            f"reported as eval-ledger-evidence-outside-round, fail-closed (got {sorted(kinds)})",
+        )
+
+        # Mutation control (in-process): temporarily revert `_canonical` to
+        # its pre-fix bare form and confirm THIS exact fixture really does
+        # crash under it.
+        _orig_canonical = verify_protocol._canonical
+
+        def _bare_canonical(path):
+            return path.resolve(strict=False)
+
+        verify_protocol._canonical = _bare_canonical
+        try:
+            g42a_crashed = False
+            try:
+                verify_protocol.verify_project(project)
+            except ValueError:
+                g42a_crashed = True
+            check(
+                g42a_crashed,
+                "G42 (eval-ledger evidence) mutation control: the pre-fix bare `_canonical` "
+                "(no try/except) raises ValueError on this exact fixture",
+            )
+        finally:
+            verify_protocol._canonical = _orig_canonical
+    finally:
+        shutil.rmtree(g42a_root, ignore_errors=True)
+
+    print("    entry point 2/2: review markdown Rule B citation span (the wider entry point)")
+    g42b_root = Path(tempfile.mkdtemp(prefix="hl-a2-review-"))
+    try:
+        round_dir = g42b_root / ".harnessloop" / "goals" / "20260101-001-a2" / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n"
+            "- Write evidence under `rounds/0001/evidence/`.\n"
+            "- Write reviews under `rounds/0001/reviews/`.\n",
+            encoding="utf-8",
+        )
+        (round_dir / "reviews" / "notes.md").write_text(
+            "Citing a path with an embedded NUL byte:\n- `src/mod\x00.py:12`\n",
+            encoding="utf-8",
+        )
+        result = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(g42b_root), "--json")
+        check(
+            result.returncode == 1,
+            f"G42 (review citation): process exits 1 -- a reported violation (got {result.returncode})",
+        )
+        check(
+            bool(result.stdout.strip()),
+            "G42 (review citation): stdout is non-empty -- the crash's signature was exit=1 "
+            f"with ZERO stdout (stderr: {result.stderr[:2000]!r})",
+        )
+        payload = json.loads(result.stdout)
+        kinds = {v["kind"] for v in payload["violations"]}
+        check(
+            "dangling-citation" in kinds,
+            f"G42 (review citation): the NUL-byte citation span fails containment/resolution "
+            f"and is reported as dangling-citation, fail-closed, not a crash (got {sorted(kinds)})",
+        )
+
+        _orig_canonical = verify_protocol._canonical
+
+        def _bare_canonical2(path):
+            return path.resolve(strict=False)
+
+        verify_protocol._canonical = _bare_canonical2
+        try:
+            g42b_crashed = False
+            try:
+                verify_protocol.verify_project(g42b_root)
+            except ValueError:
+                g42b_crashed = True
+            check(
+                g42b_crashed,
+                "G42 (review citation) mutation control: the pre-fix bare `_canonical` "
+                "raises ValueError on this fixture too -- both entry points reach the same "
+                "shared primitive, confirming that fixing `_canonical` once covers both",
+            )
+        finally:
+            verify_protocol._canonical = _orig_canonical
+    finally:
+        shutil.rmtree(g42b_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G43 (B1, HIGH): `_latest_round_decision_text` used a bare
+    # `int(round_dir.name)` -- Python's `int()` accepts full-width Unicode
+    # digits (U+FF10-FF19) the same as ASCII, so a round directory literally
+    # named e.g. `９９９９` could win (or, in the opposite direction, force
+    # a real round to lose) the "latest round" comparison, manipulating
+    # which round's `- Feedback:` `check_loop_autocontinue_anomaly` reads,
+    # bidirectionally.
+    # -------------------------------------------------------------------
+    def _b1_project(root, real_feedback):
+        goal_dir = root / ".harnessloop" / "goals" / "20260101-001-b1"
+        round_dir = goal_dir / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n- Write evidence under `rounds/0001/evidence/`.\n",
+            encoding="utf-8",
+        )
+        (round_dir / "decision.md").write_text(f"# Decision\n\n- Feedback: {real_feedback}\n", encoding="utf-8")
+        (root / ".harnessloop" / "state").mkdir(parents=True, exist_ok=True)
+        (root / ".harnessloop" / "state" / "control-contract.md").write_text(
+            "# Control Contract\n\n## Auto-Continue\n\n- Profile: lite\n- Auto-continue on positive: yes\n",
+            encoding="utf-8",
+        )
+        (root / ".harnessloop" / "state" / "evidence-index.md").write_text(
+            "# Evidence Index\n\n| Artifact | Artifact health |\n| --- | --- |\n| x | valid |\n",
+            encoding="utf-8",
+        )
+        return goal_dir
+
+    print("  G43 (B1) suppression direction: a full-width-digit round directory must never win 'latest' and suppress a real anomaly")
+    g43_root = Path(tempfile.mkdtemp(prefix="hl-b1-suppress-"))
+    try:
+        goal_dir = _b1_project(g43_root, "positive")
+        _violations, coverage = verify_protocol.verify_project(g43_root)
+        check(
+            coverage["loop_autocontinue_anomaly"] == 1,
+            f"G43 baseline: real round 0001 (Feedback: positive) is latest -> anomaly fires "
+            f"(got {coverage['loop_autocontinue_anomaly']})",
+        )
+
+        fw_dir = goal_dir / "rounds" / "９９９９"
+        fw_dir.mkdir(parents=True)
+        (fw_dir / "decision.md").write_text("# Decision\n\n- Feedback: negative\n", encoding="utf-8")
+        _violations, coverage = verify_protocol.verify_project(g43_root)
+        check(
+            coverage["loop_autocontinue_anomaly"] == 1,
+            f"G43 (suppression direction): adding a full-width `９９９９` round with "
+            f"Feedback: negative must NOT suppress the anomaly real round 0001 legitimately "
+            f"trips (got {coverage['loop_autocontinue_anomaly']})",
+        )
+
+        def _bare_latest(goal_dir_arg, project_arg):
+            rounds_dir = goal_dir_arg / "rounds"
+            if not rounds_dir.is_dir():
+                return None
+            numbered = []
+            for rd in rounds_dir.iterdir():
+                if verify_protocol._container_escape_violation(rd, project_arg, rd) is not None:
+                    continue
+                if not rd.is_dir():
+                    continue
+                try:
+                    numbered.append((int(rd.name), rd))
+                except ValueError:
+                    continue
+            if not numbered:
+                return None
+            _, latest = max(numbered, key=lambda p: p[0])
+            try:
+                return (latest / "decision.md").read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                return None
+
+        _orig_latest = verify_protocol._latest_round_decision_text
+        verify_protocol._latest_round_decision_text = _bare_latest
+        try:
+            _v, bare_coverage = verify_protocol.verify_project(g43_root)
+            check(
+                bare_coverage["loop_autocontinue_anomaly"] == 0,
+                "G43 mutation control (suppression): the pre-fix bare int() implementation "
+                "lets the full-width `９９９９`/negative round win 'latest' and suppress the "
+                f"anomaly on this EXACT fixture (got {bare_coverage['loop_autocontinue_anomaly']}) "
+                "-- proving the positive assertion above is load-bearing, not vacuous",
+            )
+        finally:
+            verify_protocol._latest_round_decision_text = _orig_latest
+    finally:
+        shutil.rmtree(g43_root, ignore_errors=True)
+
+    print("  G43 (B1) forgery direction: a full-width-digit round must never win 'latest' and forge a fake anomaly over a real negative latest round")
+    g43b_root = Path(tempfile.mkdtemp(prefix="hl-b1-forge-"))
+    try:
+        goal_dir = _b1_project(g43b_root, "negative")
+        _violations, coverage = verify_protocol.verify_project(g43b_root)
+        check(
+            coverage["loop_autocontinue_anomaly"] == 0,
+            f"G43 forge baseline: real round 0001 (Feedback: negative) -> no anomaly "
+            f"(got {coverage['loop_autocontinue_anomaly']})",
+        )
+        fw_dir = goal_dir / "rounds" / "０００２"
+        fw_dir.mkdir(parents=True)
+        (fw_dir / "decision.md").write_text("# Decision\n\n- Feedback: positive\n", encoding="utf-8")
+        _violations, coverage = verify_protocol.verify_project(g43b_root)
+        check(
+            coverage["loop_autocontinue_anomaly"] == 0,
+            f"G43 (forgery direction): a full-width `０００２` round with Feedback: positive "
+            f"must NOT be treated as 'latest' over real round 0001's negative Feedback -- "
+            f"no forged anomaly (got {coverage['loop_autocontinue_anomaly']})",
+        )
+    finally:
+        shutil.rmtree(g43b_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G45 (C1, HIGH): E4's `- Verdict:` / `- Residuals:` scan was the one
+    # `- <label>:` line-prefix parser in this module still using a bare
+    # `.splitlines()` instead of `_uncoded_lines` -- v0.29.0 moved every
+    # other same-shaped parser onto the fence-aware scan and missed this
+    # site. Bidirectional: a fence containing `- Residuals: none` before
+    # the real lines suppresses a genuine contradiction (false green); a
+    # clean round quoting someone else's residual note inside a fence
+    # must not be flagged (false red). (G44 is B2's teeth, added inside
+    # validate_version_consistency above.)
+    # -------------------------------------------------------------------
+    print("  G45 (C1): `- Verdict:`/`- Residuals:` must be read via _uncoded_lines, not a bare splitlines()")
+    g45_root = Path(tempfile.mkdtemp(prefix="hl-c1-"))
+    try:
+        round_dir = g45_root / ".harnessloop" / "goals" / "20260101-001-c1" / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n- Write evidence under `rounds/0001/evidence/`.\n",
+            encoding="utf-8",
+        )
+        first_text = (
+            "# Decision\n\n"
+            "```\n- Residuals: none\n```\n\n"
+            "- Verdict: pass\n- Residuals: something uncovered\n"
+        )
+        (round_dir / "decision.md").write_text(first_text, encoding="utf-8")
+        violations, _coverage = verify_protocol.verify_project(g45_root)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "verdict-residual-contradiction" in kinds,
+            f"G45: a fenced `- Residuals: none` example, sitting before the round's real "
+            f"(unfenced) `Verdict: pass` / non-none `Residuals:`, must not suppress the "
+            f"real contradiction (got {sorted(kinds)})",
+        )
+
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n"
+            "- Verdict: pass\n- Residuals: none\n\n"
+            "Documentation example of the convention:\n"
+            "```\n- Verdict: pass\n- Residuals: some deferred bit\n```\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = verify_protocol.verify_project(g45_root)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "verdict-residual-contradiction" not in kinds,
+            f"G45 reverse: a clean round quoting a residual-bearing example inside a fence "
+            f"must NOT be flagged (false-red guard) (got {sorted(kinds)})",
+        )
+
+        bare_verdict = bare_residuals = None
+        for line in first_text.splitlines():
+            s = line.strip()
+            if bare_verdict is None and s.lower().startswith("- verdict:"):
+                bare_verdict = s.split(":", 1)[1].strip().lower()
+            elif bare_residuals is None and s.lower().startswith("- residuals:"):
+                bare_residuals = s.split(":", 1)[1].strip().lower()
+        check(
+            bare_verdict == "pass" and bare_residuals == "none",
+            f"G45 mutation control: the pre-fix bare splitlines() scan reads "
+            f"verdict={bare_verdict!r} residuals={bare_residuals!r} on this exact fixture -- "
+            "'first occurrence wins' picks up the FENCED 'none' before the real value, which "
+            "would have missed the contradiction (proving G45's positive assertion above is "
+            "load-bearing, not vacuous)",
+        )
+    finally:
+        shutil.rmtree(g45_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G46 (C2, MEDIUM): `_parse_markdown_table` used a bare `.splitlines()`
+    # to find "the first well-formed table in `evidence-index.md`" -- a
+    # fenced example table (documenting the expected shape) placed before
+    # the real one is picked up instead, permanently flipping
+    # `check_evidence_index_all_valid`'s verdict and, through it,
+    # `loop_autocontinue_anomaly`.
+    # -------------------------------------------------------------------
+    print("  G46 (C2): evidence-index.md's table must be read via _uncoded_lines, not a bare splitlines()")
+    g46_root = Path(tempfile.mkdtemp(prefix="hl-c2-"))
+    try:
+        (g46_root / ".harnessloop" / "state").mkdir(parents=True)
+        ei_text = (
+            "# Evidence Index\n\n"
+            "Example shape (do not fill in literally):\n\n"
+            "```\n| Artifact | Artifact health |\n| --- | --- |\n| example | missing |\n```\n\n"
+            "Real table:\n\n"
+            "| Artifact | Artifact health |\n| --- | --- |\n| real-artifact | valid |\n"
+        )
+        (g46_root / ".harnessloop" / "state" / "evidence-index.md").write_text(ei_text, encoding="utf-8")
+
+        all_valid, unparsable = verify_protocol.check_evidence_index_all_valid(g46_root)
+        check(
+            all_valid is True and unparsable is False,
+            f"G46: a fenced EXAMPLE table (health=missing) placed before the REAL table "
+            f"(health=valid) must not win 'first table in text' -- the real table's "
+            f"all-valid verdict must be what this function reports (got all_valid={all_valid}, "
+            f"unparsable={unparsable})",
+        )
+
+        round_dir = g46_root / ".harnessloop" / "goals" / "20260101-001-c2" / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n- Write evidence under `rounds/0001/evidence/`.\n",
+            encoding="utf-8",
+        )
+        (round_dir / "decision.md").write_text("# Decision\n\n- Feedback: positive\n", encoding="utf-8")
+        (g46_root / ".harnessloop" / "state" / "control-contract.md").write_text(
+            "# Control Contract\n\n## Auto-Continue\n\n- Profile: lite\n- Auto-continue on positive: yes\n",
+            encoding="utf-8",
+        )
+        _violations, coverage = verify_protocol.verify_project(g46_root)
+        check(
+            coverage["loop_autocontinue_anomaly"] == 1,
+            f"G46 end-to-end: the fenced example table must not permanently suppress a real "
+            f"anomaly this project otherwise legitimately trips (got "
+            f"{coverage['loop_autocontinue_anomaly']})",
+        )
+
+        def _bare_parse_markdown_table(text):
+            lines = text.splitlines()
+            for i in range(len(lines) - 1):
+                header_line = lines[i].strip()
+                sep_line = lines[i + 1].strip()
+                if not (header_line.startswith("|") and sep_line.startswith("|")):
+                    continue
+                sep_cells = [c.strip() for c in sep_line.strip("|").split("|")]
+                if not sep_cells or not all(re.fullmatch(r":?-+:?", c) for c in sep_cells):
+                    continue
+                header_cells = [c.strip() for c in header_line.strip("|").split("|")]
+                if len(header_cells) != len(sep_cells):
+                    continue
+                data_rows = []
+                j = i + 2
+                while j < len(lines):
+                    row_line = lines[j].strip()
+                    if not row_line.startswith("|"):
+                        break
+                    data_rows.append([c.strip() for c in row_line.strip("|").split("|")])
+                    j += 1
+                return header_cells, data_rows
+            return None
+
+        bare_table = _bare_parse_markdown_table(ei_text)
+        check(
+            bare_table is not None and bare_table[1] == [["example", "missing"]],
+            f"G46 mutation control: the pre-fix bare splitlines() table parser picks up the "
+            f"FENCED example table (health=missing) on this exact text, not the real one "
+            f"(got {bare_table}) -- proving G46's positive assertion above is load-bearing",
+        )
+    finally:
+        shutil.rmtree(g46_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G47 (D1, HIGH): Appendix B.1's `loop-contract-profile-missing` used
+    # to key off `profile_raw is None` (field never written) alone --
+    # `control-contract-template.md`'s own shipped-default line 11,
+    # `- Profile: lite | standard | strict | custom`, is WRITTEN (present),
+    # just not a recognized profile value, so it never tripped the
+    # "missing" violation and permanently parked `loop_autocontinue_anomaly`
+    # in `skipped_unparsable` for any project that never edited the
+    # template.
+    # -------------------------------------------------------------------
+    def _d1_project(root, profile_line):
+        goal_dir = root / ".harnessloop" / "goals" / "20260101-001-d1"
+        round_dir = goal_dir / "rounds" / "0001"
+        (round_dir / "evidence").mkdir(parents=True)
+        (round_dir / "reviews").mkdir(parents=True)
+        (round_dir / "scope-lock.md").write_text(
+            "# Scope Lock\n\n## Allowed Changes\n\n- Write evidence under `rounds/0001/evidence/`.\n",
+            encoding="utf-8",
+        )
+        # `- Predecessor: 0000` is the "activation" signal Appendix B.1 gates on.
+        (round_dir / "decision.md").write_text(
+            "# Decision\n\n- Feedback: positive\n- Predecessor: 0000\n", encoding="utf-8"
+        )
+        (root / ".harnessloop" / "state").mkdir(parents=True, exist_ok=True)
+        (root / ".harnessloop" / "state" / "control-contract.md").write_text(
+            f"# Control Contract\n\n## Auto-Continue\n\n{profile_line}\n- Auto-continue on positive: yes\n",
+            encoding="utf-8",
+        )
+        (root / ".harnessloop" / "state" / "evidence-index.md").write_text(
+            "# Evidence Index\n\n| Artifact | Artifact health |\n| --- | --- |\n| x | valid |\n",
+            encoding="utf-8",
+        )
+
+    print("  G47 (D1): control-contract-template.md's OWN shipped-default `- Profile:` line must trigger loop-contract-profile-missing")
+    template_profile_line = None
+    template_path = (
+        PLUGIN_ROOT / "skills" / "harnessloop-loop" / "references" / "control-contract-template.md"
+    )
+    if template_path.exists():
+        for line in template_path.read_text(encoding="utf-8").splitlines():
+            if line.strip().lower().startswith("- profile:"):
+                template_profile_line = line.strip()
+                break
+    check(
+        template_profile_line is not None,
+        f"G47 fixture sanity: control-contract-template.md declares a `- Profile:` line "
+        f"(got {template_profile_line!r}) -- this teeth block uses the template's OWN "
+        "verbatim text, the most realistic attack sample there is",
+    )
+    for label, profile_line in [
+        ("template-default", template_profile_line or "- Profile: lite | standard | strict | custom"),
+        ("empty", "- Profile:"),
+        ("banana", "- Profile: banana"),
+    ]:
+        g47_root = Path(tempfile.mkdtemp(prefix=f"hl-d1-{label}-"))
+        try:
+            _d1_project(g47_root, profile_line)
+            violations, coverage = verify_protocol.verify_project(g47_root)
+            kinds = {v["kind"] for v in violations}
+            check(
+                "loop-contract-profile-missing" in kinds,
+                f"G47 ({label}): {profile_line!r} must trigger loop-contract-profile-missing "
+                f"once the loop-continuation gate is activated (got kinds={sorted(kinds)})",
+            )
+            check(
+                coverage["loop_autocontinue_anomaly"] == 0
+                and coverage["loop_anomaly_skipped_unparsable"] == 1,
+                f"G47 ({label}): the anomaly stays parked in skipped_unparsable, exactly the "
+                f"silent switch this hard rule exists to close (got anomaly="
+                f"{coverage['loop_autocontinue_anomaly']}, skipped="
+                f"{coverage['loop_anomaly_skipped_unparsable']})",
+            )
+        finally:
+            shutil.rmtree(g47_root, ignore_errors=True)
+
+    print("  G47 reverse mutation: a genuinely valid Profile value clears the violation and lets the anomaly fire")
+    g47r_root = Path(tempfile.mkdtemp(prefix="hl-d1-valid-"))
+    try:
+        _d1_project(g47r_root, "- Profile: lite")
+        violations, coverage = verify_protocol.verify_project(g47r_root)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "loop-contract-profile-missing" not in kinds and coverage["loop_autocontinue_anomaly"] == 1,
+            f"G47 reverse: '- Profile: lite' is valid -> no loop-contract-profile-missing, and "
+            f"the anomaly genuinely fires (got kinds={sorted(kinds)}, anomaly="
+            f"{coverage['loop_autocontinue_anomaly']})",
+        )
+    finally:
+        shutil.rmtree(g47r_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G48 (D2, MEDIUM): external-systems.json's `data.get("version") != 1`
+    # let `True` (bool is an int subclass, `True == 1`) and `1.0` (float,
+    # `1.0 == 1`) silently pass as a legal version -- the SAME file's
+    # `activation_round` field (~3190) already excludes bool explicitly
+    # before its own int/>=1 check; this site did not, a live internal
+    # inconsistency within this module's own JSON-schema discipline.
+    # -------------------------------------------------------------------
+    print("  G48 (D2): external-systems.json 'version': true / 1.0 must be rejected, not silently accepted as 1")
+    for label, bad_version in [("bool-true", True), ("float-1.0", 1.0)]:
+        g48_root = Path(tempfile.mkdtemp(prefix=f"hl-d2-{label}-"))
+        try:
+            project = _rae_project(g48_root)
+            _write_ext_systems(project, {"version": bad_version, "systems": []})
+            violations, coverage = verify_protocol.verify_project(project)
+            kinds = {v["kind"] for v in violations}
+            check(
+                kinds == {"external-system-invalid"},
+                f"G48 ({label}): 'version': {bad_version!r} must be rejected as "
+                f"external-system-invalid, not silently treated as the integer 1 "
+                f"(got kinds={sorted(kinds)})",
+            )
+            check(
+                coverage["external_systems_declared"] == 0,
+                f"G48 ({label}): an invalidated file declares zero systems "
+                f"(got {coverage['external_systems_declared']})",
+            )
+        finally:
+            shutil.rmtree(g48_root, ignore_errors=True)
+
+    print("  G48 reverse mutation: 'version': 1 (the real integer) is still legal")
+    g48c_root = Path(tempfile.mkdtemp(prefix="hl-d2-legit-"))
+    try:
+        project = _rae_project(g48c_root)
+        _write_ext_systems(project, {"version": 1, "systems": []})
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            f"G48 reverse: 'version': 1 (the real JSON integer) is still accepted, unchanged "
+            f"(got {violations})",
+        )
+    finally:
+        shutil.rmtree(g48c_root, ignore_errors=True)
+
+    check(
+        (True != 1) is False and (1.0 != 1) is False,
+        "G48 mutation control: Python's own `!=` really does treat `True` and `1.0` as equal "
+        "to the integer `1` (bool is an int subclass; float compares numerically), confirming "
+        "the pre-fix bare `data.get('version') != 1` check would have silently accepted both",
+    )
+
+    # -------------------------------------------------------------------
+    # G49 (D3, MEDIUM): external-systems.json did not reject a symlink,
+    # unlike reference-roots.json (which does, at `load_reference_roots`'s
+    # `is_symlink()` check). A symlink can point outside the project; git
+    # only shows the pointer, but the gate loads whatever it targets.
+    # -------------------------------------------------------------------
+    print("  G49 (D3): a symlinked external-systems.json must be rejected, same discipline as reference-roots.json")
+    g49_root = Path(tempfile.mkdtemp(prefix="hl-d3-"))
+    g49_outside = Path(tempfile.mkdtemp(prefix="hl-d3-outside-"))
+    try:
+        project = _rae_project(g49_root)
+        outside_file = g49_outside / "external-systems.json"
+        outside_file.write_text(
+            json.dumps(
+                {"version": 1, "systems": [{"id": "outside-sys", "kind": "http", "description": "", "params": []}]}
+            ),
+            encoding="utf-8",
+        )
+        target = _ext_systems_path(project)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(outside_file, target)
+
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G49: a symlinked external-systems.json (pointing at a real file OUTSIDE the "
+            f"project) is rejected as external-system-invalid, not silently followed "
+            f"(got kinds={sorted(kinds)})",
+        )
+        check(
+            coverage["external_systems_declared"] == 0,
+            f"G49: the project-external system smuggled through the symlink is never counted "
+            f"(got {coverage['external_systems_declared']})",
+        )
+
+        target.unlink()
+        target.write_text(outside_file.read_text(encoding="utf-8"), encoding="utf-8")
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations and coverage["external_systems_declared"] == 1,
+            f"G49 reverse: the SAME content as an ordinary (non-symlink) tracked file is "
+            f"legal (got violations={violations}, declared={coverage['external_systems_declared']})",
+        )
+    finally:
+        shutil.rmtree(g49_root, ignore_errors=True)
+        shutil.rmtree(g49_outside, ignore_errors=True)
+
+    g49b_root = Path(tempfile.mkdtemp(prefix="hl-d3-control-"))
+    g49b_outside = Path(tempfile.mkdtemp(prefix="hl-d3-control-outside-"))
+    try:
+        outside_file = g49b_outside / "external-systems.json"
+        outside_file.write_text(json.dumps({"version": 1, "systems": []}), encoding="utf-8")
+        link = g49b_root / "external-systems.json"
+        os.symlink(outside_file, link)
+        check(
+            link.is_file() and link.is_symlink(),
+            "G49 mutation control: a symlink to a real file passes `path.is_file()` (follows "
+            "the symlink) -- the pre-fix gate's only existence guard would have let this "
+            "straight through to _load_external_systems_file with no symlink check at all",
+        )
+    finally:
+        shutil.rmtree(g49b_root, ignore_errors=True)
+        shutil.rmtree(g49b_outside, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G50 (E): G39's false positive on the accepted first-person
+    # self-referential negation phrasing ("its own") is fixed; its known,
+    # undone bypasses (word-list evasion, and blindness to an ownership
+    # claim that never names a `.sh` file at all) are confirmed still
+    # present and are NOT chased further here -- see the comment on G39
+    # above for why growing the word list is out of scope (TH-0029 stop
+    # line, applied to English phrasing instead of Unicode variants).
+    # -------------------------------------------------------------------
+    print("  G50 (E): G39's 'its own' false positive is fixed; known (undone, documented) bypasses stay exactly that -- known, not silently patched")
+    g50_sh_reference_pat = re.compile(r"\b([A-Za-z0-9_-]+\.sh)\b")
+    g50_ownership_word_pat = re.compile(
+        r"\bjob\b|\bresponsibilit(?:y|ies)\b|\bhandles?\b"
+        r"|(?<!\bits\b )(?<!\bmy\b )(?<!\bour\b )(?<!\btheir\b )(?<!\bhis\b )(?<!\bher\b )(?<!\byour\b )\bowns?\b"
+        r"|\bguards?\b|\benforces?\b",
+        re.IGNORECASE,
+    )
+
+    def _g50_hits(text):
+        hits = []
+        for m in g50_sh_reference_pat.finditer(text):
+            name = m.group(1)
+            window = text[max(0, m.start() - 60) : m.end() + 60]
+            if g50_ownership_word_pat.search(window):
+                hits.append(name)
+        return hits
+
+    check(
+        not _g50_hits("Harnessloop does not ship its own check-secrets.sh."),
+        "G50: the accepted first-person self-referential negation ('its own "
+        "check-secrets.sh') no longer misreports as a third-party ownership claim "
+        "(false-positive fix)",
+    )
+    check(
+        _g50_hits("check-secrets.sh owns this validation and is somebody else's job.") != [],
+        "G50 mutation control: an actual third-party ownership claim ('owns'/'job') naming "
+        "an orphan .sh file is still caught -- the false-positive fix did not also blind the "
+        "check to real hits",
+    )
+
+    for phrasing in [
+        "check-secrets.sh is performed by the host repository.",
+        "Secret scanning is the duty of check-secrets.sh.",
+        "check-secrets.sh protects this repository.",
+        "Secret scanning is enforced via check-secrets.sh.",
+        "check-secrets.sh is responsible for secret scanning.",
+        "check-secrets.sh takes care of secret scanning.",
+    ]:
+        check(
+            _g50_hits(phrasing) == [],
+            f"G50 (documented, undone bypass): {phrasing!r} still evades the word list -- "
+            "left as a registered upper bound, not chased further (see the G39 comment above "
+            "for why growing the word list is out of scope)",
+        )
+    check(
+        _g50_hits("Secret-shaped text is this repository's own secret-scanning hook's job.") == [],
+        "G50 (documented, undone bypass): an ownership claim that names no `.sh` file at all "
+        "(only 'hook') is structurally invisible to sh_reference_pat -- this is exactly the "
+        "ORIGINAL pre-v0.36.0 SKILL.md:480 sentence, and it stays invisible by construction, "
+        "not by a coincidental gap",
+    )
+
+    # =====================================================================
+    # G51-G53: class-level sweep for the two bug classes G41/G42 (A2, NUL
+    # crash) and G48 (D2, bare `!= 1` bool/float) already fixed -- but each
+    # at only ONE site (`_canonical`, `_load_external_systems_file`
+    # respectively). This task's own review found the SAME two bugs live at
+    # more sites, fixed all of them, and adds two structural (AST-based)
+    # guards so a future site is caught by a standing check rather than the
+    # next person's grep -- the same principle G35a already established for
+    # the bare-`\d` class.
+    #
+    # Sites found and fixed this round, beyond the one G41/G42/G48 already
+    # cover:
+    #   NUL crash (A2-class):
+    #     - `_load_one_root` (G51a) -- reported as a known site going in.
+    #     - `_git_tracked_index`'s `Path(top).resolve() != project.resolve()`
+    #       guard (G51d) -- found only by this task's own sweep. Its except
+    #       clause had the exact same OSError-only (not ValueError) shape,
+    #       but see G51d's own teeth below for why it is NOT independently
+    #       reachable in the shipped pipeline today -- fixed for
+    #       except-tuple-signature completeness regardless.
+    #   bool/float `!= 1` (D2-class):
+    #     - `_load_versioned_roots` (G51b) -- reported as a known site going in.
+    #     - `_load_local_bindings` (G51c) -- reported as a known site going in.
+    # =====================================================================
+
+    print(
+        "  G51a (NUL class, site 2 of the reported 3): an embedded NUL byte in a reference-root "
+        "local-binding path must not crash the gate (fail-closed reference-root-unresolvable "
+        "instead of a crash)"
+    )
+    g51a_root = Path(tempfile.mkdtemp(prefix="hl-g51a-"))
+    try:
+        project = _pr3_project(g51a_root)
+        _pr3_declare(project, _pr3_standard_declaration(g51a_root / "wiki"))
+        real_dir = g51a_root / "realwiki"
+        real_dir.mkdir()
+        # The NUL byte must sit in a component AFTER a real, existing prefix
+        # -- `Path.resolve(strict=True)` walking a path whose FIRST missing
+        # component has no NUL raises plain FileNotFoundError (already
+        # caught) before it ever reaches a later NUL-bearing component; only
+        # once the walk reaches the NUL-bearing component itself (verified
+        # by hand against a real, existing prefix) does the OS-level
+        # encoding step reject it with ValueError. This exact construction
+        # was verified live (see the round's evidence) to crash pre-fix and
+        # not crash post-fix.
+        nul_path = str(real_dir) + "/sub\x00evil"
+        _pr3_bind(project, {"version": 1, "bindings": {"wiki": {"path": nul_path}}})
+        result = run_python(LOOP_SCRIPTS / "verify_protocol.py", "--project", str(project), "--json")
+        check(
+            result.returncode == 1,
+            f"G51a: process exits 1 (a reported violation), same code a normal violation "
+            f"produces on its own (got {result.returncode})",
+        )
+        check(
+            bool(result.stdout.strip()),
+            "G51a: stdout is non-empty -- the crash's signature was exit=1 with ZERO stdout "
+            f"(nothing after the raise ever ran); a populated --json payload proves this is a "
+            f"reported violation, not a crash (stderr: {result.stderr[:2000]!r})",
+        )
+        payload = json.loads(result.stdout)
+        kinds = {v["kind"] for v in payload["violations"]}
+        check(
+            "reference-root-unresolvable" in kinds,
+            f"G51a: the NUL-byte local-binding path fails resolution and is reported as "
+            f"reference-root-unresolvable, fail-closed, not a crash (got {sorted(kinds)})",
+        )
+
+        # Mutation control: reconstruct the pre-fix `_load_one_root` (the
+        # except tuple with ValueError deliberately omitted) as an isolated
+        # local function -- the real, fixed function in the shipped module
+        # is never touched -- monkeypatch it in, and confirm THIS exact
+        # fixture really would have crashed uncaught under it.
+        def _bare_load_one_root(entry, raw_path, project_canonical, verify_identity):
+            common = dict(
+                alias=entry["alias"],
+                purpose=entry["purpose"],
+                expect_present=entry["expect_present"],
+                subpaths=entry["subpaths"],
+                approved_by=entry["approved_by"],
+                nested_under=entry["nested_under"],
+            )
+            if raw_path is None:
+                return verify_protocol.ReferenceRoot(
+                    canonical=None, available=False, unavailable_reason="unbound", **common
+                )
+            if any(ch in verify_protocol._GLOB_OR_ENV_CHARS for ch in raw_path) or "${" in raw_path or "$(" in raw_path:
+                return verify_protocol.ReferenceRoot(
+                    canonical=None, available=False, unavailable_reason="rejected", **common
+                )
+            try:
+                canonical = Path(raw_path).expanduser().resolve(strict=True)
+            except (OSError, RuntimeError):  # the historical, pre-fix except tuple
+                return verify_protocol.ReferenceRoot(
+                    canonical=None, available=False, unavailable_reason="unresolvable", **common
+                )
+            if not canonical.is_dir():
+                return verify_protocol.ReferenceRoot(
+                    canonical=None, available=False, unavailable_reason="rejected", **common
+                )
+            return verify_protocol.ReferenceRoot(canonical=canonical, available=True, unavailable_reason=None, **common)
+
+        _orig_load_one_root = verify_protocol._load_one_root
+        verify_protocol._load_one_root = _bare_load_one_root
+        try:
+            g51a_control_crashed = False
+            try:
+                verify_protocol.load_reference_roots(project)
+            except ValueError:
+                g51a_control_crashed = True
+            check(
+                g51a_control_crashed,
+                "G51a mutation control: the pre-fix except tuple (OSError, RuntimeError) -- "
+                "reconstructed locally as an isolated stand-in, the real fixed function is "
+                "never modified -- really does raise ValueError uncaught on this exact "
+                "fixture, confirming this is a genuine regression test, not a vacuous one",
+            )
+        finally:
+            verify_protocol._load_one_root = _orig_load_one_root
+    finally:
+        shutil.rmtree(g51a_root, ignore_errors=True)
+
+    print(
+        "  G51b (bool/float class, site 2 of the reported 3 -- `_load_versioned_roots`): "
+        "reference-roots.json 'version': true / 1.0 must be rejected, not silently accepted "
+        "as 1"
+    )
+    for label, bad_version in [("bool-true", True), ("float-1.0", 1.0)]:
+        g51b_root = Path(tempfile.mkdtemp(prefix=f"hl-g51b-{label}-"))
+        try:
+            project = _pr3_project(g51b_root)
+            _pr3_declare(project, {"version": bad_version, "roots": []})
+            entries, err = verify_protocol._load_versioned_roots(
+                project / verify_protocol.REFERENCE_ROOTS_VERSIONED_REL
+            )
+            check(
+                entries == [] and err is not None and "must be the integer 1" in err,
+                f"G51b ({label}): 'version': {bad_version!r} must be rejected, not silently "
+                f"treated as the integer 1 (got entries={entries}, err={err!r})",
+            )
+            roots, violations = verify_protocol.load_reference_roots(project)
+            kinds = {v["kind"] for v in violations}
+            check(
+                roots == {} and kinds == {"reference-roots-invalid"},
+                f"G51b ({label}): end-to-end via load_reference_roots: zero roots, "
+                f"reference-roots-invalid (got roots={roots}, kinds={sorted(kinds)})",
+            )
+        finally:
+            shutil.rmtree(g51b_root, ignore_errors=True)
+
+    print("  G51b reverse mutation: 'version': 1 (the real integer) is still legal")
+    g51b_root2 = Path(tempfile.mkdtemp(prefix="hl-g51b-legit-"))
+    try:
+        project = _pr3_project(g51b_root2)
+        _pr3_declare(project, {"version": 1, "roots": []})
+        entries, err = verify_protocol._load_versioned_roots(
+            project / verify_protocol.REFERENCE_ROOTS_VERSIONED_REL
+        )
+        check(
+            entries == [] and err is None,
+            f"G51b reverse: 'version': 1 (the real JSON integer) is still accepted, "
+            f"unchanged (got entries={entries}, err={err!r})",
+        )
+    finally:
+        shutil.rmtree(g51b_root2, ignore_errors=True)
+
+    print(
+        "  G51c (bool/float class, site 3 of the reported 3 -- `_load_local_bindings`): "
+        "reference-roots.local.json 'version': true / 1.0 must be rejected, not silently "
+        "accepted as 1"
+    )
+    for label, bad_version in [("bool-true", True), ("float-1.0", 1.0)]:
+        g51c_root = Path(tempfile.mkdtemp(prefix=f"hl-g51c-{label}-"))
+        try:
+            project = _pr3_project(g51c_root)
+            _pr3_declare(project, _pr3_standard_declaration(g51c_root / "wiki"))
+            _pr3_bind(project, {"version": bad_version, "bindings": {}})
+            bindings, err = verify_protocol._load_local_bindings(
+                project / verify_protocol.REFERENCE_ROOTS_LOCAL_REL
+            )
+            check(
+                bindings == {} and err is not None and "must be the integer 1" in err,
+                f"G51c ({label}): 'version': {bad_version!r} must be rejected, not silently "
+                f"treated as the integer 1 (got bindings={bindings}, err={err!r})",
+            )
+            roots, violations = verify_protocol.load_reference_roots(project)
+            kinds = {v["kind"] for v in violations}
+            check(
+                kinds == {"reference-root-local-invalid"}
+                and roots.get("wiki") is not None
+                and roots["wiki"].unavailable_reason == "unbound",
+                f"G51c ({label}): end-to-end via load_reference_roots: "
+                f"reference-root-local-invalid, the declared alias falls back to unbound, "
+                f"not trusted (got kinds={sorted(kinds)}, "
+                f"reason={roots['wiki'].unavailable_reason if 'wiki' in roots else '<missing>'})",
+            )
+        finally:
+            shutil.rmtree(g51c_root, ignore_errors=True)
+
+    print("  G51c reverse mutation: 'version': 1 (the real integer) is still legal")
+    g51c_root2 = Path(tempfile.mkdtemp(prefix="hl-g51c-legit-"))
+    try:
+        project = _pr3_project(g51c_root2)
+        _pr3_bind(project, {"version": 1, "bindings": {}})
+        bindings, err = verify_protocol._load_local_bindings(
+            project / verify_protocol.REFERENCE_ROOTS_LOCAL_REL
+        )
+        check(
+            bindings == {} and err is None,
+            f"G51c reverse: 'version': 1 (the real JSON integer) is still accepted, "
+            f"unchanged (got bindings={bindings}, err={err!r})",
+        )
+    finally:
+        shutil.rmtree(g51c_root2, ignore_errors=True)
+
+    check(
+        (True != 1) is False and (1.0 != 1) is False,
+        "G51b/c mutation control: Python's own `!=` really does treat `True` and `1.0` as "
+        "equal to the integer `1` (the same fact G48's mutation control already pins for "
+        "external-systems.json), confirming the pre-fix bare `data.get('version') != 1` in "
+        "BOTH `_load_versioned_roots` and `_load_local_bindings` would have silently "
+        "accepted both",
+    )
+
+    print(
+        "  G51d (NUL class, defense-in-depth -- found only by this round's own sweep, NOT "
+        "independently reported going in): `_git_tracked_index`'s "
+        "`Path(top).resolve() != project.resolve()` except clause now covers ValueError too. "
+        "Reachability note: `project` is used BOTH for the earlier `git -C <project>` "
+        "subprocess argv AND this resolve() call -- a NUL byte in `project` already crashes "
+        "the earlier subprocess call first (a DIFFERENT, out-of-scope crash surface: "
+        "subprocess exec rejects embedded NUL in argv the same way Path.resolve() rejects it "
+        "in a path string, but via `subprocess.run`, not `.resolve(`, so it is not part of "
+        "this round's NUL-via-resolve() sweep). This fix therefore closes an except-tuple "
+        "signature gap (OSError-only, matching the same historical shape as G51a) for "
+        "defense-in-depth, not a live exploitable crash found in the shipped pipeline today"
+    )
+    g51d_src = inspect.getsource(verify_protocol._git_tracked_index)
+    check(
+        "except (OSError, ValueError):" in g51d_src,
+        "G51d: _git_tracked_index's toplevel-vs-project resolve comparison now catches "
+        "ValueError alongside OSError",
+    )
+    check(
+        _g53_find_missing_valueerror(g51d_src, filename="_git_tracked_index") == [],
+        "G51d: the G53 structural detector (below) independently confirms this site no "
+        "longer matches the 'OSError/RuntimeError signature present but ValueError missing' "
+        "shape",
+    )
+    try:
+        (Path(tempfile.gettempdir()) / "g51d-probe\x00nul").resolve()
+        g51d_control_raised_valueerror = False
+    except ValueError:
+        g51d_control_raised_valueerror = True
+    except OSError:
+        g51d_control_raised_valueerror = False
+    check(
+        g51d_control_raised_valueerror,
+        "G51d mutation control: resolving a NUL-embedded Path really does raise ValueError, "
+        "not OSError -- confirming the pre-fix bare `except OSError:` (no ValueError) would "
+        "not have caught it, had this site ever become independently reachable",
+    )
+
+    # -------------------------------------------------------------------
+    # G52: structural (AST-based, discovery) sweep for the D2 bool/float
+    # `!= 1` class across all of plugins/harnessloop/ -- see the
+    # `_g52_find_version_ne_violations` module comment (near
+    # `_iter_repo_py_files`) for the full detection rule and its one
+    # documented scoping limitation.
+    # -------------------------------------------------------------------
+    print(
+        '  G52a: no `<expr>.get("version") != <int>` / `<expr>["version"] != <int>` '
+        "comparison anywhere under plugins/harnessloop/ lacks a sibling isinstance(..., bool) "
+        "exclusion"
+    )
+    g52a_hits: list[str] = []
+    g52a_scanned = 0
+    for g52_path in _iter_repo_py_files(PLUGIN_ROOT):
+        g52a_scanned += 1
+        rel = str(g52_path.relative_to(REPO_ROOT))
+        text = g52_path.read_text(encoding="utf-8")
+        for hit in _g52_find_version_ne_violations(text, filename=rel):
+            if hit not in G52_WHITELIST:
+                g52a_hits.append(hit)
+    check(
+        g52a_scanned >= 5,
+        f"G52a: scanned at least 5 .py files under plugins/harnessloop/ (scanned "
+        f"{g52a_scanned}) -- guards against the walk silently matching nothing",
+    )
+    check(
+        not g52a_hits,
+        "G52a: zero unguarded `version != <int>` comparisons under plugins/harnessloop/ "
+        f"(whitelist={sorted(G52_WHITELIST)}; found: {g52a_hits})",
+    )
+    check(
+        len(G52_WHITELIST) == 0,
+        "G52a: the whitelist is currently empty -- every real version-check site in this "
+        "repo uses the standard isinstance(..., bool) exclusion idiom",
+    )
+
+    print(
+        "  G52a (supplement): the three real fixed loaders each individually pass, checked "
+        "by name via inspect.getsource (mirrors G35a's SEMVER_VERSION_RE supplement)"
+    )
+    for _g52_fn in (
+        verify_protocol._load_versioned_roots,
+        verify_protocol._load_local_bindings,
+        verify_protocol._load_external_systems_file,
+    ):
+        _g52_fn_src = inspect.getsource(_g52_fn)
+        _g52_fn_hits = _g52_find_version_ne_violations(_g52_fn_src, filename=_g52_fn.__name__)
+        check(
+            not _g52_fn_hits,
+            f"G52a (supplement): {_g52_fn.__name__} has zero unguarded version != <int> "
+            f"comparisons (found {_g52_fn_hits})",
+        )
+
+    print(
+        "  G52b (destructive counter-proof): fabricated snippets prove the detector can "
+        "actually fire, not just stay vacuously green"
+    )
+    _g52b_bad = 'def _load(path):\n    data = {}\n    if data.get("version") != 1:\n        return None\n'
+    _g52b_bad_hits = _g52_find_version_ne_violations(_g52b_bad, filename="<fabricated-bad>")
+    check(
+        _g52b_bad_hits == ["<fabricated-bad>:3"],
+        f"G52b: bare `data.get('version') != 1` with no isinstance(..., bool) exclusion "
+        f"nearby is detected as exactly one hit at the right line (got {_g52b_bad_hits})",
+    )
+    _g52b_subscript_bad = 'def _load(data):\n    if data["version"] != 1:\n        return None\n'
+    _g52b_subscript_hits = _g52_find_version_ne_violations(_g52b_subscript_bad, filename="<fabricated-subscript>")
+    check(
+        _g52b_subscript_hits == ["<fabricated-subscript>:2"],
+        f"G52b: the subscript form `data['version'] != 1` (not just `.get(...)`) is also "
+        f"detected (got {_g52b_subscript_hits})",
+    )
+    _g52b_good = (
+        'def _load(path):\n'
+        '    data = {}\n'
+        '    version_value = data.get("version")\n'
+        "    if isinstance(version_value, bool) or not isinstance(version_value, int) or "
+        "version_value != 1:\n"
+        "        return None\n"
+    )
+    check(
+        _g52_find_version_ne_violations(_g52b_good, filename="<fabricated-good>") == [],
+        "G52b reverse mutation: the real fixed idiom (isinstance(..., bool) sharing the "
+        "same or-chain) is correctly recognized as guarded, zero hits -- proves the "
+        "detector doesn't just flag every `!= 1` unconditionally",
+    )
+
+    # -------------------------------------------------------------------
+    # G53: a narrower, deliberately scoped structural guard for the A2
+    # embedded-NUL-byte crash class -- see `_g53_find_missing_valueerror`'s
+    # module comment (near `_iter_repo_py_files`) for exactly why this is
+    # scoped to "a try wrapping .resolve( whose handlers already name
+    # OSError/RuntimeError" rather than "every unwrapped .resolve( call" --
+    # the broader version was evaluated and rejected (see this task's
+    # report): it would need a whitelist covering every CLI-arg-derived and
+    # hardcoded `.resolve(` call in this repo (roughly a dozen sites today),
+    # which is either vacuous (as easy to satisfy by whitelisting as by
+    # fixing) or still incomplete (a data-provenance question no AST scan
+    # can answer).
+    # -------------------------------------------------------------------
+    print(
+        "  G53a (NUL class structural guard, scoped): no try/except under "
+        "plugins/harnessloop/ wraps a `.resolve(` call, names OSError/RuntimeError in a "
+        "handler, and omits ValueError"
+    )
+    g53a_hits: list[str] = []
+    g53a_scanned = 0
+    for g53_path in _iter_repo_py_files(PLUGIN_ROOT):
+        g53a_scanned += 1
+        rel = str(g53_path.relative_to(REPO_ROOT))
+        text = g53_path.read_text(encoding="utf-8")
+        for hit in _g53_find_missing_valueerror(text, filename=rel):
+            if hit not in G53_WHITELIST:
+                g53a_hits.append(hit)
+    check(
+        g53a_scanned >= 5,
+        f"G53a: scanned at least 5 .py files under plugins/harnessloop/ (scanned {g53a_scanned})",
+    )
+    check(
+        not g53a_hits,
+        "G53a: zero try/except wrapping a .resolve( call that names OSError/RuntimeError "
+        f"but omits ValueError (whitelist={sorted(G53_WHITELIST)}; found: {g53a_hits})",
+    )
+    check(len(G53_WHITELIST) == 0, "G53a: the whitelist is currently empty")
+
+    print(
+        "  G53b (destructive counter-proof): the exact pre-fix except-tuple shapes for both "
+        "`_load_one_root` and `_git_tracked_index` must be detected as hits"
+    )
+    _g53b_tuple = (
+        "def _load_one_root(raw_path):\n"
+        "    try:\n"
+        "        canonical = Path(raw_path).expanduser().resolve(strict=True)\n"
+        "    except (OSError, RuntimeError):\n"
+        "        return None\n"
+    )
+    _g53b_tuple_hits = _g53_find_missing_valueerror(_g53b_tuple, filename="<fabricated-tuple>")
+    check(
+        _g53b_tuple_hits == ["<fabricated-tuple>:2"],
+        f"G53b: the exact pre-fix `_load_one_root` except-tuple shape is detected "
+        f"(got {_g53b_tuple_hits})",
+    )
+    _g53b_single = (
+        "def f(top, project):\n"
+        "    try:\n"
+        "        if Path(top).resolve() != project.resolve():\n"
+        "            return None\n"
+        "    except OSError:\n"
+        "        return None\n"
+    )
+    _g53b_single_hits = _g53_find_missing_valueerror(_g53b_single, filename="<fabricated-single>")
+    check(
+        _g53b_single_hits == ["<fabricated-single>:2"],
+        f"G53b: the exact pre-fix `_git_tracked_index` bare `except OSError:` shape is also "
+        f"detected (got {_g53b_single_hits})",
+    )
+    _g53b_fixed = (
+        "def _load_one_root(raw_path):\n"
+        "    try:\n"
+        "        canonical = Path(raw_path).expanduser().resolve(strict=True)\n"
+        "    except (OSError, RuntimeError, ValueError):\n"
+        "        return None\n"
+    )
+    check(
+        _g53_find_missing_valueerror(_g53b_fixed, filename="<fabricated-fixed>") == [],
+        "G53b reverse mutation: the fixed except-tuple (ValueError included) is correctly "
+        "recognized as guarded, zero hits",
+    )
+    _g53b_unwrapped = "def f(args):\n    project = Path(args.project).resolve()\n    return project\n"
+    check(
+        _g53_find_missing_valueerror(_g53b_unwrapped, filename="<fabricated-unwrapped>") == [],
+        "G53b: an entirely UNWRAPPED .resolve( call (no try/except at all -- the real shape "
+        "every CLI-arg-derived call site in this repo has today) is deliberately NOT "
+        "flagged; this is the documented scope boundary, not a missed detection -- see the "
+        "module comment above for why a blanket 'every .resolve( needs this' rule was "
+        "rejected",
+    )
 
 
 def validate_round_cost_smoke() -> None:

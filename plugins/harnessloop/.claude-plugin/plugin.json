@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "harnessloop",
-  "version": "0.37.0",
+  "version": "0.38.0",
   "license": "Apache-2.0",
   "description": "Evidence-backed long-task takeover and execution for AI agents.",
   "author": {

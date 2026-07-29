@@ -433,11 +433,15 @@ This script enforces only machine-checkable rules:
   violation, `loop-contract-profile-missing`: once a project is "activated"
   (any round anywhere in it has ever declared `- Loop continuation:` **or**
   `- Predecessor:` -- Appendix F folded the latter in, since that is the field
-  a fresh round actually writes post-reversal), a `control-contract.md` with
-  no `- Profile:` field at all is fail-closed red, because an unwritten field
-  would otherwise be a switch held entirely by the party this gate checks (it
-  silently guarantees the anomaly can never fire). Before activation, a
-  missing `Profile:` field has zero effect.
+  a fresh round actually writes post-reversal), a `control-contract.md` whose
+  `- Profile:` field is either absent OR present but not one of
+  `lite`/`standard`/`strict`/`custom` (D1) is fail-closed red, because either
+  shape would otherwise be a switch held entirely by the party this gate
+  checks (it silently guarantees the anomaly can never fire) -- this
+  includes `control-contract-template.md`'s own shipped-default line,
+  `- Profile: lite | standard | strict | custom`, which is present-but-
+  invalid, not absent, and was a live escape hatch until D1 closed it. Before
+  activation, an absent-or-invalid `Profile:` field has zero effect.
 
 - Decision-field label ASCII probe (TH-0029 defect 1, evolution-issues/
   0029-rae-hard-rule-two-live-bypasses.md; see `check_decision_field_
@@ -513,6 +517,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+import uuid
 from pathlib import Path
 
 CODE_SPAN = re.compile(r"`([^`]+)`")
@@ -765,8 +770,38 @@ def _canonical(path: Path) -> Path:
     by `_exists_as` at the point a match is actually accepted, not by this
     resolution step (T-063 MUST-FIX 2: canonical containment and match-time
     existence re-verification must not be conflated with each other).
+
+    A path string carrying an embedded NUL byte cannot be resolved at all --
+    `Path.resolve()` raises `ValueError: embedded null byte` (the OS-level
+    `stat`/`realpath` calls this delegates to reject it outright, before
+    `strict=False` ever gets a say). Left uncaught, that exception propagates
+    all the way out of every containment check built on this function
+    (`_is_contained`, `_is_contained_pinned`), crashing the whole
+    verification pass -- exit=1 with zero stdout, worse than any reported
+    violation, since a `--json` consumer gets nothing at all (A2). This is
+    reachable from more than one caller-supplied string that never passed
+    through any prior validation: an eval ledger's `evidence` field
+    (`check_eval_ledger`, joined into `round_dir / evidence` before
+    `_is_contained` ever sees it) and an ordinary review markdown Rule B
+    citation span (`_resolve_in_project`, joined into `base / cited`) both
+    reach here on attacker-influenced text. Every caller of `_canonical`
+    only ever asks "is this contained in that" -- so on this failure we
+    return a fresh, guaranteed-unique, unresolvable sentinel `Path` instead
+    of letting the exception escape. `uuid4()` per call (not one fixed
+    sentinel constant) means two independent resolution failures can never
+    compare equal to each other or be judged "under" one another, so
+    containment fails closed here, once, regardless of which side
+    (candidate or the domain being compared against) is the one that could
+    not be resolved -- callers see an ordinary "not contained" and report
+    the same violation they would for any other escaping path, never a
+    crash. Fixing this once, in the shared resolution primitive, is
+    deliberate: patching each call site individually would need to be
+    redone at every future call site too.
     """
-    return path.resolve(strict=False)
+    try:
+        return path.resolve(strict=False)
+    except ValueError:
+        return Path(f"\0-harnessloop-unresolvable-{uuid.uuid4().hex}-\0")
 
 
 def _is_contained(candidate: Path, project: Path) -> bool:
@@ -1298,8 +1333,16 @@ def _load_versioned_roots(path: Path) -> tuple[list[dict], str | None]:
     unknown_top = set(data) - {"version", "roots"}
     if unknown_top:
         return [], f"{path}: unknown top-level key(s) {sorted(unknown_top)}"
-    if data.get("version") != 1:
-        return [], f"{path}: 'version' must be 1"
+    version_value = data.get("version")
+    # Same class of bug as `_load_external_systems_file`'s D2 fix (see that
+    # function's comment for the full explanation): a bare `!= 1` lets
+    # `True` through (`bool` is an `int` subclass in Python, `True == 1`)
+    # and `1.0`/`1e0` through (both `== 1` under Python's cross-numeric-type
+    # equality) as if either were the JSON integer `1` this schema
+    # declares. Excluding `bool` explicitly before the `int`/`== 1` check
+    # keeps this loader's own version gate consistent with that fix.
+    if isinstance(version_value, bool) or not isinstance(version_value, int) or version_value != 1:
+        return [], f"{path}: 'version' must be the integer 1"
     raw_roots = data.get("roots", [])
     if not isinstance(raw_roots, list):
         return [], f"{path}: 'roots' must be a list"
@@ -1446,8 +1489,12 @@ def _load_local_bindings(path: Path) -> tuple[dict[str, str], str | None]:
     unknown_top = set(data) - {"version", "bindings"}
     if unknown_top:
         return {}, f"{path}: unknown top-level key(s) {sorted(unknown_top)}"
-    if data.get("version") != 1:
-        return {}, f"{path}: 'version' must be 1"
+    version_value = data.get("version")
+    # Same class of bug as `_load_external_systems_file`'s D2 fix, and the
+    # same fix as `_load_versioned_roots` just above -- see either for the
+    # full explanation of why a bare `!= 1` silently accepts `True`/`1.0`.
+    if isinstance(version_value, bool) or not isinstance(version_value, int) or version_value != 1:
+        return {}, f"{path}: 'version' must be the integer 1"
     raw_bindings = data.get("bindings", {})
     if not isinstance(raw_bindings, dict):
         return {}, f"{path}: 'bindings' must be an object"
@@ -1672,7 +1719,29 @@ def _load_one_root(
 
     try:
         canonical = Path(raw_path).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError):
+    except (OSError, RuntimeError, ValueError):
+        # ValueError: `raw_path` (a `.harnessloop/local/reference-roots.local.json`
+        # binding string, JSON-parsed -- JSON trivially round-trips an
+        # embedded NUL codepoint through its four-hex-digit unicode string
+        # escape) containing an embedded NUL byte makes `resolve()`
+        # raise `ValueError: embedded null byte`, the exact same OS-level
+        # rejection `_canonical` documents and fails closed on -- but this
+        # call site does NOT go through `_canonical` and, before this fix,
+        # did not catch it. This is deliberately a *second*, independent
+        # `except` addition rather than a shared helper with `_canonical`:
+        # `_canonical` is `strict=False` and collapses every resolution
+        # failure to one comparison-safe sentinel `Path` for containment
+        # checks; this site is `strict=True` on purpose (§2.5) so a
+        # nonexistent path is classified "unresolvable" here rather than
+        # falling through to the `is_dir()` check below and being
+        # classified "rejected" -- reusing `_canonical`'s `strict=False`
+        # contract would silently collapse that distinction. Left
+        # uncaught, this crashed the whole `load_reference_roots` call (and
+        # therefore all of `verify_project`) the moment any declared root's
+        # local-binding path contained an embedded NUL byte -- exit=1 with
+        # zero stdout, the same A2 shape `_canonical`'s own fix documents.
+        # Fail-closed here means this one root becomes unavailable
+        # ("unresolvable"); the run does not crash.
         return ReferenceRoot(canonical=None, available=False, unavailable_reason="unresolvable", **common)
 
     if not canonical.is_dir():
@@ -2178,7 +2247,20 @@ def _git_tracked_index(project: Path) -> dict[str, list[tuple[str, ...]]] | None
     try:
         if Path(top).resolve() != project.resolve():
             return None
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError alongside OSError for the same reason `_load_one_root`
+        # needed it added (see that function's except clause): an embedded
+        # NUL byte makes `resolve()` raise `ValueError`, not `OSError`, and
+        # an except tuple built for "resolution can fail" that only lists
+        # `OSError` misses that failure mode. `top` (real `git
+        # rev-parse --show-toplevel` output) and `project` (this module's
+        # own project-root parameter) are not expected to ever carry an
+        # embedded NUL in practice -- neither travels through JSON, and a
+        # real on-disk path or an argv string cannot contain one -- but
+        # this except clause already exists specifically to catch
+        # resolution failures, so leaving it one exception type short of
+        # that goal is the same class of gap this round is sweeping for,
+        # not a new risk being invented.
         return None
 
     try:
@@ -2565,8 +2647,17 @@ def _load_external_systems_file(path: Path) -> tuple[dict[str, dict], str | None
     unknown_top = set(data) - {"version", "systems"}
     if unknown_top:
         return {}, f"{path}: unknown top-level key(s) {sorted(unknown_top)} -- only 'version' and 'systems' are allowed"
-    if data.get("version") != 1:
-        return {}, f"{path}: 'version' must be 1"
+    version_value = data.get("version")
+    # D2: `!= 1` alone lets `True` through -- `bool` is a subclass of `int`
+    # in Python, and `True == 1` -- as well as `1.0` / `1e0` (both `== 1`
+    # under Python's numeric equality across `int`/`float`). None of those
+    # are the JSON integer `1` this schema declares. `check_goal_eval_
+    # registry`'s `activation_round` field (same file, ~3190) already
+    # excludes `bool` explicitly before its own `int`/`>= 1` check for
+    # exactly this reason; this site did not, which was a live internal
+    # inconsistency within one module's own JSON-schema discipline (D2).
+    if isinstance(version_value, bool) or not isinstance(version_value, int) or version_value != 1:
+        return {}, f"{path}: 'version' must be the integer 1"
     raw_systems = data.get("systems")
     if not isinstance(raw_systems, list):
         return {}, f"{path}: 'systems' must be a list"
@@ -2589,7 +2680,20 @@ def _load_external_systems_file(path: Path) -> tuple[dict[str, dict], str | None
             return {}, f"{path}: duplicate id {system_id!r}"
 
         kind = raw.get("kind")
-        if kind not in EXTERNAL_SYSTEM_KINDS:
+        # `kind not in EXTERNAL_SYSTEM_KINDS` (a frozenset membership test)
+        # requires `kind` to be hashable -- a `kind` written as a JSON array
+        # or object (`isinstance` excludes both) is unhashable and makes `in`
+        # raise `TypeError: unhashable type` instead of returning `False`,
+        # which crashed this whole gate (exit=1, zero stdout -- worse than a
+        # reported violation, since a `--json` consumer gets nothing at all)
+        # for every caller, not just this one malformed file (A1). A `kind`
+        # that is merely out-of-enum but still hashable (e.g. `"websocket"`)
+        # never hit this because `in` on a hashable non-member just returns
+        # `False`. Checking the type first turns every non-string `kind`
+        # (list, dict, and any other unhashable shape) into the same
+        # `external-system-invalid` violation every other malformed `kind`
+        # already produces, instead of an uncaught crash.
+        if not isinstance(kind, str) or kind not in EXTERNAL_SYSTEM_KINDS:
             return {}, (
                 f"{path}: systems[{i}].kind {kind!r} is not one of "
                 f"{sorted(EXTERNAL_SYSTEM_KINDS)}"
@@ -2631,17 +2735,45 @@ def load_external_systems(project: Path) -> tuple[dict[str, dict], list[dict]]:
     legitimacy is a project-level fact, not something any single round did).
 
     This function performs **no filesystem probing beyond reading this one
-    file** -- no symlink check, no local-binding counterpart, no
+    file and one symlink check** -- no local-binding counterpart, no
     connectivity/availability check of any kind. The design brief explicitly
-    excludes all three: this file is a today-layer declaration of what ids
-    exist, consumed only by `check_goal_eval_registry`'s id-reference check
-    against `<goal>/evals.json`'s optional `system` field, itself another
-    today-layer file -- see that function's docstring for the one hard rule
-    this declaration feeds.
+    excludes the latter two: this file is a today-layer declaration of what
+    ids exist, consumed only by `check_goal_eval_registry`'s id-reference
+    check against `<goal>/evals.json`'s optional `system` field, itself
+    another today-layer file -- see that function's docstring for the one
+    hard rule this declaration feeds.
+
+    D3: the declaration must be the versioned file itself, not a symlink to
+    somewhere else -- the same discipline `load_reference_roots` already
+    applies to `reference-roots.json` (and its local-binding counterpart),
+    for the same reason: `.harnessloop/setup/external-systems.json` is the
+    git-committed, diff-reviewable record of which external systems this
+    project declares, and if it is a symlink, what a reviewer sees in `git
+    show` and what this gate actually loads are two different files -- the
+    symlink's target need not even be inside the project (a project-external
+    file could smuggle `id`/`kind`/`description` content in without ever
+    touching this project's own tracked history). This function used to
+    explicitly document "no symlink check" as an intentional exclusion; that
+    was inconsistent with the sibling declaration file and is fixed here
+    (D3) rather than carried forward as a documented gap.
     """
     path = project / EXTERNAL_SYSTEMS_VERSIONED_REL
     if not path.is_file():
         return {}, []
+    if path.is_symlink():
+        return {}, [
+            {
+                "round": str(project),
+                "kind": "external-system-invalid",
+                "detail": (
+                    f"{path.relative_to(project).as_posix()} is a symlink; the "
+                    "external-systems declaration must be the tracked file itself, "
+                    "not a pointer to one (git shows a reviewer only the pointer; this "
+                    "gate would otherwise load whatever it targets, possibly outside "
+                    "the project)"
+                ),
+            }
+        ]
     systems, err = _load_external_systems_file(path)
     if err is not None:
         return {}, [{"round": str(project), "kind": "external-system-invalid", "detail": err}]
@@ -4495,11 +4627,18 @@ def _parse_labeled_line(text: str, label: str) -> str | None:
 
 def parse_control_contract_profile(contract_text: str) -> str | None:
     """Extract the raw `- Profile:` value from `control-contract.md`, or
-    `None` when the field was never written at all (outside any fence) --
-    see `check_loop_autocontinue_anomaly` for why this project distinguishes
-    "never written" from "written but unrecognized" (Appendix B.1's
-    `loop-contract-profile-missing` fires only on the former, once
-    activated)."""
+    `None` when the field was never written at all (outside any fence).
+
+    D1: `check_loop_autocontinue_anomaly`'s `loop-contract-profile-missing`
+    deliberately does NOT key off this function's `None`-ness alone -- it
+    fires whenever `_normalize_bare_enum(profile_raw, ...)` is `None`, which
+    covers both "never written" (this function returns `None`) and "written
+    but does not normalize to a recognized profile" (this function returns
+    the literal string, unrecognized). Collapsing those two cases here would
+    have reopened the exact bypass this field's own docstring history
+    warns about: `control-contract-template.md`'s shipped-default line,
+    `- Profile: lite | standard | strict | custom`, is very much "written"
+    by this function's own definition."""
     return _parse_labeled_line(contract_text, "Profile")
 
 
@@ -4533,15 +4672,20 @@ def _normalize_bare_enum(raw: str | None, known: frozenset[str]) -> str | None:
     field in this module already uses (`_normalize_feedback` et al.):
     `.strip().lower()` only, no punctuation stripped. Returns `None` both
     when `raw` is `None` (field never written) and when the normalized
-    value does not land in `known` (written but unrecognized) -- a caller
-    that must distinguish "absent" from "present but unrecognized" (e.g.
-    Appendix B.1's `loop-contract-profile-missing`, which fires only on
-    true absence) checks `raw is None` itself rather than relying on this
-    function's return value alone; for `check_loop_autocontinue_anomaly`'s
-    own tri-state (Kleene) condition logic, "absent" and "present but
-    unrecognized" are deliberately collapsed into the same "cannot be
-    mechanically determined" outcome (spec §4's conservative polarity: both
-    are reasons not to report an anomaly, not reasons to guess)."""
+    value does not land in `known` (written but unrecognized) -- for
+    `check_loop_autocontinue_anomaly`'s own tri-state (Kleene) condition
+    logic, "absent" and "present but unrecognized" are deliberately
+    collapsed into the same "cannot be mechanically determined" outcome
+    (spec §4's conservative polarity: both are reasons not to report an
+    anomaly, not reasons to guess). D1: Appendix B.1's
+    `loop-contract-profile-missing` now (correctly) shares that same
+    collapse -- it fires on `profile_norm is None`, i.e. on *this*
+    function's return value being `None`, covering "absent" and "present
+    but unrecognized" alike; an earlier version kept its own separate
+    `profile_raw is None` (absence-only) test specifically to distinguish
+    the two, which is exactly what let `control-contract-template.md`'s
+    shipped-default line -- present, but not a recognized profile -- pass
+    this hard rule through unnoticed."""
     if raw is None:
         return None
     normalized = raw.strip().lower()
@@ -4557,15 +4701,28 @@ def _parse_markdown_table(text: str) -> tuple[list[str], list[list[str]]] | None
     Returns `(header_cells, data_rows)` (each cell already `.strip()`ped),
     or `None` if no such header+separator pair exists anywhere in `text` --
     callers must treat `None` as "cannot be mechanically determined" (fail-
-    closed by absence, never a guessed partial table). This is a light,
-    single-purpose table reader for `check_evidence_index_all_valid` only
-    -- it does not track fenced code blocks (`_uncoded_lines`) the way this
-    module's `- <label>:` line parsers do, since `evidence-index.md` is a
-    structured table file, not free-form decision.md prose that quotes
-    field examples; a project that embeds a literal table-shaped code
-    example inside `evidence-index.md` is out of this function's scope.
+    closed by absence, never a guessed partial table).
+
+    C2: reads via `_uncoded_lines`, not a bare `.splitlines()` -- this was
+    originally reasoned to be out of scope ("`evidence-index.md` is a
+    structured table file, not free-form prose that quotes field examples"),
+    but that reasoning was wrong: `evidence-index.md` is ordinary Markdown
+    like any other protocol file, and a fenced example table inside it (e.g.
+    documenting the expected shape) is "the first well-formed table in
+    `text`" from a bare line-scan's point of view whenever it precedes the
+    real one. Reproduced live, bidirectionally, against
+    `check_evidence_index_all_valid` / `check_loop_autocontinue_anomaly`: a
+    fenced example table with an `Artifact health` column reading `missing`
+    placed before the real table permanently suppresses
+    `loop_autocontinue_anomaly` for the whole project (the fake table's
+    `all_valid=False` wins and is never revisited), and, symmetrically, a
+    fenced example table that happens to look complete and valid could paper
+    over a real table that is genuinely broken. Skipping fenced lines here
+    is the same fix `- <label>:` line parsers elsewhere in this module
+    already apply, not a new kind of character-level parsing -- this is a
+    missed call site, not a widened detector.
     """
-    lines = text.splitlines()
+    lines = _uncoded_lines(text)
     for i in range(len(lines) - 1):
         header_line = lines[i].strip()
         sep_line = lines[i + 1].strip()
@@ -4677,12 +4834,29 @@ def _latest_round_decision_text(goal_dir: Path, project: Path) -> str | None:
     no round directory under this goal at all whose name parses as an
     integer, or that round's `decision.md` is missing or unreadable.
 
-    "Latest" is purely `int(round_dir.name)`, the same round-numbering
-    convention `check_loop_predecessor_declaration` already relies on; a
-    round directory whose name does not parse as an integer is skipped for
-    this purpose (mirrors that function's "left unvalidated rather than
-    crashing" treatment) rather than raising or silently winning a numeric
-    comparison it cannot meaningfully take part in.
+    "Latest" is `int(round_dir.name)`, but only once `round_dir.name` has
+    passed `ROUND_NAME_STRICT_RE` (`^[0-9]{4}$`) -- the same gate
+    `check_loop_predecessor_declaration` already applies to its own
+    `int(round_dir.name)` use, for the same reason (B1): a bare
+    `int(round_dir.name)` wrapped in `try/except ValueError` is not enough,
+    because `int()` (and Python's `re` module's bare `\\d`, and
+    `str.isdigit()`) all accept far more than ASCII `0-9` -- the full-width
+    Unicode digit block (U+FF10-FF19) included. A round directory literally
+    named `００１０` (four full-width digits) raises no `ValueError` from
+    `int()` -- it parses as `10` -- so the old bare-`int()` version would
+    let it win "latest round" against any real ASCII-named round numbered
+    lower than 10, and would lose to one numbered higher, in *either*
+    direction manipulating which round's `- Feedback:` this function hands
+    to `check_loop_autocontinue_anomaly` (a full-width `9999`-equivalent
+    directory added alongside real round `0003` silently becomes "latest";
+    a full-width negative-reading name can just as easily suppress a real
+    round from ever being "latest" at all). A round directory whose name
+    does not match `ROUND_NAME_STRICT_RE` at all (non-numeric, wrong digit
+    count, or full-width) is skipped for this purpose entirely -- it never
+    wins, and never loses, the "latest" comparison; only the well-formed
+    ASCII-numbered rounds are trusted to divide it, exactly the discipline
+    v0.33.2's Unicode-round-name sweep applied everywhere else in this
+    module (this one call site is the site that sweep missed).
 
     G17 parity: every `round_dir` found under `rounds/` is
     containment-checked (`_container_escape_violation`) before its name is
@@ -4710,10 +4884,9 @@ def _latest_round_decision_text(goal_dir: Path, project: Path) -> str | None:
             continue
         if not round_dir.is_dir():
             continue
-        try:
-            numbered.append((int(round_dir.name), round_dir))
-        except ValueError:
+        if not ROUND_NAME_STRICT_RE.match(round_dir.name):
             continue
+        numbered.append((int(round_dir.name), round_dir))
     if not numbered:
         return None
     _, latest_round_dir = max(numbered, key=lambda pair: pair[0])
@@ -4855,38 +5028,60 @@ def check_loop_autocontinue_anomaly(project: Path) -> tuple[list[dict], dict]:
     # already reports it once).
     goals_dir_escapes = _container_escape_violation(goals_dir, project, goals_dir) is not None
     enabled = (not goals_dir_escapes) and _loop_autocontinue_enabled(goals_dir, project)
-    # Appendix B.1's `loop-contract-profile-missing` fires only when a real
-    # `control-contract.md` was read (`contract_text is not None`) and that
-    # file itself has no `- Profile:` field -- it is deliberately narrower
-    # than "no Profile value could be determined at all" (which also covers
-    # `control-contract.md` not existing on disk). A wholly missing
-    # `control-contract.md` is not a new concern this gate introduces:
-    # `check_setup.py`'s `gate_blocking` already treats that file's absence
-    # as blocking, on its own, unrelated terms; this gate does not duplicate
-    # that check under a different name, and none of this batch's own teeth
-    # (G33f/G33g) exercise "file absent" -- both use a real, written
-    # `control-contract.md` that simply omits the `- Profile:` line.
-    if enabled and contract_text is not None and profile_raw is None:
-        violations.append(
-            {
-                "round": str(project),
-                "kind": "loop-contract-profile-missing",
-                "detail": (
-                    f"{contract_path} has no `- Profile:` field, but this project has "
-                    "already activated the loop-continuation record gate (some round's "
-                    "decision.md declares `Loop continuation:` or `Predecessor:`) -- "
-                    "Appendix B.1 of docs/loop-stop-record-spec-20260728.md makes this a "
-                    "violation rather than a silent skip: an unwritten `Profile:` field "
-                    "would otherwise be a switch the audited party holds, since it "
-                    "guarantees `loop_autocontinue_anomaly` can never fire"
-                ),
-            }
-        )
 
     profile_norm = _normalize_bare_enum(profile_raw, CONTROL_CONTRACT_PROFILE_ENUM)
     condition_profile: bool | None = (
         None if profile_norm is None else profile_norm in ("lite", "standard")
     )
+
+    # Appendix B.1's `loop-contract-profile-missing` fires when a real
+    # `control-contract.md` was read (`contract_text is not None`) and that
+    # file's `- Profile:` field does not normalize to one of
+    # `CONTROL_CONTRACT_PROFILE_ENUM` -- deliberately `profile_norm is None`,
+    # not `profile_raw is None`. This condition is not "field absent" alone:
+    # it also fires when the field is present but its value is not a
+    # recognized profile (D1). Fixed live: `control-contract-template.md`'s
+    # own out-of-the-box line 11 -- what `harnessloop-init` actually writes
+    # to every fresh project's `state/control-contract.md` before a human
+    # ever edits it -- is `- Profile: lite | standard | strict | custom`.
+    # Under the old `profile_raw is None` test, that literal template line
+    # made `profile_raw` the string `"lite | standard | strict | custom"`
+    # (a value, not an absence), so the "missing" violation never fired for
+    # it, `empty string`, or `banana` alike -- yet none of those three
+    # normalize to a real profile either, so `condition_profile` was `None`
+    # for all of them and `loop_autocontinue_anomaly` was permanently and
+    # silently parked in `skipped_unparsable`, forever, for any project that
+    # never bothered to overwrite the shipped default. This function's own
+    # docstring frames B.1 as closing "a switch held by the audited party" --
+    # but the switch the plugin itself hands out, pre-flipped, in its own
+    # template is exactly that switch. A wholly missing `control-contract.md`
+    # is still not a new concern this gate introduces (`contract_text is not
+    # None` keeps that guard): `check_setup.py`'s `gate_blocking` already
+    # treats that file's absence as blocking, on its own, unrelated terms;
+    # this gate does not duplicate that check under a different name, and
+    # none of this batch's own teeth (G33f/G33g) exercise "file absent" --
+    # both use a real, written `control-contract.md`.
+    if enabled and contract_text is not None and profile_norm is None:
+        violations.append(
+            {
+                "round": str(project),
+                "kind": "loop-contract-profile-missing",
+                "detail": (
+                    f"{contract_path}'s `- Profile:` field is {profile_raw!r} "
+                    f"(expected one of {sorted(CONTROL_CONTRACT_PROFILE_ENUM)}), but this "
+                    "project has already activated the loop-continuation record gate "
+                    "(some round's decision.md declares `Loop continuation:` or "
+                    "`Predecessor:`) -- Appendix B.1 of "
+                    "docs/loop-stop-record-spec-20260728.md makes an absent OR "
+                    "unrecognized `Profile:` value a violation rather than a silent "
+                    "skip: either one would otherwise be a switch the audited party "
+                    "holds (including the plugin's own shipped template default, "
+                    "`lite | standard | strict | custom`, which is present-but-invalid, "
+                    "not absent), since it guarantees `loop_autocontinue_anomaly` can "
+                    "never fire"
+                ),
+            }
+        )
 
     positive_norm = _normalize_bare_enum(positive_raw, CONTROL_CONTRACT_BOOLEAN_ENUM)
     condition_positive: bool | None = (
@@ -5322,10 +5517,26 @@ def verify_round(
     # join, no value normalization: those are exactly what produced six of
     # this repo's ten evolution issues. Absent fields are never a violation,
     # so existing rounds need no migration.
+    #
+    # C1: this scan reads via `_uncoded_lines`, not a bare `.splitlines()`,
+    # for the same reason every other `- <label>:` line-prefix parser in this
+    # module already does (`parse_feedback`, `parse_review_fields`,
+    # `parse_acceptance_eval_declaration`, `_parse_labeled_line`, ...): a
+    # fenced code block quoting `` - Verdict: `` / `` - Residuals: `` as a
+    # documentation example must never outrank the round's real, unfenced
+    # declaration. This was, until this fix, the one exception among that
+    # whole family -- v0.29.0 moved every other same-shaped parser onto
+    # `_uncoded_lines` and missed this site, leaving a live bidirectional
+    # bypass: a fence containing `` - Residuals: none `` could silently
+    # suppress a genuine `Verdict: pass` / non-none-`Residuals` contradiction
+    # elsewhere in the same file (false green), and, symmetrically, a clean
+    # round's decision.md quoting someone else's residual note inside a fence
+    # (e.g. documenting the convention) could trip a contradiction that was
+    # never actually declared (false red).
     decision = round_dir / "decision.md"
     if decision.exists():
         verdict = residuals = None
-        for line in decision.read_text(encoding="utf-8", errors="ignore").splitlines():
+        for line in _uncoded_lines(decision.read_text(encoding="utf-8", errors="ignore")):
             stripped = line.strip()
             if verdict is None and stripped.lower().startswith("- verdict:"):
                 verdict = stripped.split(":", 1)[1].strip().lower()
