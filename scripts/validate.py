@@ -1375,6 +1375,64 @@ def validate_protocol_gates() -> None:
         f"was performed — such a field can only degrade into boilerplate (found: {ossify_hits})",
     )
 
+    # G39 (TH-0025, evolution-issues/0025-*.md): the shipped plugin tree
+    # (`plugins/harnessloop/`) must never name a `.sh` script as some other
+    # party's job/responsibility for a gate the plugin itself declines to
+    # cover. TH-0025's adversarial ruling found exactly two such sentences
+    # (harnessloop-loop/SKILL.md's OUT column and verify_protocol.py's
+    # `check_external_systems` docstring), both pointing at
+    # `check-secrets.sh` -- a file that exists only in this validating
+    # project (test-harnessloop), never inside the plugin tree the plugin
+    # actually ships to an installed project. The ruling: the plugin owns
+    # neither the data nor the timing nor the enforcement such a gate would
+    # need, so it may describe what it does *not* do (first-person, about
+    # itself) but must never assert that some *other* named file is doing
+    # it instead -- that reads as "someone is guarding this" when nobody
+    # is, for any project this plugin is installed into.
+    #
+    # The expected set below is *computed*, not a hardcoded list: every
+    # `.sh` filename that actually exists anywhere under the shipped plugin
+    # tree, discovered by `rglob` fresh on every run. Silencing this check
+    # by editing an allowlist is structurally unavailable -- the only way
+    # to make it pass is to either stop making the ownership claim, or
+    # actually ship the named script inside the plugin tree. Today that
+    # set is empty (the plugin ships zero `.sh` files of any kind), so any
+    # `.sh` reference at all is a reference to something outside the tree.
+    #
+    # Deliberately narrow to `.sh` only (registered upper bound, not a
+    # silent gap): the plugin tree does ship five `.py` scripts, so an
+    # analogous `.py`-name check would need to tell "citing one of this
+    # plugin's own five real scripts" apart from "naming a foreign one" --
+    # a real distinction, not a rounding error, and there is currently no
+    # violating instance of that shape to justify the added judgment-call
+    # surface. `.sh` needs no such distinction because the tree ships none
+    # at all, so this check covers exactly the class TH-0025 found and
+    # registers, rather than silently pretends to cover, the rest.
+    sh_reference_pat = re.compile(r"\b([A-Za-z0-9_-]+\.sh)\b")
+    ownership_word_pat = re.compile(
+        r"\bjob\b|\bresponsibilit(?:y|ies)\b|\bhandles?\b|\bowns?\b|\bguards?\b|\benforces?\b",
+        re.IGNORECASE,
+    )
+    shipped_sh_scripts = {p.name for p in PLUGIN_ROOT.rglob("*.sh")}
+    orphan_sh_ownership_hits = []
+    for f in PLUGIN_ROOT.rglob("*"):
+        if not (f.is_file() and f.suffix in {".md", ".py"}):
+            continue
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        for m in sh_reference_pat.finditer(text):
+            name = m.group(1)
+            if name in shipped_sh_scripts:
+                continue
+            window = text[max(0, m.start() - 60) : m.end() + 60]
+            if ownership_word_pat.search(window):
+                orphan_sh_ownership_hits.append(f"{f.relative_to(REPO_ROOT)}: `{name}`")
+    check(
+        not orphan_sh_ownership_hits,
+        "no shipped-plugin text (plugins/harnessloop/**/*.{md,py}) names a `.sh` "
+        "script that does not exist in the plugin tree as another party's "
+        f"job/responsibility (TH-0025) (found: {orphan_sh_ownership_hits})",
+    )
+
     # E1<->E2 一致性（teeth #4）：SKILL.md 的 Mechanical Gate Boundary "IN" 列
     # 逐字声称与 coverage 字段一一对应。若两边漂移，那份边界声明就在撒谎——
     # 而它是一份没有机械牙的纪律文档，唯一可测的一点就是这个对应关系。

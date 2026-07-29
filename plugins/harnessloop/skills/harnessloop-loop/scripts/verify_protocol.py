@@ -2490,8 +2490,10 @@ def _load_external_systems_file(path: Path) -> tuple[dict[str, dict], str | None
     file's one free-text field and is validated only for being a string (any
     content, including empty) -- this gate never scans it for anything that
     looks like a credential (see `harnessloop-loop/SKILL.md`'s OUT column;
-    that scan would necessarily be both leaky and noisy, and secret-shaped
-    text is this project's own `check-secrets.sh`'s job, not this gate's).
+    that scan would necessarily be both leaky and noisy, and Harnessloop
+    itself ships no secret scanner anywhere in the plugin tree -- a project
+    needing that protection must supply its own repository-level
+    secret-scanning hook and CI, independent of this gate; TH-0025).
     """
     data, err = _load_strict_json(path)
     if err is not None:
