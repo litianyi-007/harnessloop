@@ -7943,6 +7943,414 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g37k_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G38: eval-ledger `evidence` field (third RAE vertical slice --
+    # requirement (3) of the eval-declaration chain: an eval ledger entry
+    # must reference a produced artifact, not merely assert a pass. Reuses
+    # `_rae_project`/`_rae_round_dir`/`_rae_write_ledger` from the G25
+    # fixtures above; every teeth below is a paired mutation exactly like
+    # G25/G37, proving the check discriminates on the exact condition it
+    # claims to.
+    # -------------------------------------------------------------------
+
+    def _g38_evidence_dir(project: Path) -> Path:
+        return _rae_round_dir(project) / "evidence"
+
+    def _g38_write_evidence_file(project: Path, relpath: str, content: str = "log contents") -> Path:
+        p = _rae_round_dir(project) / relpath
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return p
+
+    print("  G38a: outcome pass + evidence pointing at a real file inside this round's evidence/ -> green")
+    g38_root = Path(tempfile.mkdtemp(prefix="hl-rae-g38-"))
+    try:
+        project = _rae_project(g38_root)
+        _g38_write_evidence_file(project, "evidence/rae-0001-run.log")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "evidence/rae-0001-run.log",
+                    }
+                ]
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            f"G38a: a legal evidence reference to a real file under this round's own evidence/ "
+            f"produces zero violations (got {violations})",
+        )
+        check(
+            coverage["eval_entries_with_evidence"] == 1,
+            f"G38a: eval_entries_with_evidence == 1 (got {coverage['eval_entries_with_evidence']})",
+        )
+        check(
+            coverage["eval_entries_evidence_null"] == 0,
+            f"G38a: eval_entries_evidence_null == 0 (got {coverage['eval_entries_evidence_null']})",
+        )
+
+        print("  G38b: 'evidence' key entirely absent from the entry -> eval-ledger-evidence-missing")
+        _rae_write_ledger(
+            project,
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "skipped", "frozen_due_set": ["RAE-0001"]}]},
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-evidence-missing"},
+            f"G38b: no 'evidence' key at all -> eval-ledger-evidence-missing, and nothing else "
+            f"(got {kinds})",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G38b reflex: adding ONLY `\"evidence\": null` (outcome left at 'skipped') clears "
+            f"the violation -- proves the key's mere presence, not a non-null value, is what "
+            f"eval-ledger-evidence-missing demands (got {violations})",
+        )
+        check(
+            coverage["eval_entries_evidence_null"] == 1,
+            f"G38b reflex: eval_entries_evidence_null == 1 for the now-present null value "
+            f"(got {coverage['eval_entries_evidence_null']})",
+        )
+
+        print("  G38c: outcome pass + evidence null -> eval-ledger-evidence-required-for-pass")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-evidence-required-for-pass"},
+            f"G38c: outcome=='pass' with evidence==null -> eval-ledger-evidence-required-for-pass "
+            f"(got {kinds})",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G38c reflex: changing ONLY outcome to 'skipped' (evidence still null) clears the "
+            f"violation -- proves the requirement is keyed on outcome=='pass' specifically "
+            f"(got {violations})",
+        )
+
+        print("  G38d: evidence resolves outside this round's own evidence/ -> eval-ledger-evidence-outside-round")
+        _rae_write_evidence_outside = project / "other.md"
+        _rae_write_evidence_outside.write_text("not this round's own", encoding="utf-8")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "../../../../../other.md",
+                    }
+                ]
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-evidence-outside-round"},
+            f"G38d: 'evidence' escaping this round's own evidence/ via literal '../' -> "
+            f"eval-ledger-evidence-outside-round, even though the target genuinely exists in "
+            f"the project (got {kinds})",
+        )
+        check(
+            coverage["eval_entries_with_evidence"] == 1,
+            "G38d: a non-null (if invalid) evidence value still counts toward "
+            f"eval_entries_with_evidence (got {coverage['eval_entries_with_evidence']})",
+        )
+        _g38_write_evidence_file(project, "evidence/moved-in.md", "not this round's own")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "evidence/moved-in.md",
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G38d reflex: moving the SAME content into this round's own evidence/ (nothing else "
+            f"changed) clears the violation (got {violations})",
+        )
+
+        print("  G38e: evidence path does not exist -> eval-ledger-evidence-not-found")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "evidence/does-not-exist.log",
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-evidence-not-found"},
+            f"G38e: a well-contained but nonexistent evidence path -> eval-ledger-evidence-not-found "
+            f"(got {kinds})",
+        )
+        _g38_write_evidence_file(project, "evidence/does-not-exist.log")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            f"G38e reflex: creating that SAME file clears the violation (got {violations})",
+        )
+
+        print("  G38f: evidence path is a directory -> eval-ledger-evidence-not-a-file")
+        (_g38_evidence_dir(project) / "adir").mkdir(exist_ok=True)
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "evidence/adir",
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-evidence-not-a-file"},
+            f"G38f: evidence naming a directory -> eval-ledger-evidence-not-a-file (got {kinds})",
+        )
+
+        if hasattr(os, "symlink"):
+            print("  G38g: evidence is a symlink whose target legitimately resolves INSIDE this round's evidence/ -> still red")
+            real_target = _g38_write_evidence_file(project, "evidence/real.log", "real content")
+            link = _g38_evidence_dir(project) / "link.log"
+            symlinks_supported = True
+            try:
+                link.symlink_to(real_target)
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+            if symlinks_supported:
+                _rae_write_ledger(
+                    project,
+                    {
+                        "entries": [
+                            {
+                                "eval_id": "RAE-0001",
+                                "attempt_id": "0001-a1",
+                                "outcome": "pass",
+                                "frozen_due_set": ["RAE-0001"],
+                                "evidence": "evidence/link.log",
+                            }
+                        ]
+                    },
+                )
+                violations, _coverage = verify_protocol.verify_project(project)
+                kinds = {v["kind"] for v in violations}
+                # `round-artifact-is-symlink` (Rule A's own, unrelated symlink scan
+                # over evidence/) legitimately co-fires here too -- both checks are
+                # independently looking at the same symlink and are both right to
+                # object; membership, not equality, is what this teeth asserts.
+                check(
+                    "eval-ledger-evidence-not-a-file" in kinds,
+                    "G38g: a symlink whose target genuinely, legitimately resolves inside this "
+                    "round's own evidence/ is STILL rejected -- this proves the check enforces "
+                    f"'the leaf is an ordinary file', not merely 'does not escape' (got {kinds}). "
+                    "Same discipline as check_review_declaration's review-path-is-symlink."
+                )
+                check(
+                    verify_protocol._is_contained(link, _g38_evidence_dir(project)) and real_target.is_file(),
+                    "G38g mutation control: the symlink's own path is contained in this round's "
+                    "evidence/ and its target is a real plain file -- proves "
+                    "eval-ledger-evidence-not-a-file fires specifically because the leaf is a "
+                    "symlink, not because of containment or existence",
+                )
+                link.unlink()
+                _g38_write_evidence_file(project, "evidence/link.log", "real content")
+                violations, _coverage = verify_protocol.verify_project(project)
+                check(
+                    not violations,
+                    "G38g reflex: replacing the symlink with an ordinary file at the SAME path "
+                    f"(same content) clears the violation (got {violations})",
+                )
+
+            print("  G38h: evidence is a symlink whose target resolves OUTSIDE the project -> eval-ledger-evidence-outside-round")
+            escape_target_root = Path(tempfile.mkdtemp(prefix="hl-rae-g38h-outside-"))
+            escape_target = escape_target_root / "outside.log"
+            escape_target.write_text("outside the project entirely", encoding="utf-8")
+            escape_link = _g38_evidence_dir(project) / "escape.log"
+            symlinks_supported = True
+            try:
+                escape_link.symlink_to(escape_target)
+            except (OSError, NotImplementedError):
+                symlinks_supported = False
+            try:
+                if symlinks_supported:
+                    _rae_write_ledger(
+                        project,
+                        {
+                            "entries": [
+                                {
+                                    "eval_id": "RAE-0001",
+                                    "attempt_id": "0001-a1",
+                                    "outcome": "pass",
+                                    "frozen_due_set": ["RAE-0001"],
+                                    "evidence": "evidence/escape.log",
+                                }
+                            ]
+                        },
+                    )
+                    violations, _coverage = verify_protocol.verify_project(project)
+                    kinds = {v["kind"] for v in violations}
+                    # Same membership-not-equality reasoning as G38g: Rule A's
+                    # `round-artifact-is-symlink` independently flags this same
+                    # symlink too, legitimately.
+                    check(
+                        "eval-ledger-evidence-outside-round" in kinds,
+                        "G38h: a symlink escape (project-internal path, project-external target) "
+                        f"-> eval-ledger-evidence-outside-round, same as a literal '../' escape "
+                        f"(got {kinds})",
+                    )
+                    # Clean up the escaping symlink itself (not just its external
+                    # target directory below) so it does not linger under this
+                    # round's evidence/ and pollute the G38i/G38j checks that follow.
+                    escape_link.unlink()
+                else:
+                    print("  (skipped G38h: os.symlink unavailable on this platform)")
+            finally:
+                shutil.rmtree(escape_target_root, ignore_errors=True)
+        else:
+            print("  (skipped G38g/G38h: os.symlink unavailable on this platform)")
+
+        print("  G38i: evidence is an empty string / a non-string JSON value -> eval-ledger-evidence-invalid-type")
+        for bad_value, label in (("", "empty string"), (42, "a JSON number")):
+            _rae_write_ledger(
+                project,
+                {
+                    "entries": [
+                        {
+                            "eval_id": "RAE-0001",
+                            "attempt_id": "0001-a1",
+                            "outcome": "pass",
+                            "frozen_due_set": ["RAE-0001"],
+                            "evidence": bad_value,
+                        }
+                    ]
+                },
+            )
+            violations, coverage = verify_protocol.verify_project(project)
+            kinds = {v["kind"] for v in violations}
+            check(
+                kinds == {"eval-ledger-evidence-invalid-type"},
+                f"G38i: evidence == {bad_value!r} ({label}) -> eval-ledger-evidence-invalid-type "
+                f"(got {kinds})",
+            )
+            check(
+                coverage["eval_entries_with_evidence"] == 0 and coverage["eval_entries_evidence_null"] == 0,
+                f"G38i: a non-null-but-invalid-type value counts toward neither "
+                f"eval_entries_with_evidence nor eval_entries_evidence_null (got "
+                f"with_evidence={coverage['eval_entries_with_evidence']}, "
+                f"evidence_null={coverage['eval_entries_evidence_null']})",
+            )
+
+        print("  G38j: evidence names a real file whose CONTENT is entirely fabricated -> still green (registered upper bound, not a gap)")
+        _g38_write_evidence_file(project, "evidence/fake.log", "我瞎编的 -- this file is not the product of any real eval run")
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": "evidence/fake.log",
+                    }
+                ]
+            },
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        # This is OUT-list item 1, not a bug: the gate never reads the referenced
+        # file's content, so a fabricated artifact passes exactly like a real one --
+        # `check_round_eval_ledger` proves only "the ledger points at a real, ordinary
+        # file inside this round's own evidence/", never that the file is honest about
+        # what produced it.
+        check(
+            not violations,
+            f"G38j: a fabricated-content file that nonetheless exists as an ordinary file "
+            f"inside this round's own evidence/ passes -- the gate does not read file "
+            f"content, by design (got {violations})",
+        )
+        check(
+            coverage["eval_entries_with_evidence"] == 1,
+            f"G38j: still counted as eval_entries_with_evidence == 1 "
+            f"(got {coverage['eval_entries_with_evidence']})",
+        )
+    finally:
+        shutil.rmtree(g38_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")

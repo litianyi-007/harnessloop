@@ -306,6 +306,25 @@ This script enforces only machine-checkable rules:
   by the very round being checked — this gate confirms internal
   self-consistency, never that the due set is complete.
 
+- Eval-ledger evidence gate (third RAE vertical slice, requirement ③ of
+  the eval-declaration chain; see `check_round_eval_ledger`'s `evidence`
+  bullet): each ledger entry must always carry the `evidence` key
+  (`eval-ledger-evidence-missing` otherwise), whose value may be `null`
+  unless `outcome == "pass"` (`eval-ledger-evidence-required-for-pass`
+  otherwise). A non-null value must be a non-empty string
+  (`eval-ledger-evidence-invalid-type` otherwise) that resolves, under the
+  same `_is_contained` canonical containment `check_review_declaration`
+  uses for `Review:`, inside this same round's own `evidence/` directory
+  (`eval-ledger-evidence-outside-round` otherwise), and must exist as an
+  ordinary, non-symlink file (`eval-ledger-evidence-not-found` /
+  `eval-ledger-evidence-not-a-file`). This buys exactly what B2a's
+  `Review:` field buys for a review claim — a "this ran" claim made
+  referenceable and contestable — never proof of execution; the gate never
+  reads the referenced file's content. See `check_round_eval_ledger`'s
+  `evidence` bullet for the full rationale, including why resolution is
+  confined to the round's own `evidence/` rather than anywhere
+  project-contained (TH-0027).
+
 - Acceptance-eval declaration gate (second RAE vertical slice; see
   `check_acceptance_eval_declaration`): narrows the upper bound above —
   "a round with no ledger produces zero violations from the RAE hard
@@ -2924,7 +2943,8 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
     only this round's own internal self-consistency.
 
     Schema: `{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0003-a1",
-    "outcome": "pass", "frozen_due_set": ["RAE-0001"]}]}`.
+    "outcome": "pass", "frozen_due_set": ["RAE-0001"],
+    "evidence": "evidence/runtime/rae-0001-run.log"}]}`.
 
     All-or-nothing, single `eval-ledger-invalid` violation (same philosophy
     as `check_goal_eval_registry`'s `rae-invalid`), when the document's
@@ -2944,6 +2964,85 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
       cross-round join.
     - `outcome` must be one of `LEDGER_OUTCOMES`
       (`eval-ledger-invalid-outcome`).
+    - `evidence` -- the honest upper bound on "did this eval actually run"
+      (requirement ③ of the eval-declaration chain this repo's
+      `docs/app-requirements.md`-driving project tracks; ① external-system
+      declaration and ② eval/system binding shipped in v0.34.0, ④ ledger
+      accounting, ⑤ positive-without-pass, and ⑥ declared-ran-without-ledger
+      in v0.27.0/v0.28.0). A gate that only reads files this same round
+      wrote can never *prove* an eval genuinely executed -- the round
+      writing the ledger controls every input the gate could inspect, the
+      same self-signing shape this project keeps re-discovering. This field
+      does not try to close that gap; it buys the same, honestly-narrower
+      thing B2a's `Review:` field already buys for a review claim: making
+      "this ran" *referenceable and contestable* by an adversarial reviewer,
+      never verified. Reuses the exact primitives `check_review_declaration`
+      uses for `Review:` -- `_is_contained`, `os.path.lexists`,
+      `.is_symlink()`, `.is_file()` -- rather than a second, hand-rolled
+      path-safety check:
+      - The **key itself is always required** -- `eval-ledger-evidence-missing`
+        when `evidence` is absent from an entry at all -- even though its
+        *value* is allowed to be `null` (a round with nothing to point at
+        yet may freely write `"evidence": null`, same as an unset field
+        that is still explicitly accounted for, never silently omitted).
+      - When `outcome == "pass"`, the value may not be `null`
+        (`eval-ledger-evidence-required-for-pass`): to claim a pass you
+        must point at something. The incentive lines up rather than
+        offering a free escape hatch -- writing `outcome: "skipped"` does
+        avoid this requirement, but `"skipped"` can never itself satisfy
+        the positive-without-pass hard rule below (a due `eval_id` needs an
+        `outcome == "pass"` entry, not merely a non-failing one), so
+        relaxing this requirement never also relaxes that one.
+      - When the value is not `null`, it must be a non-empty string
+        (`eval-ledger-evidence-invalid-type` otherwise -- covers both a
+        non-string JSON value, e.g. a number, and an empty or
+        whitespace-only string) that, resolved against `round_dir`, lands
+        inside this **same round's own** `evidence/` directory under
+        canonical (symlink-resolved) containment -- `_is_contained`, the
+        same symlink-safe check `check_review_declaration` uses for
+        `Review:` path containment, so a symlink escape is caught exactly
+        the same way (`eval-ledger-evidence-outside-round` otherwise,
+        whether the escape is a literal `../` or a symlink whose target
+        resolves outside).
+      - Once contained, the same existence/shape sequence
+        `check_review_declaration` already runs against a declared
+        `Review:` path is reused: on-disk existence via `os.path.lexists`
+        (`eval-ledger-evidence-not-found` otherwise), then that the leaf is
+        an ordinary file -- not a directory, and not a symlink even when
+        the symlink's own target legitimately resolves inside the round's
+        `evidence/` (`eval-ledger-evidence-not-a-file` otherwise -- one
+        combined kind for both shapes, unlike `check_review_declaration`'s
+        separate `review-path-is-symlink` / `review-path-not-file`; this
+        vertical slice's spec calls for exactly two failure kinds here, not
+        four).
+
+      **Why confined to this round's own `evidence/`, and not anywhere
+      project-contained like `Review:`:** this check reads the filesystem
+      for existence, and TH-0027 already catalogs (at least) seven distinct
+      ways today's disk state retroactively changes an already-closed
+      round's violation set -- see `docs/runtime-evals-interface-contract-v5-20260728.md`'s
+      2026-07-28 correction in the consuming project, and the "Whether an
+      already-closed round can be trusted..." OUT-column entry below.
+      Allowing an evidence path anywhere in the project would add an
+      eighth, *heavier* one: deleting any file anywhere in the project
+      could flip a closed round red. Confining resolution to the round's
+      own `evidence/` keeps this addition inside TH-0027's **lightest**
+      registered class -- class ⑥, "the round's own files' existence",
+      the same class `scope_lock.exists()` / `decision.exists()` already
+      occupy -- rather than opening a new, heavier one. A side benefit of
+      the confinement: the referenced file already lives under a directory
+      Rule A's scope-lock containment and Rule B's citation scanning both
+      already walk, so this is not a wholly new, unaudited surface.
+
+      **What this deliberately never does** (the same "account for it, do
+      not grow the tree" boundary `check_review_declaration` draws for
+      `Review:`, restated here rather than assumed): read the evidence
+      file's own content. It does not confirm the file is really the
+      product of a run, does not check it against `outcome`, and does not
+      check it against `system`. A round can point `evidence` at a file
+      holding nothing but a fabricated string and pass this check every
+      time -- that is not a gap this function closes, it is the registered
+      upper bound of what "referenceable" ever meant here.
     - `frozen_due_set` must be present as a key at all -- **always
       required**, even if the value is `[]` -- (`eval-ledger-frozen-due-set-missing`
       when the key itself is absent); when present it must be a list of
@@ -2966,7 +3065,16 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
     the file exists at all -- backs the `rounds_eval_ledger_present`
     coverage field), `entries_checked` (int, the number of entries this
     ledger declared, once its shape was trustworthy enough to count --
-    backs `eval_entries_checked`), `due_set` (`frozenset[str] | None`: the
+    backs `eval_entries_checked`), `entries_with_evidence` (int, how many
+    entries declared a non-`null` `evidence` value -- backs
+    `eval_entries_with_evidence`; counted regardless of whether that value
+    went on to pass the containment/existence/shape checks above, mirroring
+    how `entries_checked` itself counts every shape-trustworthy entry
+    rather than only the ones that pass every per-field check),
+    `entries_evidence_null` (int, how many entries declared the `evidence`
+    key with a `null` value -- backs `eval_entries_evidence_null`; an entry
+    missing the key entirely contributes to neither of these two counters),
+    `due_set` (`frozenset[str] | None`: the
     single canonical `frozen_due_set` shared by every entry -- an empty
     frozenset when the ledger declares zero entries, which is vacuously
     consistent, not undetermined -- or `None` when it genuinely could not
@@ -2985,10 +3093,19 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
     round is missing from it entirely. `frozen_due_set` is written by the
     same round this function is checking; this function only proves the
     ledger agrees with itself about what it claims is due, never that the
-    claim is honest (second OUT-list upper bound).
+    claim is honest (second OUT-list upper bound). Nor does it decide
+    whether an `evidence` reference is honest -- see the `evidence` bullet
+    above for that boundary in full (third OUT-list upper bound).
     """
     path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
-    state: dict = {"present": False, "entries_checked": 0, "due_set": None, "entries": None}
+    state: dict = {
+        "present": False,
+        "entries_checked": 0,
+        "entries_with_evidence": 0,
+        "entries_evidence_null": 0,
+        "due_set": None,
+        "entries": None,
+    }
     if not path.is_file():
         return [], state
     state["present"] = True
@@ -3065,6 +3182,86 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
                     "detail": f"{path}: entries[{i}].outcome {outcome!r} is not one of {sorted(LEDGER_OUTCOMES)}",
                 }
             )
+
+        # `evidence` (requirement (3) of the eval-declaration chain -- see
+        # this function's docstring for the full rationale and the primitives
+        # reused from `check_review_declaration`). The key itself is always
+        # required; only its value may be `null`.
+        if "evidence" not in entry:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-evidence-missing",
+                    "detail": (
+                        f"{path}: entries[{i}] is missing required field 'evidence' "
+                        "(always required -- the key itself may not be absent, though "
+                        "its value may be null)"
+                    ),
+                }
+            )
+        else:
+            evidence = entry["evidence"]
+            if evidence is None:
+                state["entries_evidence_null"] += 1
+                if outcome == "pass":
+                    violations.append(
+                        {
+                            "round": str(round_dir),
+                            "kind": "eval-ledger-evidence-required-for-pass",
+                            "detail": (
+                                f"{path}: entries[{i}] has outcome=='pass' but evidence "
+                                "is null -- a pass claim must reference a produced "
+                                "artifact (use outcome=='skipped' if there is genuinely "
+                                "nothing to point at; 'skipped' cannot itself satisfy the "
+                                "positive-without-pass hard rule)"
+                            ),
+                        }
+                    )
+            elif not isinstance(evidence, str) or not evidence.strip():
+                violations.append(
+                    {
+                        "round": str(round_dir),
+                        "kind": "eval-ledger-evidence-invalid-type",
+                        "detail": f"{path}: entries[{i}].evidence {evidence!r} must be null or a non-empty string",
+                    }
+                )
+            else:
+                state["entries_with_evidence"] += 1
+                evidence_root = round_dir / "evidence"
+                candidate = round_dir / evidence
+                if not _is_contained(candidate, evidence_root):
+                    violations.append(
+                        {
+                            "round": str(round_dir),
+                            "kind": "eval-ledger-evidence-outside-round",
+                            "detail": (
+                                f"{path}: entries[{i}].evidence {evidence!r} resolves "
+                                f"outside this round's own {evidence_root} under canonical "
+                                "(symlink-resolved) containment"
+                            ),
+                        }
+                    )
+                elif not os.path.lexists(candidate):
+                    violations.append(
+                        {
+                            "round": str(round_dir),
+                            "kind": "eval-ledger-evidence-not-found",
+                            "detail": f"{path}: entries[{i}].evidence {evidence!r} does not exist",
+                        }
+                    )
+                elif candidate.is_symlink() or not candidate.is_file():
+                    violations.append(
+                        {
+                            "round": str(round_dir),
+                            "kind": "eval-ledger-evidence-not-a-file",
+                            "detail": (
+                                f"{path}: entries[{i}].evidence {evidence!r} is not an "
+                                "ordinary file -- a directory, or a symlink, are both "
+                                "rejected even when the symlink's own target legitimately "
+                                "resolves inside the round's evidence/"
+                            ),
+                        }
+                    )
 
         if "frozen_due_set" not in entry:
             violations.append(
@@ -4658,6 +4855,8 @@ def verify_round(
     if ledger_state["present"]:
         coverage["rounds_eval_ledger_present"] = 1
     coverage["eval_entries_checked"] = ledger_state["entries_checked"]
+    coverage["eval_entries_with_evidence"] = ledger_state["entries_with_evidence"]
+    coverage["eval_entries_evidence_null"] = ledger_state["entries_evidence_null"]
 
     if checked_files and spans:
         coverage["rule_a_files"] = len(checked_files)
@@ -5002,6 +5201,16 @@ def _empty_coverage() -> dict:
         # runs over every other per-round field.
         "rounds_eval_ledger_present": 0,
         "eval_entries_checked": 0,
+        # Third RAE vertical slice (requirement (3) of the eval-declaration
+        # chain, `check_round_eval_ledger`'s `evidence` field checks): same
+        # per-round accumulation. `eval_entries_with_evidence` counts every
+        # entry that declared a non-null `evidence` value (regardless of
+        # whether that value went on to pass containment/existence/shape);
+        # `eval_entries_evidence_null` counts every entry that declared the
+        # key with a null value. An entry missing the `evidence` key
+        # entirely (`eval-ledger-evidence-missing`) contributes to neither.
+        "eval_entries_with_evidence": 0,
+        "eval_entries_evidence_null": 0,
         # Second RAE vertical slice (`check_acceptance_eval_declaration`,
         # wired into `verify_round` right after the fields above): ordinary
         # per-round fields, accumulated the same way. `mode` partitions a
@@ -5532,6 +5741,8 @@ def main() -> int:
             f"goals_eval_registry_present={coverage['goals_eval_registry_present']} "
             f"rounds_eval_ledger_present={coverage['rounds_eval_ledger_present']} "
             f"eval_entries_checked={coverage['eval_entries_checked']} "
+            f"eval_entries_with_evidence={coverage['eval_entries_with_evidence']} "
+            f"eval_entries_evidence_null={coverage['eval_entries_evidence_null']} "
             f"evals_with_system={coverage['evals_with_system']} "
             f"evals_system_undeclared={coverage['evals_system_undeclared']} "
             f"eval_declaration_ran={coverage['rounds_eval_declaration_ran']} "
