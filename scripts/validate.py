@@ -10875,6 +10875,204 @@ def validate_protocol_gates() -> None:
                 "does not hold on this platform",
             )
 
+    # -------------------------------------------------------------------
+    # G55: TH-0013 (evolution-issues/0013-mechanical-gate-execution-untracked.md)
+    # -- the mechanical gate hard rule tying decision.md's own
+    # `- Mechanical gate: <exit-code> / <coverage line> / <when run>` field
+    # to that SAME round's own `- Feedback:` (`check_mechanical_gate_
+    # declaration`, `mechanical-gate-nonzero-but-positive`). Reuses the RAE
+    # fixture helpers (`_rae_project` / `_rae_write_decision`) above --
+    # no ledger is ever written in this block, so the RAE hard rule stays
+    # silent throughout and never contaminates these assertions. Every
+    # teeth below is a paired mutation, same discipline as G25a/b: a
+    # fixture asserted to land on one verdict under the real
+    # implementation, then a minimal, targeted change to that same fixture
+    # asserted to flip the verdict.
+    # -------------------------------------------------------------------
+    print("  G55: TH-0013 mechanical gate hard rule (`Mechanical gate:` exit code vs `Feedback:`, same decision.md)")
+
+    print("    G55a: nonzero exit code + Feedback: positive -> mechanical-gate-nonzero-but-positive (red)")
+    g55_root = Path(tempfile.mkdtemp(prefix="hl-mechgate-g55-"))
+    try:
+        project = _rae_project(g55_root)
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "- Feedback: positive\n"
+            "- Mechanical gate: 1 / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" in kinds,
+            "G55a: `Mechanical gate: 1 / ...` (nonzero) + `Feedback: positive` in the same "
+            f"decision.md -> mechanical-gate-nonzero-but-positive (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_declared"] == 1 and coverage["rounds_mechanical_gate_nonzero"] == 1,
+            "G55a: coverage counts this round in both rounds_mechanical_gate_declared and "
+            f"rounds_mechanical_gate_nonzero (got declared={coverage['rounds_mechanical_gate_declared']}, "
+            f"nonzero={coverage['rounds_mechanical_gate_nonzero']})",
+        )
+
+        print(
+            "    G55a mutation control: flipping ONLY the exit code to 0 (same positive "
+            "Feedback, same file) turns it green -- proves G55a is not a vacuous always-red"
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "- Feedback: positive\n"
+            "- Mechanical gate: 0 / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" not in kinds,
+            "G55a mutation control: exit code 0 + Feedback: positive -> green "
+            f"(got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_declared"] == 1 and coverage["rounds_mechanical_gate_nonzero"] == 0,
+            "G55a mutation control: declared but NOT counted as nonzero (got "
+            f"declared={coverage['rounds_mechanical_gate_declared']}, "
+            f"nonzero={coverage['rounds_mechanical_gate_nonzero']})",
+        )
+
+        print(
+            "    G55b: nonzero exit code + Feedback: negative (not positive) -> no "
+            "mechanical-gate-nonzero-but-positive -- the rule is specific to `positive`, not "
+            "any declared nonzero exit code by itself"
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "- Feedback: negative\n"
+            "- Mechanical gate: 1 / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" not in kinds,
+            f"G55b: nonzero exit code + Feedback: negative -> green (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_nonzero"] == 1,
+            "G55b: still counted in rounds_mechanical_gate_nonzero (the coverage counter is "
+            "unconditional on Feedback; only the violation itself is Feedback-gated) "
+            f"(got {coverage['rounds_mechanical_gate_nonzero']})",
+        )
+
+        print(
+            "    G55c (fenced bypass, both directions): a fenced `- Mechanical gate: 0` "
+            "documentation example must never outrank a real, unfenced nonzero declaration "
+            "in the same file -- the real (unfenced) value is what this rule must judge"
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "Example format (do not copy this value literally):\n\n"
+            "```\n"
+            "- Mechanical gate: 0 / coverage: rounds=1 / 2026-01-01T00:00:00Z\n"
+            "```\n\n"
+            "- Feedback: positive\n"
+            "- Mechanical gate: 3 / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" in kinds,
+            "G55c: fenced `Mechanical gate: 0` example + real unfenced `Mechanical gate: 3` + "
+            f"`Feedback: positive` -> judged on the real (nonzero) value, red (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_nonzero"] == 1,
+            "G55c: coverage reflects the real (unfenced) declaration, not the fenced example "
+            f"(got {coverage['rounds_mechanical_gate_nonzero']})",
+        )
+
+        print(
+            "    G55c mutation control: swapping which value is fenced -- a fenced NONZERO "
+            "example + a real unfenced `Mechanical gate: 0` + Feedback: positive -> green, "
+            "proving the fence is genuinely ignored in both directions, not just this one"
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "Example format (do not copy this value literally):\n\n"
+            "```\n"
+            "- Mechanical gate: 9 / coverage: rounds=1 / 2026-01-01T00:00:00Z\n"
+            "```\n\n"
+            "- Feedback: positive\n"
+            "- Mechanical gate: 0 / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" not in kinds,
+            "G55c mutation control: fenced `Mechanical gate: 9` + real unfenced "
+            f"`Mechanical gate: 0` + `Feedback: positive` -> green (got {sorted(kinds)})",
+        )
+
+        print(
+            "    G55d: full-width Unicode exit-code digit (e.g. `３`) -> "
+            "mechanical-gate-declaration-unparsable (fail-closed), and the hard rule does NOT "
+            "also fire for this round even though Feedback is positive -- unparsable is not "
+            "silently read as either 'absent' or 'nonzero'"
+        )
+        _rae_write_decision(
+            project,
+            "# Decision\n\n"
+            "- Feedback: positive\n"
+            "- Mechanical gate: ３ / coverage: rounds=1 rule_a_files=0 / 2026-07-30T00:00:00Z\n",
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-declaration-unparsable" in kinds,
+            "G55d: full-width exit-code digit `３` (U+FF13) does not match `^[0-9]+$` -> "
+            f"mechanical-gate-declaration-unparsable (got {sorted(kinds)})",
+        )
+        check(
+            "mechanical-gate-nonzero-but-positive" not in kinds,
+            "G55d: unparsable exit code must never also trip mechanical-gate-nonzero-but-"
+            f"positive -- 'unparsable' is not silently treated as 'nonzero' (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_declared"] == 1 and coverage["rounds_mechanical_gate_nonzero"] == 0,
+            "G55d: declared (the field was written) but NOT counted as nonzero (unparsable "
+            f"cannot be classified) (got declared={coverage['rounds_mechanical_gate_declared']}, "
+            f"nonzero={coverage['rounds_mechanical_gate_nonzero']})",
+        )
+        check(
+            bool(re.match(r"^[0-9]+$", "3")) and not bool(re.match(r"^[0-9]+$", "３")),
+            "G55d (supplement): MECHANICAL_GATE_EXIT_CODE_RE's own `^[0-9]+$` pattern accepts "
+            "ASCII '3' but rejects the full-width lookalike '３' -- pinned directly, same "
+            "discipline as G35c's PREDECESSOR_VALUE_RE probe",
+        )
+
+        print(
+            "    G55e: `- Mechanical gate:` never written at all -> silent (zero violations "
+            "from this gate, zero coverage) -- this project's own 14 pre-existing rounds all "
+            "currently fall in this bucket (zero-migration)"
+        )
+        _rae_write_decision(project, "# Decision\n\n- Feedback: positive\n")
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "mechanical-gate-nonzero-but-positive" not in kinds
+            and "mechanical-gate-declaration-unparsable" not in kinds,
+            f"G55e: absent `Mechanical gate:` field -> silent, zero-migration (got {sorted(kinds)})",
+        )
+        check(
+            coverage["rounds_mechanical_gate_declared"] == 0 and coverage["rounds_mechanical_gate_nonzero"] == 0,
+            "G55e: absence counts as zero in both coverage fields (got "
+            f"declared={coverage['rounds_mechanical_gate_declared']}, "
+            f"nonzero={coverage['rounds_mechanical_gate_nonzero']})",
+        )
+    finally:
+        shutil.rmtree(g55_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")

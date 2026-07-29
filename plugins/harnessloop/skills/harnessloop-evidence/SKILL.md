@@ -51,7 +51,7 @@ Use `$harnessloop-channels` to list declared external systems/tools/channels bef
 7. For `diff`, summarize the contract change and its continuation effect.
 8. Update self-audit or recommend `$harnessloop-loop` self-audit when the evidence change reveals drift, contradiction, stale data, or validation drift.
 
-If evidence shows a runtime blocker that prevents the original trigger/action but leaves a safe read-only investigation path, classify it as `runtime-recoverable` and return `recovery-eligible: yes`. If the next step would mutate external state, clean up rows, trigger a job, roll back, or make a business decision, classify it as `write-safety-required` or `human-decision-required` and ask for the missing confirmation instead.
+If evidence shows a runtime blocker that prevents the original trigger/action but leaves a safe read-only investigation path, classify it as `runtime-recoverable` and return `recovery-eligible: yes`. If the next step would mutate external state, clean up rows, trigger a job, roll back, or make a business decision, classify it as `write-safety-required` or `human-decision-required` and ask for the missing confirmation instead — unless that specific write is already pre-authorized under `write-safety-required`'s test-resource carve-out (see `harnessloop-continue/SKILL.md` and this project's own `state/control-contract.md`), in which case cite the pre-authorization instead of asking again.
 
 When an external system read or write is involved, first verify that the request states the system, operation, required parameters, permission scope, credential reference, and failure handling. If any of these are missing or ambiguous, stop before tool use and ask the user a focused question for the missing condition.
 

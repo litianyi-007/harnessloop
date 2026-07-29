@@ -2905,20 +2905,21 @@ def _decision_field_label_functions() -> list:
     `- <label>:` field, without hand-listing their names.
 
     The distinguishing signal used here already exists in the code, it is
-    not invented for this check: every one of decision.md's five field
+    not invented for this check: every one of decision.md's six field
     parsers (`parse_feedback`, `parse_review_fields`,
     `parse_acceptance_eval_declaration`, `parse_loop_predecessor_declaration`,
-    `parse_loop_continuation_declaration`) is named `parse_*` and takes its
-    first positional parameter named `decision_text` -- while the module's
-    other three `parse_control_contract_*` functions parse a *different*
-    file (`control-contract.md`) and take `contract_text` instead. Filtering
-    on "name starts with `parse_` AND first parameter is named
-    `decision_text`" picks out exactly the first group and none of the
+    `parse_loop_continuation_declaration`, `parse_mechanical_gate_
+    declaration` -- the last one added by TH-0013) is named `parse_*` and
+    takes its first positional parameter named `decision_text` -- while the
+    module's other three `parse_control_contract_*` functions parse a
+    *different* file (`control-contract.md`) and take `contract_text`
+    instead. Filtering on "name starts with `parse_` AND first parameter is
+    named `decision_text`" picks out exactly the first group and none of the
     second, using a distinction the code already draws for an unrelated
     reason (their signatures genuinely differ because they read different
     files), rather than a distinction manufactured only for this probe.
 
-    Consequence: a sixth decision.md field parser added later under this
+    Consequence: a seventh decision.md field parser added later under this
     same `parse_*(decision_text, ...)` convention is picked up automatically
     the next time this runs -- there is nothing here to remember to update.
     Same "discover it from what actually exists, don't re-enumerate it"
@@ -2947,12 +2948,15 @@ def known_decision_field_labels() -> frozenset[str]:
     could silently drift out of sync with what the parsers actually check.
 
     See `_decision_field_label_functions` for exactly which functions are
-    scanned and why. Today this yields eight labels: `feedback`, `review`,
+    scanned and why. Today this yields nine labels: `feedback`, `review`,
     `reviewer`, `review verdict`, `review digest`, `acceptance evals`,
-    `predecessor`, `loop continuation` -- but that count is a consequence
-    of what is in the source today, not asserted here as a constant; adding
-    a parser under the same convention changes this function's output with
-    no edit needed in this function itself.
+    `predecessor`, `loop continuation`, `mechanical gate` (the last one
+    added by TH-0013's `parse_mechanical_gate_declaration`, picked up with
+    no edit needed here -- exactly the consequence this docstring already
+    promised) -- but that count is a consequence of what is in the source
+    today, not asserted here as a constant; adding a parser under the same
+    convention changes this function's output with no edit needed in this
+    function itself.
     """
     labels: set[str] = set()
     for fn in _decision_field_label_functions():
@@ -4578,6 +4582,115 @@ def check_loop_continuation_declaration(
     return [], state
 
 
+# Mechanical gate hard rule (TH-0013,
+# evolution-issues/0013-mechanical-gate-execution-untracked.md): decision.md's
+# own `- Mechanical gate: <exit-code> / <coverage line> / <when run>` field --
+# already required by decision-template.md and harnessloop-loop/SKILL.md's
+# Loop Continuation step 1 since v0.12.0's E3, but never checked by this
+# script until now -- against that SAME round's own `- Feedback:` (wired into
+# `verify_round` next to the RAE hard rule below). No cross-round join, no
+# re-run of verify_protocol.py itself, no disk access beyond decision.md:
+# `MECHANICAL_GATE_EXIT_CODE_RE` reads only the first `/`-separated segment
+# (the exit code) -- the second (coverage line) and third (timestamp)
+# segments are never parsed by this gate, exactly as B2a never reads a
+# declared `Review:` file's own prose. Deliberately `[0-9]`, not `\d`: same
+# reason `PREDECESSOR_VALUE_RE` / `ROUND_NAME_STRICT_RE` above already give
+# (Python's `re` module matches `\d` against any Unicode decimal-digit
+# codepoint by default, including the full-width block U+FF10-FF19, so a
+# declared `０ / ... / ...` would parse as exit code 0 under a bare `\d`;
+# this repo's own G35a lint also fails any bare `\d` pattern found anywhere
+# under plugins/harnessloop/).
+MECHANICAL_GATE_EXIT_CODE_RE = re.compile(r"^[0-9]+$")
+
+
+def parse_mechanical_gate_declaration(decision_text: str) -> str | None:
+    """Extract the raw `- Mechanical gate:` value from a decision.md.
+
+    Same narrow convention as every other `- <label>:` parser in this module
+    (`parse_feedback`, `parse_acceptance_eval_declaration`,
+    `parse_loop_predecessor_declaration`, `parse_loop_continuation_
+    declaration`): a case-insensitive `- <label>:` line prefix,
+    `.strip().lower()`-matched against the line, first occurrence wins,
+    lines inside a fenced code block never considered (`_uncoded_lines`) --
+    a decision.md quoting `` - Mechanical gate: `` as a literal example
+    inside a fence must not outrank the round's real, unfenced declaration
+    elsewhere in the file. Returns `None` when the field was never written
+    at all (outside any fence) -- this repo's own 14 pre-existing rounds
+    (goal 002) all currently fall in this bucket, and this check must stay
+    silent for every one of them (zero-migration, exactly like
+    `- Predecessor:` / `- Acceptance evals:`).
+    """
+    for line in _uncoded_lines(decision_text):
+        stripped = line.strip()
+        if stripped.lower().startswith("- mechanical gate:"):
+            return stripped.split(":", 1)[1].strip()
+    return None
+
+
+def check_mechanical_gate_declaration(
+    round_dir: Path, decision_text: str
+) -> tuple[list[dict], dict]:
+    """TH-0013: parse decision.md's optional `- Mechanical gate:` field and
+    classify its declared exit-code segment.
+
+    Format (decision-template.md): `<exit-code> / <coverage line> / <when
+    run>`. This function reads only the text up to the first literal `/`
+    (the whole value, if no `/` is present at all), strips surrounding
+    whitespace, and requires the result to match `MECHANICAL_GATE_EXIT_CODE_RE`
+    (`^[0-9]+$`).
+
+    Three outcomes:
+
+    - Absent (`raw is None`): `[], {"declared": False, "nonzero": False,
+      "raw": None}` -- silent, zero violations. Optional field; a round
+      that never writes it produces zero violations from this function,
+      exactly like `- Predecessor:` / `- Acceptance evals:`.
+    - Present but the exit-code segment does not match `^[0-9]+$` after
+      `.strip()` (e.g. non-numeric text, or full-width digits such as
+      `０`): one `mechanical-gate-declaration-unparsable` violation
+      (fail-closed -- same polarity as `acceptance-eval-declaration-
+      unparsable` / `loop-predecessor-invalid-value`: never silently
+      treated as absent, and never silently treated as exit code 0).
+    - Present and the exit-code segment parses as a non-negative integer:
+      `[], {"declared": True, "nonzero": exit_code != 0, "raw": raw}`.
+
+    Returns `(violations, state)`. This function never reads `Feedback` and
+    never emits `mechanical-gate-nonzero-but-positive` itself -- the caller
+    (`verify_round`) combines `state["nonzero"]` with this same round's own
+    parsed `Feedback` to decide that hard rule, mirroring how
+    `check_acceptance_eval_declaration` hands `ledger_state` back to its
+    caller rather than evaluating the RAE hard rule internally.
+    """
+    decision_path = round_dir / "decision.md"
+    raw = parse_mechanical_gate_declaration(decision_text)
+    state: dict = {"declared": raw is not None, "nonzero": False, "raw": raw}
+    if raw is None:
+        return [], state
+
+    exit_code_segment = raw.split("/", 1)[0].strip()
+    if not MECHANICAL_GATE_EXIT_CODE_RE.match(exit_code_segment):
+        return (
+            [
+                {
+                    "round": str(round_dir),
+                    "kind": "mechanical-gate-declaration-unparsable",
+                    "detail": (
+                        f"{decision_path} declares `Mechanical gate: {raw}`, whose "
+                        f"exit-code segment ({exit_code_segment!r}, the text up to the "
+                        "first `/`) does not match `^[0-9]+$` -- fail-closed, never "
+                        "silently treated as absent or as exit code 0 (only the "
+                        "exit-code segment is parsed; the coverage line and timestamp "
+                        "segments are never read by this gate)"
+                    ),
+                }
+            ],
+            state,
+        )
+
+    state["nonzero"] = int(exit_code_segment) != 0
+    return [], state
+
+
 # Loop-autocontinue anomaly gate (batch 3 of
 # docs/loop-stop-record-spec-20260728.md, §4/§5, restated by that spec's
 # Appendix B.1/B.2/F.3 -- see the module docstring's "Loop-autocontinue
@@ -5589,6 +5702,22 @@ def verify_round(
         if review_state["digest_declared"]:
             coverage["rounds_review_digest_declared"] += 1
 
+        # TH-0013 (evolution-issues/0013-mechanical-gate-execution-untracked.md):
+        # decision.md's optional `- Mechanical gate: <exit-code> / <coverage
+        # line> / <when run>` field, parsed for its exit-code segment only
+        # (see `check_mechanical_gate_declaration`). Computed here,
+        # unconditionally, before the Feedback combination below reads
+        # `mech_gate_state["nonzero"]` -- mirrors `ledger_state` being
+        # computed ahead of the RAE hard rule it feeds.
+        mech_gate_violations, mech_gate_state = check_mechanical_gate_declaration(
+            round_dir, decision_text
+        )
+        violations.extend(mech_gate_violations)
+        if mech_gate_state["declared"]:
+            coverage["rounds_mechanical_gate_declared"] += 1
+            if mech_gate_state["nonzero"]:
+                coverage["rounds_mechanical_gate_nonzero"] += 1
+
         # RAE gate, part 2: the hard rule. Every operand here comes from
         # this same round -- `decision_text` (already read above) and
         # `ledger_state` (already computed, unconditionally, earlier in
@@ -5620,32 +5749,65 @@ def verify_round(
                         ),
                     }
                 )
-            elif normalized_feedback == "positive" and ledger_state["due_set"] is not None:
-                # Only evaluated when this round's own ledger produced a
-                # single, self-consistent frozen_due_set (see
-                # `check_round_eval_ledger`'s docstring) -- when the ledger
-                # is absent, shape-invalid, or internally inconsistent,
-                # `due_set` is `None` and this rule stays silent for this
-                # round: the ledger's own problem (or its plain absence,
-                # the first OUT-list upper bound) is not compounded with a
-                # second, speculative violation about a due set this
-                # function cannot actually determine.
-                pass_ids = {
-                    entry.get("eval_id")
-                    for entry in (ledger_state["entries"] or [])
-                    if entry.get("outcome") == "pass" and isinstance(entry.get("eval_id"), str)
-                }
-                unsatisfied = sorted(ledger_state["due_set"] - pass_ids)
-                if unsatisfied:
-                    ledger_path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+            else:
+                if normalized_feedback == "positive" and ledger_state["due_set"] is not None:
+                    # Only evaluated when this round's own ledger produced a
+                    # single, self-consistent frozen_due_set (see
+                    # `check_round_eval_ledger`'s docstring) -- when the ledger
+                    # is absent, shape-invalid, or internally inconsistent,
+                    # `due_set` is `None` and this rule stays silent for this
+                    # round: the ledger's own problem (or its plain absence,
+                    # the first OUT-list upper bound) is not compounded with a
+                    # second, speculative violation about a due set this
+                    # function cannot actually determine.
+                    pass_ids = {
+                        entry.get("eval_id")
+                        for entry in (ledger_state["entries"] or [])
+                        if entry.get("outcome") == "pass" and isinstance(entry.get("eval_id"), str)
+                    }
+                    unsatisfied = sorted(ledger_state["due_set"] - pass_ids)
+                    if unsatisfied:
+                        ledger_path = round_dir / "evidence" / "runtime" / "acceptance-evals.json"
+                        violations.append(
+                            {
+                                "round": str(round_dir),
+                                "kind": "acceptance-eval-positive-without-pass",
+                                "detail": (
+                                    f"{decision} declares `Feedback: positive` but "
+                                    f"{ledger_path} has no outcome==\"pass\" entry for "
+                                    f"frozen_due_set eval_id(s) {unsatisfied}"
+                                ),
+                            }
+                        )
+
+                # TH-0013 hard rule: this SAME round's own `Mechanical gate:`
+                # exit-code segment and its own `Feedback:` -- both fields
+                # already parsed above, nothing re-read, no cross-round join.
+                # Independent of the RAE hard rule immediately above (both
+                # are evaluated, not mutually exclusive): a round can trip
+                # neither, either, or both at once. Silent whenever
+                # `mech_gate_state["nonzero"]` is `False` -- which covers
+                # both "field absent" and "field declared as exit code 0"
+                # (`check_mechanical_gate_declaration`'s own docstring) --
+                # so a round that never wrote `Mechanical gate:` at all is
+                # untouched by this rule, exactly like `- Predecessor:` /
+                # `- Acceptance evals:` above.
+                if normalized_feedback == "positive" and mech_gate_state["nonzero"]:
                     violations.append(
                         {
                             "round": str(round_dir),
-                            "kind": "acceptance-eval-positive-without-pass",
+                            "kind": "mechanical-gate-nonzero-but-positive",
                             "detail": (
-                                f"{decision} declares `Feedback: positive` but "
-                                f"{ledger_path} has no outcome==\"pass\" entry for "
-                                f"frozen_due_set eval_id(s) {unsatisfied}"
+                                f"{decision} declares `Mechanical gate: {mech_gate_state['raw']}` "
+                                "(a nonzero exit code) and `Feedback: positive` in the same "
+                                "file -- harnessloop-loop/SKILL.md's Loop Continuation step 1 "
+                                "says a round whose mechanical gate exited non-zero must not "
+                                "be marked positive. This only checks that this round's own "
+                                "two declared fields do not contradict each other; it does "
+                                "not prove the gate was actually run, and a round that never "
+                                "ran the gate at all but simply writes `Mechanical gate: 0` "
+                                "passes this check identically (see harnessloop-loop/SKILL.md's "
+                                "Mechanical Gate Boundary OUT column)"
                             ),
                         }
                     )
@@ -5821,6 +5983,20 @@ def _empty_coverage() -> dict:
         # violation) but is meant to be a visible, non-zero review signal.
         "rounds_stop_recorded": 0,
         "rounds_stop_unjustified": 0,
+        # Mechanical gate hard rule (`check_mechanical_gate_declaration`,
+        # TH-0013): `rounds_mechanical_gate_declared` counts every round that
+        # wrote `- Mechanical gate:` at all, valid or not (an unparsable
+        # value is reported via the violations list, not counted here --
+        # same convention as `rounds_predecessor_declared`).
+        # `rounds_mechanical_gate_nonzero` is a strict subset: rounds whose
+        # declared exit-code segment parsed and was nonzero (mirrors
+        # `rounds_stop_unjustified` being a strict subset of
+        # `rounds_stop_recorded`). Neither field is itself a violation --
+        # `mechanical-gate-nonzero-but-positive` (only when this same round's
+        # `Feedback` also normalizes to `positive`) is what the violations
+        # list carries.
+        "rounds_mechanical_gate_declared": 0,
+        "rounds_mechanical_gate_nonzero": 0,
         # Loop-autocontinue anomaly gate (`check_loop_autocontinue_anomaly`,
         # batch 3 of the same spec, §4/§5): project-level, like
         # `external_roots_*` below -- assigned exactly once by
@@ -6334,6 +6510,8 @@ def main() -> int:
             f"predecessor_declared={coverage['rounds_predecessor_declared']} "
             f"stop_recorded={coverage['rounds_stop_recorded']} "
             f"stop_unjustified={coverage['rounds_stop_unjustified']} "
+            f"mechanical_gate_declared={coverage['rounds_mechanical_gate_declared']} "
+            f"mechanical_gate_nonzero={coverage['rounds_mechanical_gate_nonzero']} "
             f"loop_autocontinue_anomaly={coverage['loop_autocontinue_anomaly']} "
             f"loop_anomaly_skipped_unparsable={coverage['loop_anomaly_skipped_unparsable']} "
             f"external_roots_declared={coverage['external_roots_declared']} "

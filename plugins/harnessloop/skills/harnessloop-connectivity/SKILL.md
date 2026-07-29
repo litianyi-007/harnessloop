@@ -35,12 +35,12 @@ If the missing condition is a reusable channel parameter or secret reference, ro
 2. Build a check plan from declared verification methods only.
 3. Before tool use, verify the named tool exists and the request includes all required parameters, credential references or local parameter references, permission scope, operation, target resource, and failure handling.
 4. If a named tool is unavailable, uninstalled, ambiguous, or possibly wrong, stop and ask the user to confirm the correct tool or installation path.
-5. For write checks, require explicit human confirmation plus dry-run/test-resource/rollback details.
+5. For write checks, require explicit human confirmation plus dry-run/test-resource/rollback details — unless that specific write is already pre-authorized under `write-safety-required`'s test-resource carve-out (see `harnessloop-continue/SKILL.md` and this project's own `state/control-contract.md`); a production or irreversible write is never covered by that carve-out.
 6. Run only the declared checks that are complete and safe.
 7. If any check result is `fail`, `blocked`, `skipped`, or `needs-user-confirmation`, include focused user questions for the missing or invalid conditions before recommending continuation.
 8. Record results as evidence artifacts or recommend `$harnessloop-evidence` updates when the check changes evidence health.
 
-When a connectivity or runtime preflight blocks the original action because external state is unsafe, classify whether the next step is read-only. If safe read-only investigation can proceed, report `blocker type: runtime-recoverable` and `continuation effect: recovery-round`; if cleanup, trigger, rollback, or mutation is required, report `write-safety-required` or `human-decision-required` and ask for confirmation.
+When a connectivity or runtime preflight blocks the original action because external state is unsafe, classify whether the next step is read-only. If safe read-only investigation can proceed, report `blocker type: runtime-recoverable` and `continuation effect: recovery-round`; if cleanup, trigger, rollback, or mutation is required, report `write-safety-required` or `human-decision-required` and ask for confirmation — unless that specific write is already pre-authorized under `write-safety-required`'s test-resource carve-out (see `harnessloop-continue/SKILL.md` and this project's own `state/control-contract.md`), in which case report the pre-authorization instead of asking again.
 
 ## Output Contract
 
@@ -77,7 +77,7 @@ Harnessloop connectivity:
 
 - Do not infer endpoints, tools, credential locations, permissions, parameters, account roles, or fallback paths.
 - Do not substitute another tool or provider without user confirmation.
-- Do not perform write connectivity checks without explicit human confirmation and rollback/dry-run/test-resource details.
+- Do not perform write connectivity checks without explicit human confirmation and rollback/dry-run/test-resource details — unless that specific write is already pre-authorized under `write-safety-required`'s test-resource carve-out (see `harnessloop-continue/SKILL.md` and this project's own `state/control-contract.md`); a production or irreversible write is never covered by that carve-out and always needs explicit confirmation.
 - Do not store secrets or raw sensitive outputs.
 - Do not print local parameter values; report only presence, source, and status.
 - If connectivity changes evidence acceptance, route to `$harnessloop-evidence`.
