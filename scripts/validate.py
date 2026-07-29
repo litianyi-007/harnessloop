@@ -1278,6 +1278,134 @@ def _dotdot_symlink_semantics(tmp_root: Path) -> str:
         shutil.rmtree(probe_root, ignore_errors=True)
 
 
+def _classify_nul_resolve_outcome(exc: BaseException | None) -> str:
+    """Pure classification: given whatever `Path(...).resolve(strict=False)`
+    either raised or didn't when handed a path-shaped string containing an
+    embedded NUL byte, decide which of three outcomes this repo's NUL-crash
+    mutation controls (G42 x2, G51a, G51d) need to distinguish. Split out
+    from `_nul_path_resolution_behavior` (which performs the real
+    `.resolve()` call) so this can be driven from fabricated exception
+    objects -- on every platform, without needing a second, physically
+    different platform whose NUL-byte handling actually differs -- the
+    same decomposition `_classify_dotdot_symlink_resolution` /
+    `_dotdot_symlink_semantics` already use for T-064 MUST-FIX C above.
+
+    - "valueerror": `exc` is a `ValueError` (matches macos-latest/
+      ubuntu-latest -- CPython's C-level NUL-byte guard rejects the string
+      before any OS syscall is attempted). The mutation controls'
+      premise -- "the pre-fix code crashes uncaught on this fixture" --
+      holds, and they should run for real.
+    - "no-exception": `exc` is `None` -- `.resolve()` returned normally,
+      no exception raised at all.
+    - "other-exception:<ClassName>": `exc` is some other exception. The
+      class name is folded into the returned string (not dropped) purely
+      for diagnostics -- callers only need to test the
+      `"other-exception"` prefix, never the exact suffix, to decide what
+      to do.
+
+    Both "no-exception" and "other-exception:*" mean the mutation
+    controls' premise is NOT reproducible on this platform (this is what
+    windows-latest CI has actually been observed to do): callers must
+    skip those controls honestly rather than assert something false --
+    WITHOUT skipping the fix's own positive assertions (exit code /
+    non-empty stdout / reported violation kind), which run
+    unconditionally regardless of this classification. See
+    `_nul_mutation_control_gate` below.
+    """
+    if exc is None:
+        return "no-exception"
+    if isinstance(exc, ValueError):
+        return "valueerror"
+    return f"other-exception:{type(exc).__name__}"
+
+
+def _nul_path_resolution_behavior(tmp_root: Path) -> str:
+    """Classify, via a live probe (never `sys.platform`), what THIS
+    platform's `Path.resolve(strict=False)` -- the exact primitive
+    `_canonical` wraps, and the same primitive `_load_one_root` /
+    `_git_tracked_index` build their own except-tuples around -- does when
+    handed a path-shaped string containing an embedded NUL byte. Computed
+    ONCE and shared by every G42/G51a/G51d mutation control below (each of
+    which reconstructs a pre-fix version of one of those call sites and
+    asserts it crashes on exactly this shape) so they classify the same
+    platform the same way instead of each separately assuming macOS/
+    Linux's ValueError, and instead of each re-probing independently.
+
+    Confirmed against CPython's own source, not merely inferred: both
+    `posixmodule.c` and the `_winapi`/`nt` path-encoding helpers reject any
+    string containing `\0` outright, before the underlying `stat`/
+    `GetFileAttributes`-family call is ever reached -- `strict=False` never
+    gets a say, because the rejection (where it happens) happens at the
+    encoding step, not the "does this exist" step. On macOS/Linux this
+    genuinely raises `ValueError: embedded null byte`, confirmed live by
+    every G42/G51a/G51d fixture that predates this probe. windows-latest CI
+    has been observed (via the four failures this probe was introduced to
+    fix) to NOT raise `ValueError` here; this file has no Windows machine
+    to interactively confirm exactly what IS raised instead (see this
+    round's own report), which is precisely why this classifies via a live
+    probe at run time -- on whatever platform CI actually runs -- rather
+    than assuming from `sys.platform`.
+
+    Does not touch the filesystem: `.resolve(strict=False)` does not
+    require the path to exist, and the NUL-byte rejection (on platforms
+    where it happens at all) fires before any existence check regardless
+    -- so `tmp_root` need not exist either.
+    """
+    probe_path = str(tmp_root / "nul-path-probe") + "\x00nul"
+    try:
+        Path(probe_path).resolve(strict=False)
+    except Exception as exc:  # deliberately broad -- classified below, never swallowed silently
+        return _classify_nul_resolve_outcome(exc)
+    return _classify_nul_resolve_outcome(None)
+
+
+def _nul_mutation_control_gate(gate_label: str, behavior: str) -> bool:
+    """Shared gate for every G42/G51a/G51d mutation control: decide, from
+    the ONE shared `_nul_path_resolution_behavior` probe result, whether
+    THIS platform can even reproduce the premise those mutation controls
+    assert ("resolving a NUL-embedded path raises ValueError, uncaught, in
+    the pre-fix code"). Centralizes the honest-skip / fail-loud decision so
+    all four call sites decide it identically instead of drifting.
+
+    Returns True only when `behavior == "valueerror"` (matches
+    macos-latest/ubuntu-latest) -- the caller should run its mutation
+    control for real. For `"no-exception"` or any `"other-exception:*"`
+    classification (observed live on windows-latest), prints an honest
+    skip naming `gate_label` and returns False -- explicitly noting that
+    the underlying FIX's own positive assertions (process exit code,
+    non-empty stdout, and the reported violation kind) are unaffected:
+    they run unconditionally, above this gate, on every platform, so only
+    the "prove the fix is load-bearing" half is skipped here, never the
+    fix's own coverage. Anything else -- a classification this gate does
+    not recognize at all -- calls `check(False, ...)`, failing loudly
+    rather than silently skipping, since `_nul_path_resolution_behavior`
+    is only ever supposed to return one of the three documented shapes.
+    """
+    if behavior == "valueerror":
+        return True
+    if behavior == "no-exception" or behavior.startswith("other-exception"):
+        print(
+            f"  (skipped: {gate_label} mutation control -- this platform's "
+            "`Path.resolve(strict=False)` does not raise ValueError on a NUL-embedded path "
+            "(verified via a live probe, `_nul_path_resolution_behavior`, not sys.platform; "
+            f"got {behavior!r}), so the pre-fix code this control reconstructs would not have "
+            "crashed here either -- the premise is not reproducible on this platform. This "
+            f"does NOT mean the fix itself goes untested here: {gate_label}'s positive "
+            "assertions above -- process exit code, non-empty stdout, and the reported "
+            "violation kind -- all ran unconditionally, on every platform; only this mutation "
+            "control's 'proof the fix is load-bearing' half is skipped, not the fix's own "
+            "coverage.)"
+        )
+        return False
+    check(
+        False,
+        f"{gate_label} mutation control: _nul_path_resolution_behavior returned {behavior!r}, "
+        "which is neither 'valueerror', 'no-exception', nor an 'other-exception:*' shape -- "
+        "this needs a human to look at this platform, not a silent skip",
+    )
+    return False
+
+
 # ---------------------------------------------------------------------------
 # G35: bare-`\d` regex-pattern class check. Incident this generalizes: a
 # format-validation regex written with bare `\d` silently accepts input a
@@ -1657,6 +1785,44 @@ def _g53_find_missing_valueerror(text: str, *, filename: str = "<string>") -> li
         if signature_present and not valueerror_present:
             hits.append(f"{filename}:{node.lineno}")
     return hits
+
+
+def _g54_gated_line_ranges(tree: ast.Module) -> set[int]:
+    """Every source line that sits inside the `body` of an
+    `if _nul_mutation_control_gate(...):` block, anywhere in `tree`. Used
+    by the G54 structural teeth (below, in `validate_protocol_gates`) to
+    confirm the fix's own positive assertions for G42/G51a (exit code,
+    non-empty stdout, reported violation kind) are NOT among these lines
+    -- i.e. they run unconditionally, never only inside the mutation-
+    control gate.
+    """
+    gated: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.If)
+            and isinstance(node.test, ast.Call)
+            and isinstance(node.test.func, ast.Name)
+            and node.test.func.id == "_nul_mutation_control_gate"
+        ):
+            for stmt in node.body:
+                end = stmt.end_lineno or stmt.lineno
+                gated.update(range(stmt.lineno, end + 1))
+    return gated
+
+
+def _g54_check_call_line(tree: ast.Module, src: str, marker: str) -> int | None:
+    """Line number of the (first) `check(...)` call in `tree` whose source
+    text contains `marker`, or `None` if none does. Uses
+    `ast.get_source_segment` against the SAME `src` string `tree` was
+    parsed from, so the returned line is exact, not merely a text-position
+    guess.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "check":
+            segment = ast.get_source_segment(src, node)
+            if segment and marker in segment:
+                return node.lineno
+    return None
 
 
 def validate_protocol_gates() -> None:
@@ -9479,6 +9645,24 @@ def validate_protocol_gates() -> None:
     # -------------------------------------------------------------------
     print("  G42 (A2): an embedded NUL byte in a path-shaped string must not crash the gate (fail-closed violation instead)")
 
+    # Computed ONCE and shared by every G42 (x2)/G51a/G51d mutation control
+    # below -- see `_nul_path_resolution_behavior`'s own docstring. A
+    # runtime probe, never a `sys.platform` check: this is what lets those
+    # four mutation controls tell a still-live crash apart from a platform
+    # where this exact NUL-byte-rejection shape does not reproduce (this is
+    # exactly what windows-latest CI turned out to be -- see this round's
+    # report).
+    _nul_resolve_behavior = _nul_path_resolution_behavior(REPO_ROOT / ".tmp")
+    check(
+        _nul_resolve_behavior == "valueerror"
+        or _nul_resolve_behavior == "no-exception"
+        or _nul_resolve_behavior.startswith("other-exception:"),
+        f"_nul_path_resolution_behavior returned a recognized classification (got "
+        f"{_nul_resolve_behavior!r}) -- anything else would mean this platform's NUL-byte "
+        "path-resolution behavior fits no modeled category, and the G42/G51a/G51d mutation "
+        "controls below need a human to look at this platform, not a silent skip",
+    )
+
     print("    entry point 1/2: eval ledger `evidence` field")
     g42a_root = Path(tempfile.mkdtemp(prefix="hl-a2-eval-"))
     try:
@@ -9522,26 +9706,30 @@ def validate_protocol_gates() -> None:
 
         # Mutation control (in-process): temporarily revert `_canonical` to
         # its pre-fix bare form and confirm THIS exact fixture really does
-        # crash under it.
-        _orig_canonical = verify_protocol._canonical
+        # crash under it. Gated on the shared `_nul_resolve_behavior` probe
+        # -- see `_nul_mutation_control_gate`'s docstring for why, and note
+        # the three checks ABOVE (exit code / non-empty stdout / reported
+        # violation kind) are NOT inside this gate and run unconditionally.
+        if _nul_mutation_control_gate("G42 (eval-ledger evidence)", _nul_resolve_behavior):
+            _orig_canonical = verify_protocol._canonical
 
-        def _bare_canonical(path):
-            return path.resolve(strict=False)
+            def _bare_canonical(path):
+                return path.resolve(strict=False)
 
-        verify_protocol._canonical = _bare_canonical
-        try:
-            g42a_crashed = False
+            verify_protocol._canonical = _bare_canonical
             try:
-                verify_protocol.verify_project(project)
-            except ValueError:
-                g42a_crashed = True
-            check(
-                g42a_crashed,
-                "G42 (eval-ledger evidence) mutation control: the pre-fix bare `_canonical` "
-                "(no try/except) raises ValueError on this exact fixture",
-            )
-        finally:
-            verify_protocol._canonical = _orig_canonical
+                g42a_crashed = False
+                try:
+                    verify_protocol.verify_project(project)
+                except ValueError:
+                    g42a_crashed = True
+                check(
+                    g42a_crashed,
+                    "G42 (eval-ledger evidence) mutation control: the pre-fix bare `_canonical` "
+                    "(no try/except) raises ValueError on this exact fixture",
+                )
+            finally:
+                verify_protocol._canonical = _orig_canonical
     finally:
         shutil.rmtree(g42a_root, ignore_errors=True)
 
@@ -9579,26 +9767,31 @@ def validate_protocol_gates() -> None:
             f"and is reported as dangling-citation, fail-closed, not a crash (got {sorted(kinds)})",
         )
 
-        _orig_canonical = verify_protocol._canonical
+        # Gated on the shared `_nul_resolve_behavior` probe -- see
+        # `_nul_mutation_control_gate`'s docstring. The three checks ABOVE
+        # (exit code / non-empty stdout / reported violation kind) are NOT
+        # inside this gate and run unconditionally.
+        if _nul_mutation_control_gate("G42 (review citation)", _nul_resolve_behavior):
+            _orig_canonical = verify_protocol._canonical
 
-        def _bare_canonical2(path):
-            return path.resolve(strict=False)
+            def _bare_canonical2(path):
+                return path.resolve(strict=False)
 
-        verify_protocol._canonical = _bare_canonical2
-        try:
-            g42b_crashed = False
+            verify_protocol._canonical = _bare_canonical2
             try:
-                verify_protocol.verify_project(g42b_root)
-            except ValueError:
-                g42b_crashed = True
-            check(
-                g42b_crashed,
-                "G42 (review citation) mutation control: the pre-fix bare `_canonical` "
-                "raises ValueError on this fixture too -- both entry points reach the same "
-                "shared primitive, confirming that fixing `_canonical` once covers both",
-            )
-        finally:
-            verify_protocol._canonical = _orig_canonical
+                g42b_crashed = False
+                try:
+                    verify_protocol.verify_project(g42b_root)
+                except ValueError:
+                    g42b_crashed = True
+                check(
+                    g42b_crashed,
+                    "G42 (review citation) mutation control: the pre-fix bare `_canonical` "
+                    "raises ValueError on this fixture too -- both entry points reach the same "
+                    "shared primitive, confirming that fixing `_canonical` once covers both",
+                )
+            finally:
+                verify_protocol._canonical = _orig_canonical
     finally:
         shutil.rmtree(g42b_root, ignore_errors=True)
 
@@ -10237,23 +10430,28 @@ def validate_protocol_gates() -> None:
                 )
             return verify_protocol.ReferenceRoot(canonical=canonical, available=True, unavailable_reason=None, **common)
 
-        _orig_load_one_root = verify_protocol._load_one_root
-        verify_protocol._load_one_root = _bare_load_one_root
-        try:
-            g51a_control_crashed = False
+        # Gated on the shared `_nul_resolve_behavior` probe (computed once,
+        # above G42) -- see `_nul_mutation_control_gate`'s docstring. The
+        # three checks ABOVE (exit code / non-empty stdout / reported
+        # violation kind) are NOT inside this gate and run unconditionally.
+        if _nul_mutation_control_gate("G51a", _nul_resolve_behavior):
+            _orig_load_one_root = verify_protocol._load_one_root
+            verify_protocol._load_one_root = _bare_load_one_root
             try:
-                verify_protocol.load_reference_roots(project)
-            except ValueError:
-                g51a_control_crashed = True
-            check(
-                g51a_control_crashed,
-                "G51a mutation control: the pre-fix except tuple (OSError, RuntimeError) -- "
-                "reconstructed locally as an isolated stand-in, the real fixed function is "
-                "never modified -- really does raise ValueError uncaught on this exact "
-                "fixture, confirming this is a genuine regression test, not a vacuous one",
-            )
-        finally:
-            verify_protocol._load_one_root = _orig_load_one_root
+                g51a_control_crashed = False
+                try:
+                    verify_protocol.load_reference_roots(project)
+                except ValueError:
+                    g51a_control_crashed = True
+                check(
+                    g51a_control_crashed,
+                    "G51a mutation control: the pre-fix except tuple (OSError, RuntimeError) -- "
+                    "reconstructed locally as an isolated stand-in, the real fixed function is "
+                    "never modified -- really does raise ValueError uncaught on this exact "
+                    "fixture, confirming this is a genuine regression test, not a vacuous one",
+                )
+            finally:
+                verify_protocol._load_one_root = _orig_load_one_root
     finally:
         shutil.rmtree(g51a_root, ignore_errors=True)
 
@@ -10384,19 +10582,21 @@ def validate_protocol_gates() -> None:
         "longer matches the 'OSError/RuntimeError signature present but ValueError missing' "
         "shape",
     )
-    try:
-        (Path(tempfile.gettempdir()) / "g51d-probe\x00nul").resolve()
-        g51d_control_raised_valueerror = False
-    except ValueError:
-        g51d_control_raised_valueerror = True
-    except OSError:
-        g51d_control_raised_valueerror = False
-    check(
-        g51d_control_raised_valueerror,
-        "G51d mutation control: resolving a NUL-embedded Path really does raise ValueError, "
-        "not OSError -- confirming the pre-fix bare `except OSError:` (no ValueError) would "
-        "not have caught it, had this site ever become independently reachable",
-    )
+    # Gated on the shared `_nul_resolve_behavior` probe (computed once,
+    # above G42; reused here rather than re-probing independently) -- see
+    # `_nul_mutation_control_gate`'s docstring. G51d has no positive
+    # "exit code / stdout" assertions of its own to keep unconditional
+    # (unlike G42/G51a): the two `check()`s above (except-clause source
+    # text, G53 structural detector) already run unconditionally, above
+    # this gate.
+    if _nul_mutation_control_gate("G51d", _nul_resolve_behavior):
+        check(
+            _nul_resolve_behavior == "valueerror",
+            "G51d mutation control: the shared _nul_path_resolution_behavior probe confirms "
+            "resolving a NUL-embedded Path on this platform raises ValueError, not OSError -- "
+            "confirming the pre-fix bare `except OSError:` (no ValueError) would not have "
+            "caught it, had this site ever become independently reachable",
+        )
 
     # -------------------------------------------------------------------
     # G52: structural (AST-based, discovery) sweep for the D2 bool/float
@@ -10575,6 +10775,105 @@ def validate_protocol_gates() -> None:
         "module comment above for why a blanket 'every .resolve( needs this' rule was "
         "rejected",
     )
+
+    # -------------------------------------------------------------------
+    # G54: teeth for the windows-latest CI fix to the G42 (x2) / G51a /
+    # G51d mutation controls above. Those four all failed on windows-latest
+    # (and only there) because they hardcoded the assumption "resolving a
+    # NUL-embedded path raises ValueError" -- true on macos-latest/
+    # ubuntu-latest, not reproducible on windows-latest. The fix gates each
+    # of them behind a live probe (`_nul_path_resolution_behavior`,
+    # `_nul_mutation_control_gate`) instead of `sys.platform`. This section
+    # is the teeth for THAT fix, mirroring G29b/G30a's own pattern for the
+    # two earlier windows-latest fixes (`_case_fixture_class`,
+    # `_classify_dotdot_symlink_resolution`): the pure classifier is driven
+    # from fabricated inputs so all three branches are exercised on every
+    # platform, including this one, and a structural check confirms the
+    # fix's own positive assertions were never moved inside the new gate.
+    # -------------------------------------------------------------------
+    print("  G54: teeth for the _nul_path_resolution_behavior / _nul_mutation_control_gate windows-latest fix")
+
+    print("    G54a: _classify_nul_resolve_outcome's own branch selection, tested via fabricated exceptions")
+    check(
+        _classify_nul_resolve_outcome(None) == "no-exception",
+        "G54a: _classify_nul_resolve_outcome(None) classifies as 'no-exception' -- resolve() "
+        "returned normally, no exception raised at all",
+    )
+    check(
+        _classify_nul_resolve_outcome(ValueError("embedded null byte")) == "valueerror",
+        "G54a: _classify_nul_resolve_outcome(ValueError(...)) classifies as 'valueerror' "
+        "(matches macos-latest/ubuntu-latest) -- the G42/G51a/G51d mutation controls' premise "
+        "holds and they should run for real",
+    )
+    check(
+        _classify_nul_resolve_outcome(OSError("boom")) == "other-exception:OSError",
+        "G54a: _classify_nul_resolve_outcome(OSError(...)) classifies as "
+        "'other-exception:OSError' -- some exception WAS raised, but not the one the mutation "
+        "controls' premise needs; the class name is folded into the classification for "
+        "diagnostics rather than dropped",
+    )
+
+    print("    G54b: this platform's real, live probe result is one of the three recognized shapes")
+    check(
+        _nul_resolve_behavior == "valueerror"
+        or _nul_resolve_behavior == "no-exception"
+        or _nul_resolve_behavior.startswith("other-exception:"),
+        f"G54b: the shared _nul_resolve_behavior computed above (got {_nul_resolve_behavior!r}) "
+        "is one of the three classifications _classify_nul_resolve_outcome can produce -- "
+        "re-asserted here, next to its teeth, not just once at the point it was computed",
+    )
+    check(
+        _nul_path_resolution_behavior(REPO_ROOT / ".tmp") == _nul_resolve_behavior,
+        "G54b: calling _nul_path_resolution_behavior again produces the SAME classification -- "
+        "this platform's NUL-byte resolution behavior is deterministic, not merely lucky the "
+        "first time",
+    )
+
+    print(
+        "    G54c: the G42 (x2) / G51a fixes' own positive assertions (exit code, non-empty "
+        "stdout, reported violation kind) are structurally outside any _nul_mutation_control_gate "
+        "conditional -- they run unconditionally, on every platform, regardless of this round's "
+        "windows-latest fix"
+    )
+    _g54_src = inspect.getsource(validate_protocol_gates)
+    _g54_tree = ast.parse(_g54_src)
+    _g54_gated_lines = _g54_gated_line_ranges(_g54_tree)
+    for _g54_gate_label, _g54_markers in [
+        (
+            "G42 (eval-ledger evidence)",
+            [
+                "G42 (eval-ledger evidence): process exits 1",
+                "G42 (eval-ledger evidence): stdout is non-empty",
+                "G42 (eval-ledger evidence): the NUL-byte evidence path fails containment",
+            ],
+        ),
+        (
+            "G42 (review citation)",
+            [
+                "G42 (review citation): process exits 1",
+                "G42 (review citation): stdout is non-empty",
+                "G42 (review citation): the NUL-byte citation span fails containment",
+            ],
+        ),
+        (
+            "G51a",
+            [
+                "G51a: process exits 1",
+                "G51a: stdout is non-empty",
+                "G51a: the NUL-byte local-binding path fails resolution",
+            ],
+        ),
+    ]:
+        for _g54_marker in _g54_markers:
+            _g54_line = _g54_check_call_line(_g54_tree, _g54_src, _g54_marker)
+            check(
+                _g54_line is not None and _g54_line not in _g54_gated_lines,
+                f"G54c: {_g54_gate_label}'s positive assertion {_g54_marker!r} sits outside "
+                "any `_nul_mutation_control_gate` conditional (found at "
+                f"{'no such check() call' if _g54_line is None else f'line {_g54_line}'}) -- it "
+                "runs unconditionally, never skipped even when the mutation-control premise "
+                "does not hold on this platform",
+            )
 
 
 def validate_round_cost_smoke() -> None:
