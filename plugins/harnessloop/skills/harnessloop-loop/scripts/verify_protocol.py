@@ -520,6 +520,19 @@ import unicodedata
 import uuid
 from pathlib import Path
 
+# Same-directory import (see check_setup.py's own module docstring, "Same-
+# directory import mechanism"): both scripts live in this same
+# harnessloop-loop/scripts/ directory, so this resolves whether this file
+# is executed directly (Python puts its own directory at sys.path[0]) or
+# imported by scripts/validate.py (which inserts LOOP_SCRIPTS into
+# sys.path before importing either module). Added for TH-0017
+# (evolution-issues/0017-environment-todo-vs-pass-semantics-unclear.md):
+# `check_environment_pass_with_open_todos` below reuses check_setup.py's
+# own `environment.md` field-location logic (`resolve_field_value`,
+# `TODO_LITERAL`) rather than re-deriving a second, independently-drifting
+# parser for the same file in this module.
+import check_setup
+
 CODE_SPAN = re.compile(r"`([^`]+)`")
 
 # A CommonMark fenced-code-block delimiter line: 0-3 leading spaces (4+ is
@@ -6223,6 +6236,292 @@ def collect_zero_inspected_round_notes(project: Path) -> list[str]:
     return notes
 
 
+# ---------------------------------------------------------------------------
+# TH-0017 (evolution-issues/0017-environment-todo-vs-pass-semantics-
+# unclear.md) and TH-0018 (evolution-issues/0018-current-md-accepted-round-
+# annotation-contradiction.md): two project-level (not per-round) checks
+# over `.harnessloop/state/environment.md` and `.harnessloop/state/
+# current.md` respectively. Both files are today-layer state that this
+# project's own protocol expects to be kept continuously current -- never a
+# closed round's frozen artifact -- so both checks read today's disk
+# directly; see each function's own docstring for why this is not an E1/
+# TH-0027 concern.
+# ---------------------------------------------------------------------------
+
+
+def _classify_environment_pass_fail(raw: str) -> str:
+    """Classify `environment.md`'s `Pass/fail:` raw value against TH-0017's
+    three-value vocabulary (`pass | pass-with-open-items | fail`), or
+    `"other"` for a value starting with none of the three.
+
+    `.strip().lower()` only -- no punctuation stripped, same discipline as
+    `_normalize_feedback` -- but this is a `startswith` classification, not
+    an exact-match normalization (`_normalize_bare_enum`'s style): every
+    real `Pass/fail:` value this project has ever written carries trailing
+    free prose after the enum word itself (e.g. this repo's own pre-fix
+    `pass（残余风险：...）`, or the fixed `pass-with-open-items（5 处未
+    决...）`), so an exact-match test would misclassify every real value as
+    unrecognized. `pass-with-open-items` is tested before bare `pass`
+    since it is a superstring of it.
+    """
+    normalized = raw.strip().lower()
+    if normalized.startswith("pass-with-open-items"):
+        return "pass-with-open-items"
+    if normalized.startswith("fail"):
+        return "fail"
+    if normalized.startswith("pass"):
+        return "pass"
+    return "other"
+
+
+def check_environment_pass_with_open_todos(project: Path) -> list[dict]:
+    """TH-0017 ruling (a)+ (evolution-issues/0017-environment-todo-vs-pass-
+    semantics-unclear.md): a literal `TODO (owner: user)` placeholder
+    anywhere in `.harnessloop/state/environment.md` is the setup wizard's
+    own legitimate owner-occupant marker for a step the user chose to skip
+    -- it does not, by itself, mean the file is incomplete, and per this
+    ruling it does not block a `Pass/fail: pass` verdict (this same
+    reasoning is now stated in `check_setup.py`'s module docstring and
+    `environment-self-check-template.md`; `field_todo_count` stays exactly
+    what it always was, a display-only counter, never a `gate_blocking` or
+    `complete` input).
+
+    What the ruling does NOT allow is folding that fact into free prose
+    next to a bare `pass` while the `Pass/fail:` field itself stays silent
+    about it -- this repo's own pre-fix `state/environment.md:45` was
+    exactly that: `Pass/fail: pass（残余风险：subagent 模型无运行时探针验
+    证）`, five literal TODOs elsewhere in the same file, the open item
+    said only in a parenthetical, never in the field's own vocabulary.
+    TH-0017 widens that field to three values (`pass | pass-with-open-items
+    | fail`) and requires `pass-with-open-items`, plus an in-field count of
+    the open items, whenever any `TODO (owner: user)` marker remains
+    anywhere in the file.
+
+    Fires `environment-pass-with-open-todos` only when BOTH:
+      1. the file -- read via `_uncoded_lines`, so a fenced documentation
+         example quoting the literal marker as a "here is the shape"
+         illustration never counts as a live one -- contains the literal
+         marker (`check_setup.TODO_LITERAL`) at least once; AND
+      2. `Pass/fail:`'s value -- located via `check_setup.
+         resolve_field_value`, reusing check_setup.py's own heading/
+         container-scoped field-location logic (`MANIFEST`/`_resolve_leaf`)
+         rather than re-deriving a second, independently-drifting parser
+         for this exact field in this file -- classifies
+         (`_classify_environment_pass_fail`) as bare `pass`.
+
+    Silent (no violation, and no distinct "other" kind) when: the file is
+    missing/unreadable; the field was never written at all, or is blank
+    (`resolve_field_value` returns `None`/empty -- migration-safe, same
+    zero-migration discipline as every other optional field this module
+    reads); or the field's value does not recognizably start with `pass`,
+    `pass-with-open-items`, or `fail` at all. That last case is
+    deliberate, not an oversight: this is not "a TODO makes you fail" --
+    it only forces an already-bare-`pass` verdict to say the open item out
+    loud in the field itself; a value this narrow gate cannot even
+    classify is a different, undecided problem it does not adjudicate.
+    """
+    env_path = project / ".harnessloop" / "state" / "environment.md"
+    try:
+        env_text = env_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    has_todo = any(
+        check_setup.TODO_LITERAL in line for line in _uncoded_lines(env_text)
+    )
+    if not has_todo:
+        return []
+
+    pass_fail_raw = check_setup.resolve_field_value(
+        project, ".harnessloop/state/environment.md", "Result", None, "Pass/fail"
+    )
+    if not pass_fail_raw:
+        return []
+
+    if _classify_environment_pass_fail(pass_fail_raw) != "pass":
+        return []
+
+    return [
+        {
+            "round": str(project),
+            "kind": "environment-pass-with-open-todos",
+            "detail": (
+                f"{env_path} contains a literal `{check_setup.TODO_LITERAL}` "
+                f"marker but `Pass/fail:` reads {pass_fail_raw!r} -- bare "
+                "`pass`. TH-0017 ruling (a): the marker is the setup "
+                "wizard's own legitimate owner-occupant placeholder and "
+                "does not by itself make this file incomplete or blocked "
+                "(never `environment-*-fail`); but an open item must be "
+                "said in the `Pass/fail:` field itself -- "
+                "`pass-with-open-items`, plus a count -- not folded into "
+                "free prose beside a bare `pass`"
+            ),
+        }
+    ]
+
+
+LAST_ACCEPTED_ROUND_VALUE_RE = re.compile(r"^([^/\s]+)/([0-9]{4})(?![A-Za-z0-9])")
+
+
+def _active_goal_declares_slug(active_goal_raw: str, declared_goal_slug: str) -> bool:
+    """True if `active_goal_raw` (current.md's own `- Active goal:` raw
+    value) begins with `declared_goal_slug` (the goal segment `- Last
+    accepted round:` names, left of its own `/`) at a directory-name token
+    boundary -- immediately followed by end-of-string or a character that
+    cannot itself be part of the same goal-directory name (not ASCII
+    alnum, not `-`).
+
+    Pure string comparison, both operands already in hand from this same
+    file's two fields -- no disk access, and no assumption about the
+    goal-directory naming shape (`YYYYMMDD-NNN-<slug>` is this project's
+    documented convention per harnessloop-loop/SKILL.md, but this function
+    never hardcodes that shape; it only needs the two fields to agree on
+    where the goal name ends). The boundary check rejects a shorter,
+    accidental prefix match (e.g. `declared_goal_slug` missing its
+    trailing `-app` against a real value ending `...-agent-app`) rather
+    than silently accepting it, since the character right after a true
+    match can never itself be a valid directory-name character.
+    """
+    if not active_goal_raw.startswith(declared_goal_slug):
+        return False
+    rest = active_goal_raw[len(declared_goal_slug):]
+    return rest == "" or not (rest[0].isalnum() or rest[0] == "-")
+
+
+def check_current_last_accepted_round(project: Path) -> list[dict]:
+    """TH-0018 (evolution-issues/0018-current-md-accepted-round-annotation-
+    contradiction.md, main-session ruling): `.harnessloop/state/
+    current.md`'s `- Last accepted round:` is scoped to that SAME file's
+    own `- Active goal:` -- not "the whole project's last-ever accepted
+    round" -- because (per the ruling) that wider reading has no consumer,
+    and because leaving it un-scoped is exactly what let this project's own
+    `current.md:9` read "本 goal 尚无已接受轮次" for ten already-`Accepted:
+    yes` rounds after `Active goal` moved to a new goal and the annotation
+    was never revisited.
+
+    Enforces two structural constraints on the declared round, both read
+    via the shared `- <label>:` / `_uncoded_lines` convention every other
+    field parser in this module uses (`_parse_labeled_line`):
+
+      (a) the round `- Last accepted round:` names must be **under this
+          file's own declared `- Active goal:`** -- a pure string-boundary
+          comparison within this one file, no filesystem access
+          (`_active_goal_declares_slug`) -- otherwise
+          `current-last-accepted-round-out-of-goal`;
+      (b) that round's own `decision.md` must actually declare
+          `- Accepted: yes` -- otherwise
+          `current-last-accepted-round-not-accepted`. Once (a) holds, this
+          constraint is fail-closed the same way a declared
+          `- Predecessor:`'s existence constraint is
+          (`loop-predecessor-missing`): a missing goal/round directory, an
+          unreadable or absent `decision.md`, an absent `- Accepted:`
+          field, or any value other than exactly `yes` (case/whitespace
+          folded only, no trailing prose tolerated -- same strictness as
+          `_normalize_feedback`) all land here -- "declaring the round
+          means accepting the constraint bundled with it" applies here
+          exactly as it does there.
+
+    Both violations are reported against `current.md` itself (`"round":
+    str(project)`, this module's own convention for a project-level
+    violation, e.g. `loop-contract-profile-missing` /
+    `external-root-unavailable`) -- **never against the round named**,
+    even though constraint (b) reads that round's own `decision.md`. See
+    harnessloop-loop/SKILL.md's Mechanical Gate Boundary OUT column for why
+    this is a *different* layering than TH-0027's seven registered
+    today-layer<->round couplings: TH-0027's classes all blame the round
+    whose own directory a today-layer change retroactively reddens; this
+    check reads a round's `decision.md` but blames `current.md` -- a
+    today-layer file this project's own protocol expects to be
+    continuously maintained, not a closed round's frozen artifact -- so
+    editing a historical round's `Accepted:` field turns `current.md` red,
+    never the historical round itself.
+
+    Silent (no violation) when: `current.md` is missing/unreadable;
+    `- Active goal:` was never written or is blank (never guessed); or
+    `- Last accepted round:` was never written or is blank
+    (migration-safe -- this project's own `current.md` predates this
+    field's scoping rule). Also silent -- deliberately narrower than
+    fail-closed -- when `- Last accepted round:`'s value does not match
+    this file's own `<goal>/<NNNN>` shape (`LAST_ACCEPTED_ROUND_VALUE_RE`)
+    at all: an unparsable value is a different, undecided problem this
+    gate does not adjudicate, exactly like `check_environment_pass_with_
+    open_todos`'s "other" classification above -- only two kinds are
+    authorized by this ruling, and a third ("unparsable") is not one of
+    them.
+    """
+    current_path = project / ".harnessloop" / "state" / "current.md"
+    try:
+        current_text = current_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return []
+
+    active_goal_raw = _parse_labeled_line(current_text, "Active goal")
+    if not active_goal_raw:
+        return []
+
+    last_accepted_raw = _parse_labeled_line(current_text, "Last accepted round")
+    if not last_accepted_raw:
+        return []
+
+    m = LAST_ACCEPTED_ROUND_VALUE_RE.match(last_accepted_raw)
+    if m is None:
+        return []
+    declared_goal_slug, declared_round = m.group(1), m.group(2)
+
+    if not _active_goal_declares_slug(active_goal_raw, declared_goal_slug):
+        return [
+            {
+                "round": str(project),
+                "kind": "current-last-accepted-round-out-of-goal",
+                "detail": (
+                    f"{current_path}'s `- Last accepted round:` names "
+                    f"{declared_goal_slug}/{declared_round}, but its own "
+                    f"`- Active goal:` is {active_goal_raw!r} -- TH-0018: "
+                    "`Last accepted round`'s scope is this file's own "
+                    "`Active goal`, and it must switch when the active "
+                    "goal does"
+                ),
+            }
+        ]
+
+    decision_path = (
+        project
+        / ".harnessloop"
+        / "goals"
+        / declared_goal_slug
+        / "rounds"
+        / declared_round
+        / "decision.md"
+    )
+    try:
+        decision_text = decision_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        decision_text = None
+
+    accepted_raw = (
+        _parse_labeled_line(decision_text, "Accepted")
+        if decision_text is not None
+        else None
+    )
+    accepted_norm = accepted_raw.strip().lower() if accepted_raw is not None else None
+
+    if accepted_norm != "yes":
+        return [
+            {
+                "round": str(project),
+                "kind": "current-last-accepted-round-not-accepted",
+                "detail": (
+                    f"{current_path}'s `- Last accepted round:` names "
+                    f"{declared_goal_slug}/{declared_round}, but "
+                    f"{decision_path} does not declare `- Accepted: yes` "
+                    f"(read: {accepted_raw!r})"
+                ),
+            }
+        ]
+
+    return []
+
+
 def verify_project(project: Path) -> tuple[list[dict], dict]:
     goals_dir = project / ".harnessloop" / "goals"
     coverage = _empty_coverage()
@@ -6245,6 +6544,15 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         "loop_anomaly_skipped_unparsable"
     ]
 
+    # TH-0017 / TH-0018: two more project-level checks, same placement
+    # rationale as the anomaly gate immediately above -- both read
+    # `.harnessloop/state/*.md` files directly (never a per-round artifact)
+    # and each performs its own independent, try/except-guarded read, so
+    # computing them here, before the no-goals early return, is safe
+    # whether or not `goals_dir` exists at all.
+    environment_violations = check_environment_pass_with_open_todos(project)
+    current_state_violations = check_current_last_accepted_round(project)
+
     if not goals_dir.is_dir():
         # A project with no rounds yet still has a *declaration*, and the
         # declaration is a project-level fact -- reporting
@@ -6265,6 +6573,8 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         # (T-070 residual).
         root_violations.extend(_unavailable_root_violations(project, roots))
         root_violations.extend(anomaly_violations)
+        root_violations.extend(environment_violations)
+        root_violations.extend(current_state_violations)
         # TH-0019: external system declarations are project-level exactly
         # like reference roots immediately above -- a project with no
         # rounds yet still has a declaration, and it is a real fact
@@ -6279,6 +6589,8 @@ def verify_project(project: Path) -> tuple[list[dict], dict]:
         return root_violations, coverage
     violations: list[dict] = []
     violations.extend(anomaly_violations)
+    violations.extend(environment_violations)
+    violations.extend(current_state_violations)
 
     # G17 item 1 (external-citation-base-spec-20260727.md §3.1): the
     # container chain is checked top-down, level by level, *before* the

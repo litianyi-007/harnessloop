@@ -45,6 +45,25 @@ undefined and offered two options; the round 0003-02 handoff adopts option
 inside self-check.md's `Action` field) as two separate, never-merged
 counters. Neither counter participates in `gate_blocking` or `complete`.
 
+TH-0017 ruling (a) (evolution-issues/0017-environment-todo-vs-pass-
+semantics-unclear.md): the literal `TODO (owner: user)` marker is the
+setup wizard's own legitimate owner-occupant placeholder -- the record of
+a step the user was offered and chose to skip, not a claim that the step
+was left unfinished. It does not, by itself, mean `environment.md` (or any
+other file counted here) is incomplete, and it does not block that file's
+own `Pass/fail:` verdict from reading `pass`. `field_todo_count` (and
+`selfcheck_todo_count`) stay exactly what section 4.4 above already says:
+display-only counters, never a `gate_blocking` or `complete` input, and
+this ruling changes nothing about that. What TH-0017 does add, entirely
+outside this script, is a narrower requirement on `environment.md`'s own
+`Pass/fail:` field: when the file still carries any `TODO (owner: user)`
+marker, that field's value must say so itself (`pass-with-open-items`,
+per `environment-self-check-template.md`), not stay a bare `pass` with the
+open item folded into free prose elsewhere in the file. That requirement
+is enforced by `verify_protocol.py`'s `check_environment_pass_with_open_
+todos` (kind `environment-pass-with-open-todos`), not by this script --
+this module remains pure read/report, as section 4.6 above states.
+
 Exit codes (design-v2 section 4.5, unchanged by the above): 0 = complete
 (5/5 files fully filled); 1 = incomplete; 2 = usage/environment error
 (project path missing/not a directory, references/ missing, or a target
@@ -432,6 +451,42 @@ def _resolve_leaf(
         if m:
             return _clean_value(m.group(1))
     return None
+
+
+def resolve_field_value(
+    project: Path, rel: str, heading: Optional[str], container: Optional[str], label: str
+) -> Optional[str]:
+    """Public accessor for a single leaf field's cleaned raw value inside
+    manifest file `rel` (one of `FILES_ORDER`'s keys), for a caller outside
+    this module that needs the field's actual value rather than this
+    module's own completeness bookkeeping.
+
+    Reuses `_resolve_leaf` -- the exact same heading/container-scoped
+    location logic `_file_report`'s own completeness scan already applies
+    to this same field -- rather than a second, independently-drifting
+    regex for the same field written in a different script. Returns `None`
+    when `project / rel` does not exist, or the field was never written at
+    all (same semantics as `_resolve_leaf`'s own `None`); returns `""` when
+    the field's label line is present but has nothing after the colon.
+    Does not compare against the template's own default value the way
+    `_file_report`'s "blank" classification does -- callers that need to
+    tell "blank" apart from "still the raw template default" must do that
+    comparison themselves.
+
+    Added for TH-0017 (evolution-issues/0017-environment-todo-vs-pass-
+    semantics-unclear.md): `verify_protocol.py`'s
+    `check_environment_pass_with_open_todos` needs `state/environment.md`'s
+    `Pass/fail:` value verbatim, and this file already owns that field's
+    location logic (`MANIFEST`) -- re-deriving a second parser for the same
+    field in a different script risked the two silently drifting apart the
+    next time `environment-self-check-template.md`'s shape changes.
+    """
+    path = project / rel
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    other = _containers_by_heading(MANIFEST[rel]["fields"]).get(heading, []) if heading else []
+    return _resolve_leaf(text, heading, container, label, other)
 
 
 def _resolve_table(text: str, heading: str) -> Tuple[bool, bool]:

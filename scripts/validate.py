@@ -11073,6 +11073,281 @@ def validate_protocol_gates() -> None:
     finally:
         shutil.rmtree(g55_root, ignore_errors=True)
 
+    # -------------------------------------------------------------------
+    # G56: TH-0017 (evolution-issues/0017-environment-todo-vs-pass-
+    # semantics-unclear.md) -- `check_environment_pass_with_open_todos`,
+    # kind `environment-pass-with-open-todos`. Every teeth below is a
+    # paired mutation, same discipline as G55 above: a fixture asserted to
+    # land on one verdict under the real implementation, then a minimal,
+    # targeted change to that SAME fixture asserted to flip the verdict.
+    # -------------------------------------------------------------------
+    print("  G56: TH-0017 environment.md TODO-vs-Pass/fail hard rule (`environment-pass-with-open-todos`)")
+
+    def _g56_write_environment(project: Path, pass_fail_line: str, with_todo: bool) -> None:
+        (project / ".harnessloop" / "state").mkdir(parents=True, exist_ok=True)
+        todo_line = (
+            "Unavailable tools: TODO (owner: user)\n\n" if with_todo else "Unavailable tools: none\n\n"
+        )
+        (project / ".harnessloop" / "state" / "environment.md").write_text(
+            "# Environment Self-Check\n\n"
+            "## Detection\n\n"
+            + todo_line
+            + "## Result\n\n"
+            + pass_fail_line
+            + "\n",
+            encoding="utf-8",
+        )
+
+    print("    G56a: TODO present + bare `Pass/fail: pass` -> environment-pass-with-open-todos (red)")
+    g56_root = Path(tempfile.mkdtemp(prefix="hl-env-g56-"))
+    try:
+        project = g56_root / "project"
+        _g56_write_environment(project, "Pass/fail: pass", with_todo=True)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" in kinds,
+            f"G56a: TODO present + bare `pass` -> environment-pass-with-open-todos (got {sorted(kinds)})",
+        )
+
+        print(
+            "    G56a mutation control: changing ONLY Pass/fail to `pass-with-open-items` "
+            "(same TODO, same file) turns it green -- proves G56a is not a vacuous always-red"
+        )
+        _g56_write_environment(project, "Pass/fail: pass-with-open-items（1 处未决）", with_todo=True)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" not in kinds,
+            f"G56a mutation control: `pass-with-open-items` -> green (got {sorted(kinds)})",
+        )
+
+        print("    G56b: no TODO anywhere + bare `Pass/fail: pass` -> green (this is not a general TODO-lint)")
+        _g56_write_environment(project, "Pass/fail: pass", with_todo=False)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" not in kinds,
+            f"G56b: no TODO + bare `pass` -> green (got {sorted(kinds)})",
+        )
+
+        print("    G56c: TODO present + `Pass/fail: fail` -> green (not a TODO-makes-you-fail rule)")
+        _g56_write_environment(project, "Pass/fail: fail", with_todo=True)
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" not in kinds,
+            f"G56c: TODO present + `fail` -> green (got {sorted(kinds)})",
+        )
+
+        print("    G56d: TODO present but `Pass/fail:` field entirely absent -> silent (migration-safe)")
+        (project / ".harnessloop" / "state" / "environment.md").write_text(
+            "# Environment Self-Check\n\n## Detection\n\nUnavailable tools: TODO (owner: user)\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" not in kinds,
+            f"G56d: `Pass/fail:` field absent -> silent (got {sorted(kinds)})",
+        )
+
+        print(
+            "    G56e (fenced bypass): a fenced documentation example quoting the literal "
+            "TODO marker must never count as a live one"
+        )
+        (project / ".harnessloop" / "state" / "environment.md").write_text(
+            "# Environment Self-Check\n\n"
+            "## Detection\n\n"
+            "Example format (do not copy literally):\n\n"
+            "```\n"
+            "Unavailable tools: TODO (owner: user)\n"
+            "```\n\n"
+            "Unavailable tools: none\n\n"
+            "## Result\n\n"
+            "Pass/fail: pass\n",
+            encoding="utf-8",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "environment-pass-with-open-todos" not in kinds,
+            f"G56e: fenced TODO example only, no live one -> green (got {sorted(kinds)})",
+        )
+    finally:
+        shutil.rmtree(g56_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G57: TH-0018 (evolution-issues/0018-current-md-accepted-round-
+    # annotation-contradiction.md) -- `check_current_last_accepted_round`,
+    # kinds `current-last-accepted-round-out-of-goal` /
+    # `current-last-accepted-round-not-accepted`. Reuses `_loop_project` /
+    # `_loop_round` / `_loop_write_decision` from G32 above (same enclosing
+    # function, already in scope). Every teeth below is a paired mutation,
+    # same discipline as G55/G56 above.
+    # -------------------------------------------------------------------
+    print("  G57: TH-0018 current.md Last-accepted-round scope hard rule")
+
+    def _g57_write_current(project: Path, text: str) -> None:
+        (project / ".harnessloop" / "state").mkdir(parents=True, exist_ok=True)
+        (project / ".harnessloop" / "state" / "current.md").write_text(text, encoding="utf-8")
+
+    def _g57_kinds(violations: list[dict]) -> set[str]:
+        return {v["kind"] for v in violations if v["kind"].startswith("current-last-accepted-round-")}
+
+    print("    G57a: round under the declared Active goal, Accepted: yes -> green")
+    g57_root = Path(tempfile.mkdtemp(prefix="hl-current-g57a-"))
+    try:
+        project = _loop_project(g57_root)
+        _loop_round(project, "0001", goal="20260101-001-loop")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: yes\n", goal="20260101-001-loop")
+        _g57_write_current(
+            project,
+            "# Current State\n\n"
+            "- Active goal: 20260101-001-loop\n"
+            "- Last accepted round: 20260101-001-loop/0001\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            f"G57a: round under Active goal, Accepted: yes -> green (got {sorted(_g57_kinds(violations))})",
+        )
+
+        print(
+            "    G57a mutation control: changing ONLY `Active goal` to a different goal "
+            "(same Last accepted round, same decision.md) -> current-last-accepted-round-out-of-goal"
+        )
+        _g57_write_current(
+            project,
+            "# Current State\n\n"
+            "- Active goal: 20260101-002-other\n"
+            "- Last accepted round: 20260101-001-loop/0001\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "current-last-accepted-round-out-of-goal" in _g57_kinds(violations),
+            "G57a mutation control: Active goal points elsewhere -> "
+            f"current-last-accepted-round-out-of-goal (got {sorted(_g57_kinds(violations))})",
+        )
+
+        print(
+            "    G57f (fenced bypass): a fenced documentation example quoting a fake "
+            "`Last accepted round:` line must never outrank the real, unfenced declaration"
+        )
+        _g57_write_current(
+            project,
+            "# Current State\n\n"
+            "Example format (do not copy literally):\n\n"
+            "```\n"
+            "- Last accepted round: 20260101-999-fake/9999\n"
+            "```\n\n"
+            "- Active goal: 20260101-001-loop\n"
+            "- Last accepted round: 20260101-001-loop/0001\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            "G57f: fenced fake declaration ignored, real (matching) one judged -> green "
+            f"(got {sorted(_g57_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g57_root, ignore_errors=True)
+
+    print(
+        "    G57b: same goal, but the round's decision.md says Accepted: no -> "
+        "current-last-accepted-round-not-accepted"
+    )
+    g57_root = Path(tempfile.mkdtemp(prefix="hl-current-g57b-"))
+    try:
+        project = _loop_project(g57_root)
+        _loop_round(project, "0001", goal="20260101-001-loop")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: no\n", goal="20260101-001-loop")
+        _g57_write_current(
+            project,
+            "# Current State\n\n"
+            "- Active goal: 20260101-001-loop\n"
+            "- Last accepted round: 20260101-001-loop/0001\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            "current-last-accepted-round-not-accepted" in _g57_kinds(violations),
+            f"G57b: Accepted: no -> current-last-accepted-round-not-accepted (got {sorted(_g57_kinds(violations))})",
+        )
+
+        print(
+            "    G57b mutation control: flipping ONLY that SAME round's `Accepted:` to `yes` "
+            "(current.md byte-for-byte untouched) turns it green"
+        )
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: yes\n", goal="20260101-001-loop")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            f"G57b mutation control: Accepted: yes -> green (got {sorted(_g57_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g57_root, ignore_errors=True)
+
+    print(
+        "    G57c: `Last accepted round:` never written -> silent, even though the "
+        "(unreferenced) round says Accepted: no"
+    )
+    g57_root = Path(tempfile.mkdtemp(prefix="hl-current-g57c-"))
+    try:
+        project = _loop_project(g57_root)
+        _loop_round(project, "0001", goal="20260101-001-loop")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: no\n", goal="20260101-001-loop")
+        _g57_write_current(project, "# Current State\n\n- Active goal: 20260101-001-loop\n")
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            f"G57c: field absent -> silent, migration-safe (got {sorted(_g57_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g57_root, ignore_errors=True)
+
+    print(
+        "    G57d: `Active goal:` never written -> silent (never guessed), even though "
+        "Last accepted round names a non-accepted round"
+    )
+    g57_root = Path(tempfile.mkdtemp(prefix="hl-current-g57d-"))
+    try:
+        project = _loop_project(g57_root)
+        _loop_round(project, "0001", goal="20260101-001-loop")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: no\n", goal="20260101-001-loop")
+        _g57_write_current(
+            project, "# Current State\n\n- Last accepted round: 20260101-001-loop/0001\n"
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            f"G57d: Active goal absent -> silent (got {sorted(_g57_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g57_root, ignore_errors=True)
+
+    print(
+        "    G57e: `Last accepted round:` present but not the `<goal>/<NNNN>` shape -> "
+        "silent (undecided, not a third kind)"
+    )
+    g57_root = Path(tempfile.mkdtemp(prefix="hl-current-g57e-"))
+    try:
+        project = _loop_project(g57_root)
+        _loop_round(project, "0001", goal="20260101-001-loop")
+        _loop_write_decision(project, "0001", "# Decision\n\n- Accepted: yes\n", goal="20260101-001-loop")
+        _g57_write_current(
+            project,
+            "# Current State\n\n"
+            "- Active goal: 20260101-001-loop\n"
+            "- Last accepted round: unknown\n",
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not _g57_kinds(violations),
+            f"G57e: unparsable value -> silent (got {sorted(_g57_kinds(violations))})",
+        )
+    finally:
+        shutil.rmtree(g57_root, ignore_errors=True)
+
 
 def validate_round_cost_smoke() -> None:
     print("[8/9] Round cost settlement smoke test (round_cost.py)")
