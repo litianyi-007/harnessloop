@@ -1,25 +1,83 @@
 # Harnessloop
 
-![Harnessloop evidence cycle](docs/assets/harnessloop-hero-evidence-cycle.png)
+**A protocol that makes a long-running AI agent task auditable — and is honest about what it cannot enforce.**
 
-Harnessloop is a project-local protocol and plugin for long-running AI agent work. It keeps goals, evidence, handoffs, validation, session takeover, and self-audit in files so a task can continue across agents without losing context or accepting unsupported claims.
+[![validate](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml/badge.svg)](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml)
 
-Use it when the task is too important or too long to trust chat memory alone.
+> 🇯🇵 [日本語版 README](README.ja.md)
 
-## Why
+Long agent sessions drift. Context is compressed, evidence goes stale, a round claims success
+without anything backing it, and by the time you notice, the reasoning that produced the claim
+is gone.
 
-Long agent sessions fail in predictable ways:
+Harnessloop turns that work into **rounds**. Each round declares what it may change, what
+evidence it will produce, and what verdict it reached. A mechanical gate then refuses a small,
+specific set of **self-contradictions** — and tells you, in writing, everything it does *not* check.
 
-- Context gets compressed or lost.
-- Work continues without fresh evidence.
-- One session cannot safely hand off to another.
-- Runtime validation drifts from the goal.
-- External tools, accounts, and data sources are implicit.
-- Reviews become generic engineering opinions instead of evidence-backed gates.
+## What it actually does
 
-Harnessloop turns that work into an explicit loop:
+| | |
+|---|---|
+| **Scope-lock per round** | Each round declares the paths it may touch. Changes outside the declaration are reported. |
+| **Evidence contracts** | Claims cite artifacts. A cited path that does not resolve is reported. |
+| **Runtime acceptance evals** | Declare an external system, bind an eval to it, record the run in a per-round ledger. **A round whose due eval did not pass may not be marked `positive`.** |
+| **Refusal, not enforcement** | The gate has **66 violation kinds**. It blocks a round from *claiming* something its own files contradict. |
+| **Registered limits** | Every mechanism ships with what it cannot do, in the same document as what it can. |
 
-![Harnessloop five gates](docs/assets/harnessloop-overview-five-gates.svg)
+## The part most tools leave out
+
+Harnessloop's mechanical gate reads files an agent wrote. **It cannot verify motive, and it says so.**
+
+- It can check that a round's eval ledger and its verdict agree. **It cannot prove the eval ran** —
+  a hand-written `"outcome": "pass"` beside a fabricated artifact passes.
+- It records that a review happened and which file holds it. **It never reads the review's prose.**
+- Its own shipped documentation opens the boundary section with:
+  **"The mechanical gate's exit code decides less than it looks like it decides."**
+  And on the eval ledger: it **"does not prove the mechanical gate was ever actually run."**
+
+Every one of those sentences is in the shipped skill documentation, not just here. When a
+mechanism turned out to claim more than it delivered, the claim was retracted and the retraction
+recorded — see `.harnessloop/meta/evolution-issues/` in a project using it.
+
+## Quick start
+
+```bash
+# 1. Install (Claude Code)
+/plugin marketplace add litianyi-007/harnessloop
+/plugin install harnessloop@harnessloop
+
+# 2. In your project
+$harnessloop-init      # scaffold .harnessloop/
+$harnessloop-setup     # 5-step wizard; three files gate continuation until filled
+$harnessloop-goal propose "<one-line goal>"
+$harnessloop-loop      # run the loop
+```
+
+`$harnessloop-continue` is the resume path: it reads current state, runs the continuation gate,
+and permits only the next action the control contract allows.
+
+## Runtime evals in one screen
+
+```jsonc
+// .harnessloop/setup/external-systems.json   — no URLs, no secrets, parameter names only
+{"version": 1, "systems": [
+  {"id": "staging-api", "kind": "http", "description": "...", "params": ["STAGING_API_BASE"]}]}
+
+// <goal>/evals.json
+{"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "staging-api"}]}
+
+// <round>/evidence/runtime/acceptance-evals.json
+{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0007-a1", "outcome": "fail",
+              "frozen_due_set": ["RAE-0001"], "evidence": "evidence/runtime/rae-0001.log"}]}
+```
+
+With that ledger, a `decision.md` declaring `Feedback: positive` is **refused**. Flip `outcome`
+to `pass` and it is accepted. **Harnessloop does not run the eval** — your session, CI, or
+runner does. Harnessloop holds the ledger and the refusal.
+
+The declaration file has **no URL, host, or path field by construction** — only parameter *names*
+matching `^[A-Z][A-Z0-9_]{0,63}$`. A credential cannot be written into it, because there is
+nowhere to put one.
 
 ## When To Use
 
