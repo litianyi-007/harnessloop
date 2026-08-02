@@ -1016,8 +1016,13 @@ def validate_doc_consistency() -> None:
     dirs, files = skeleton_entries()
 
     # usage.md documents the initializer output as a bullet list, not a tree.
-    doc_paths = [
-        (REPO_ROOT / "README.md", True),
+    # Language variants are DISCOVERED, not enumerated: README.md / README.en.md /
+    # README.ja.md / any future README.<lang>.md all carry the same `.harnessloop/`
+    # skeleton block, and a hardcoded list would silently stop covering a new one.
+    # Same lesson as G28 (version manifests) and G35 (bare `\d`): 清单会过时，
+    # 发现式守卫不会.
+    readme_variants = sorted(REPO_ROOT.glob("README*.md"))
+    doc_paths = [(p, True) for p in readme_variants] + [
         (REPO_ROOT / "docs" / "usage.md", False),
         (REPO_ROOT / "docs" / "harnessloop-framework.md", True),
         (PLUGIN_ROOT / "skills" / "harnessloop-loop" / "SKILL.md", True),

@@ -4,7 +4,7 @@
 
 [![validate](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml/badge.svg)](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml)
 
-> 🇬🇧 [English README](README.md)
+> 🇨🇳 [中文](README.md) ・ 🇬🇧 [English](README.en.md)
 
 長時間のエージェントセッションはドリフトする。コンテキストは圧縮され、エビデンスは古くなり、
 ラウンドは裏付けのないまま成功を主張し、気づいたときには、その主張を生んだ推論はもう

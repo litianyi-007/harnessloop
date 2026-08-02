@@ -1,66 +1,65 @@
 # Harnessloop
 
-**让长时间运行的 AI agent 任务变得可审计的协议——并且如实说明它强制不了什么。**
+**A protocol that makes a long-running AI agent task auditable — and is honest about what it cannot enforce.**
 
 [![validate](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml/badge.svg)](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml)
 
-> 🇬🇧 [English](README.en.md) ・ 🇯🇵 [日本語](README.ja.md)
+> 🇨🇳 [中文](README.md) ・ 🇯🇵 [日本語](README.ja.md)
 
-长会话会漂移。上下文被压缩、证据变陈旧、某一轮在没有任何支撑的情况下宣布成功——
-等你察觉时,produce 那个结论的推理已经不在了。
+Long agent sessions drift. Context is compressed, evidence goes stale, a round claims success
+without anything backing it, and by the time you notice, the reasoning that produced the claim
+is gone.
 
-Harnessloop 把这类工作切成**轮次**。每一轮声明它可以改哪些路径、会产出什么证据、
-得到了什么结论。机械门随后拒绝一小批**明确的自相矛盾**——
-并且**用文字写清它不检查什么**。
+Harnessloop turns that work into **rounds**. Each round declares what it may change, what
+evidence it will produce, and what verdict it reached. A mechanical gate then refuses a small,
+specific set of **self-contradictions** — and tells you, in writing, everything it does *not* check.
 
-## 它实际做什么
+## What it actually does
 
 | | |
 |---|---|
-| **每轮一份 scope-lock** | 该轮声明可触碰的路径;声明之外的改动会被报出 |
-| **证据契约** | 结论要引用产物;引用不到的路径会被报出 |
-| **runtime 验收 eval** | 声明外部系统 → 绑定 eval → 结果记入轮内台账。**该轮到期的 eval 没通过,这一轮就不得判 `positive`** |
-| **拒绝,而非强制** | 门有 **66 个违规类型**。它拦的是「一轮声称的东西与它自己的文件相矛盾」 |
-| **登记在案的边界** | 每个机制都把「它做不到什么」写在与「它能做什么」同一份文档里 |
+| **Scope-lock per round** | Each round declares the paths it may touch. Changes outside the declaration are reported. |
+| **Evidence contracts** | Claims cite artifacts. A cited path that does not resolve is reported. |
+| **Runtime acceptance evals** | Declare an external system, bind an eval to it, record the run in a per-round ledger. **A round whose due eval did not pass may not be marked `positive`.** |
+| **Refusal, not enforcement** | The gate has **66 violation kinds**. It blocks a round from *claiming* something its own files contradict. |
+| **Registered limits** | Every mechanism ships with what it cannot do, in the same document as what it can. |
 
-## 多数工具略过的那部分
+## The part most tools leave out
 
-Harnessloop 的机械门读的是 agent 自己写下的文件。**它无法验证动机,而且它明说这一点。**
+Harnessloop's mechanical gate reads files an agent wrote. **It cannot verify motive, and it says so.**
 
-- 它能核对一轮的 eval 台账与结论是否一致。**但它证明不了 eval 真的跑过**——
-  手写一个 `"outcome": "pass"` 配一份伪造产物,同样通过。
-- 它记录评审发生过、产物在哪份文件里。**它从不读评审正文。**
-- 它自己发布的文档在边界一节开篇就写着:
+- It can check that a round's eval ledger and its verdict agree. **It cannot prove the eval ran** —
+  a hand-written `"outcome": "pass"` beside a fabricated artifact passes.
+- It records that a review happened and which file holds it. **It never reads the review's prose.**
+- Its own shipped documentation opens the boundary section with:
   **"The mechanical gate's exit code decides less than it looks like it decides."**
-  （机械门的退出码,决定的事情比它看起来少。）
-  关于 eval 台账则写着它 **"does not prove the mechanical gate was ever actually run."**
-  （不能证明机械门真的被跑过。）
+  And on the eval ledger: it **"does not prove the mechanical gate was ever actually run."**
 
-上面每一句都在**随插件分发的 skill 文档里**,不只是写在这份 README 上。
-当某个机制被发现声称超出了它的实现,那条声称会被撤回、撤回本身会被记录——
-在使用它的项目里看 `.harnessloop/meta/evolution-issues/`。
+Every one of those sentences is in the shipped skill documentation, not just here. When a
+mechanism turned out to claim more than it delivered, the claim was retracted and the retraction
+recorded — see `.harnessloop/meta/evolution-issues/` in a project using it.
 
-## 快速开始
+## Quick start
 
 ```bash
-# 1. 安装（Claude Code）
+# 1. Install (Claude Code)
 /plugin marketplace add litianyi-007/harnessloop
 /plugin install harnessloop@harnessloop
 
-# 2. 在你的项目里
-$harnessloop-init      # 生成 .harnessloop/ 骨架
-$harnessloop-setup     # 5 步向导；三个核心文件未填前会阻断继续
-$harnessloop-goal propose "<一句话目标>"
-$harnessloop-loop      # 跑循环
+# 2. In your project
+$harnessloop-init      # scaffold .harnessloop/
+$harnessloop-setup     # 5-step wizard; three files gate continuation until filled
+$harnessloop-goal propose "<one-line goal>"
+$harnessloop-loop      # run the loop
 ```
 
-`$harnessloop-continue` 是恢复入口:它读当前状态、跑继续门,
-只放行控制契约允许的下一个动作。
+`$harnessloop-continue` is the resume path: it reads current state, runs the continuation gate,
+and permits only the next action the control contract allows.
 
-## runtime eval 一屏看懂
+## Runtime evals in one screen
 
 ```jsonc
-// .harnessloop/setup/external-systems.json —— 没有 URL、没有凭证，只有参数名
+// .harnessloop/setup/external-systems.json   — no URLs, no secrets, parameter names only
 {"version": 1, "systems": [
   {"id": "staging-api", "kind": "http", "description": "...", "params": ["STAGING_API_BASE"]}]}
 
@@ -72,40 +71,13 @@ $harnessloop-loop      # 跑循环
               "frozen_due_set": ["RAE-0001"], "evidence": "evidence/runtime/rae-0001.log"}]}
 ```
 
-有了这份台账,一份写着 `Feedback: positive` 的 `decision.md` 会被**拒绝**;
-把 `outcome` 改成 `pass` 就通过。
+With that ledger, a `decision.md` declaring `Feedback: positive` is **refused**. Flip `outcome`
+to `pass` and it is accepted. **Harnessloop does not run the eval** — your session, CI, or
+runner does. Harnessloop holds the ledger and the refusal.
 
-**Harnessloop 不运行 eval**——跑它的是你的会话、CI 或 runner。
-Harnessloop 持有的是台账与拒绝权。
-
-声明文件**在构造上写不进凭证**:它没有任何 URL、主机、路径字段,
-只有匹配 `^[A-Z][A-Z0-9_]{0,63}$` 的参数**名**。凭证无处可放。
-
-## 初始化后的目录骨架
-
-```text
-.harnessloop/
-  setup/
-    data-sources.md
-    cost-context-policy.md
-  local/
-    .gitignore
-    channel-params.example.json
-  intake/
-    .gitignore
-  state/
-    current.md
-    environment.md
-    control-contract.md
-    evidence-index.md
-    self-check.md
-  meta/
-    self-audit.md
-    evolution-issues/
-  evals/
-    matrix.md
-  goals/
-```
+The declaration file has **no URL, host, or path field by construction** — only parameter *names*
+matching `^[A-Z][A-Z0-9_]{0,63}$`. A credential cannot be written into it, because there is
+nowhere to put one.
 
 ## When To Use
 
