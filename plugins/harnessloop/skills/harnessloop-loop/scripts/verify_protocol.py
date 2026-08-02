@@ -728,12 +728,50 @@ _VERSIONED_ROOT_ALLOWED_KEYS = frozenset(
 # that happen to share a `[0-9]{4}` shape) is never to fold two conceptually
 # distinct identifier spaces into one shared compiled pattern just because
 # today's patterns happen to match.
+#
+# Also reused, unchanged, by `check_round_eval_ledger`'s `frozen_system`
+# field below: a non-null `frozen_system` value must match this exact same
+# pattern. It is deliberately the *same* constant, not a third
+# independently-defined regex that happens to share the shape -- both
+# `frozen_system` and a declared system's own `id` are names drawn from the
+# same id namespace (a project's `.harnessloop/setup/external-systems.json`
+# ids), unlike the `ALIAS_RE`/`EXTERNAL_SYSTEM_ID_RE` split above, which
+# exists specifically because *those* two are different namespaces. `kind`
+# is not reused the same way for anything ledger-side: `frozen_system` names
+# which system produced a result, `kind` classifies the interface shape of a
+# declared system entry, and the two are never compared against each other.
 EXTERNAL_SYSTEM_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,31}$")
 
 # The closed enum a declared system's `kind` must land in. No normalization,
 # no near-miss tolerance -- exactly like `LEDGER_OUTCOMES` above, an enum
 # field is either the literal declared value or a violation, never guessed.
-EXTERNAL_SYSTEM_KINDS = frozenset({"http", "grpc", "database", "queue", "filesystem", "other"})
+#
+# `kind` is deliberately a single axis -- **which interface shape a caller
+# talks to this system through** -- and nothing else. It is never a second
+# axis for *role in a pipeline* (e.g. "ci"/"deploy"/"device"/"dataplatform"):
+# a project wiring up a real multi-stage pipeline (build a package, deploy
+# it, launch it on a target, assert against a results store) almost always
+# talks to every one of those roles over the same handful of interface
+# shapes this enum already lists -- a CI system, a data platform, and a
+# requirements-management tool all typically expose an HTTP API, so they
+# already belong under `http`, exactly like any other HTTP-speaking system;
+# there is no missing "ci" or "dataplatform" kind to add for them. `ssh`
+# (remote command execution over an SSH-shaped channel) and `process`
+# (spawning a local child process) are added here for the same reason the
+# original five were: they are two more real, distinct *interface* shapes a
+# system can be reached through, and before this addition both had nowhere
+# to land but the catch-all `other`. Adding a `kind` per pipeline *role*
+# instead would need a new member every time some project's pipeline grows
+# a new stage-with-a-name (`lint`, `canary`, `soak`, ...) -- an unbounded,
+# project-specific list this closed enum is not shaped to hold. A pipeline's
+# *stages* are modeled at the eval-ledger layer instead -- see
+# `check_round_eval_ledger`'s docstring and harnessloop-loop/SKILL.md's
+# "Multi-Stage External Pipelines" section: one eval per stage, each
+# optionally carrying its own `frozen_system` id, never a `stage` field
+# bolted onto `kind` or onto any one eval.
+EXTERNAL_SYSTEM_KINDS = frozenset(
+    {"http", "grpc", "database", "queue", "filesystem", "ssh", "process", "other"}
+)
 
 # A `params` entry is a **parameter name**, never a value, and structurally
 # cannot hold a URL, host, or filesystem path: `[A-Z0-9_]` admits no `/`,
@@ -3398,7 +3436,7 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
     only this round's own internal self-consistency.
 
     Schema: `{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0003-a1",
-    "outcome": "pass", "frozen_due_set": ["RAE-0001"],
+    "outcome": "pass", "frozen_due_set": ["RAE-0001"], "frozen_system": null,
     "evidence": "evidence/runtime/rae-0001-run.log"}]}`.
 
     All-or-nothing, single `eval-ledger-invalid` violation (same philosophy
@@ -3471,6 +3509,27 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
         vertical slice's spec calls for exactly two failure kinds here, not
         four).
 
+      **Why a remote system's result must be retrieved into `evidence/`,
+      never merely referenced where it lives:** when an eval's real work
+      happens on some external system (a CI pipeline, a device lab, a data
+      platform -- anything this project's `setup/data-sources.md` "Runtime
+      Validation Systems" table and `.harnessloop/setup/external-systems.json`
+      may declare, per harnessloop-loop/SKILL.md's "Multi-Stage External
+      Pipelines" section), that system's own record of the result is not
+      this round's to keep: it can be overwritten by the next run, cleaned
+      up on a retention schedule, or rerun entirely outside this project's
+      control. An `evidence` value that pointed at the remote record itself
+      (a job URL, a database row id) rather than a retrieved copy would make
+      this round's own verdict drift with whatever that remote system says
+      *today*, at whatever future moment someone re-reads it -- exactly the
+      `(today layer, round N)` join this project has already measured and
+      withdrawn at least once (TH-0027; see the OUT-column entry below).
+      Requiring the retrieved artifact to live under this round's own
+      `evidence/` is what keeps the round replayable: retrieval is not
+      overhead this check imposes for its own sake, it is the precondition
+      for a round's conclusion to still mean the same thing after the
+      remote system has moved on.
+
       **Why confined to this round's own `evidence/`, and not anywhere
       project-contained like `Review:`:** this check reads the filesystem
       for existence, and TH-0027 already catalogs (at least) seven distinct
@@ -3510,6 +3569,55 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
       `frozen_due_set` was itself well-shaped; an entry already flagged
       `-missing` or `-invalid-type`/`-invalid-element` does not also
       contribute a second, redundant inconsistency violation.
+    - `frozen_system` -- which declared external system (if any) produced
+      this entry's result, frozen at the moment this round wrote the ledger.
+      Exists to let a multi-stage external pipeline record a *different*
+      system per stage (see harnessloop-loop/SKILL.md's "Multi-Stage
+      External Pipelines" section: one eval per pipeline stage, each
+      optionally naming the system that stage actually ran on) without
+      forcing every entry in one ledger onto a single system, the way
+      `frozen_due_set` deliberately does for the due set.
+      - The **key itself is always required**, the same "key present, value
+        may be null" shape `evidence` above already uses --
+        `eval-ledger-frozen-system-missing` when the key is absent from an
+        entry at all. A round with nothing to name yet may freely write
+        `"frozen_system": null`.
+      - When the value is not `null`, it must be a string matching
+        `EXTERNAL_SYSTEM_ID_RE` -- the exact same compiled pattern
+        `.harnessloop/setup/external-systems.json`'s own `id` field uses,
+        reused rather than a second, independently-written regex --
+        (`eval-ledger-frozen-system-invalid` otherwise, covering both a
+        non-string JSON value and a string that does not match the id
+        shape).
+      - **Self-consistency, scoped by `eval_id`, not ledger-wide:** among
+        entries whose `eval_id` is itself a string (the same loose
+        `isinstance` test `verify_round`'s positive-without-pass rule
+        already applies to `eval_id`, reused rather than a third
+        convention) and whose `frozen_system` was itself well-shaped per
+        the two rules above, every entry sharing the same `eval_id` value
+        must agree on `frozen_system` -- `eval-ledger-frozen-system-inconsistent`
+        otherwise. This is deliberately narrower than `frozen_due_set`'s
+        ledger-wide consistency check: `frozen_due_set` is one canonical
+        set the whole ledger must agree on, but a real multi-stage pipeline
+        legitimately runs different stages (different `eval_id`s) against
+        different systems in the very same ledger -- RAE-0001 (package) on
+        one CI system, RAE-0002 (deploy) on a device lab, RAE-0003 (launch)
+        on the same device lab, RAE-0004 (assert) on a data platform, all in
+        one round's ledger. Only *retries of the same eval_id* disagreeing
+        with each other about which system produced them is treated as
+        self-contradiction; different eval_ids naming different systems is
+        the ordinary, expected shape and must never be flagged.
+      - **What this deliberately never does** (the same boundary the
+        `evidence` bullet above draws, restated for this field): compare
+        `frozen_system` against `.harnessloop/setup/external-systems.json`'s
+        declared ids. That would be exactly the `(today layer, round N)`
+        cross-time-layer join this project measured and withdrew from its
+        v5 runtime-evals contract (TH-0027 catalogs at least seven such
+        couplings already) -- a project could rename or delete a declared
+        system after this round closed, and re-running this gate would then
+        retroactively flip an already-closed round. `frozen_system` is a
+        frozen record plus an in-ledger self-consistency check, nothing
+        more: it never reaches outside this one file.
 
     A file that does not exist produces zero violations from this
     function -- deliberately: "账本文件缺席 ⇒ 本规则零违规" is one of the
@@ -3604,6 +3712,7 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
 
     violations: list[dict] = []
     clean_due_sets: list[frozenset] = []
+    frozen_system_by_eval_id: dict[str, list[tuple[int, str | None]]] = {}
     for i, entry in enumerate(entries_list):
         attempt_id = entry.get("attempt_id")
         if not isinstance(attempt_id, str) or not ATTEMPT_ID_RE.match(attempt_id):
@@ -3718,6 +3827,49 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
                         }
                     )
 
+        # `frozen_system` -- see this function's docstring for the exact
+        # rationale and the non-negotiable boundary against ever joining
+        # this against `.harnessloop/setup/external-systems.json`. The key
+        # itself is always required, the same "key present, value may be
+        # null" shape `evidence` above uses.
+        if "frozen_system" not in entry:
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-system-missing",
+                    "detail": (
+                        f"{path}: entries[{i}] is missing required field 'frozen_system' "
+                        "(always required -- the key itself may not be absent, though "
+                        "its value may be null)"
+                    ),
+                }
+            )
+        else:
+            frozen_system = entry["frozen_system"]
+            if frozen_system is not None and (
+                not isinstance(frozen_system, str) or not EXTERNAL_SYSTEM_ID_RE.match(frozen_system)
+            ):
+                violations.append(
+                    {
+                        "round": str(round_dir),
+                        "kind": "eval-ledger-frozen-system-invalid",
+                        "detail": (
+                            f"{path}: entries[{i}].frozen_system {frozen_system!r} must be "
+                            f"null or a string matching {EXTERNAL_SYSTEM_ID_RE.pattern}"
+                        ),
+                    }
+                )
+            else:
+                # Self-consistency is scoped to entries sharing the same
+                # `eval_id` (see docstring: a multi-stage pipeline legitimately
+                # runs different eval_ids against different systems in the
+                # same ledger) -- only entries whose `eval_id` is itself a
+                # string participate, the same loose `isinstance` test
+                # `verify_round`'s positive-without-pass rule already applies.
+                eval_id = entry.get("eval_id")
+                if isinstance(eval_id, str):
+                    frozen_system_by_eval_id.setdefault(eval_id, []).append((i, frozen_system))
+
         if "frozen_due_set" not in entry:
             violations.append(
                 {
@@ -3767,6 +3919,30 @@ def check_round_eval_ledger(round_dir: Path) -> tuple[list[dict], dict]:
         # determine". `entries_checked` is already 0 (see above), so this
         # is honestly reported as "0 entries, 0 due" rather than "unknown".
         state["due_set"] = frozenset()
+
+    # `frozen_system` cross-entry self-consistency, scoped per `eval_id`
+    # (never ledger-wide the way `frozen_due_set` is above -- see this
+    # function's docstring): entries sharing an `eval_id` whose own
+    # `frozen_system` was well-shaped must all agree on that value,
+    # including agreeing that it is `null`. Different `eval_id`s naming
+    # different systems is the ordinary, expected multi-stage-pipeline
+    # shape and is never flagged here.
+    for eval_id, pairs in frozen_system_by_eval_id.items():
+        distinct_systems = {fs for _, fs in pairs}
+        if len(distinct_systems) > 1:
+            named = sorted(s for s in distinct_systems if s is not None)
+            if None in distinct_systems:
+                named.append("null")
+            violations.append(
+                {
+                    "round": str(round_dir),
+                    "kind": "eval-ledger-frozen-system-inconsistent",
+                    "detail": (
+                        f"{path}: entries sharing eval_id {eval_id!r} disagree on "
+                        f"frozen_system ({named})"
+                    ),
+                }
+            )
 
     return violations, state
 

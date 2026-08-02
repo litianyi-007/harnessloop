@@ -8714,6 +8714,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "evidence/rae-0001-run.log",
                     }
                 ]
@@ -8737,7 +8738,7 @@ def validate_protocol_gates() -> None:
         print("  G38b: 'evidence' key entirely absent from the entry -> eval-ledger-evidence-missing")
         _rae_write_ledger(
             project,
-            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "skipped", "frozen_due_set": ["RAE-0001"]}]},
+            {"entries": [{"eval_id": "RAE-0001", "attempt_id": "0001-a1", "outcome": "skipped", "frozen_due_set": ["RAE-0001"], "frozen_system": None}]},
         )
         violations, _coverage = verify_protocol.verify_project(project)
         kinds = {v["kind"] for v in violations}
@@ -8755,6 +8756,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "skipped",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": None,
                     }
                 ]
@@ -8783,6 +8785,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": None,
                     }
                 ]
@@ -8804,6 +8807,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "skipped",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": None,
                     }
                 ]
@@ -8829,6 +8833,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "../../../../../other.md",
                     }
                 ]
@@ -8857,6 +8862,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "evidence/moved-in.md",
                     }
                 ]
@@ -8879,6 +8885,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "evidence/does-not-exist.log",
                     }
                 ]
@@ -8909,6 +8916,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "evidence/adir",
                     }
                 ]
@@ -8940,6 +8948,7 @@ def validate_protocol_gates() -> None:
                                 "attempt_id": "0001-a1",
                                 "outcome": "pass",
                                 "frozen_due_set": ["RAE-0001"],
+                                "frozen_system": None,
                                 "evidence": "evidence/link.log",
                             }
                         ]
@@ -8995,6 +9004,7 @@ def validate_protocol_gates() -> None:
                                     "attempt_id": "0001-a1",
                                     "outcome": "pass",
                                     "frozen_due_set": ["RAE-0001"],
+                                    "frozen_system": None,
                                     "evidence": "evidence/escape.log",
                                 }
                             ]
@@ -9033,6 +9043,7 @@ def validate_protocol_gates() -> None:
                             "attempt_id": "0001-a1",
                             "outcome": "pass",
                             "frozen_due_set": ["RAE-0001"],
+                            "frozen_system": None,
                             "evidence": bad_value,
                         }
                     ]
@@ -9064,6 +9075,7 @@ def validate_protocol_gates() -> None:
                         "attempt_id": "0001-a1",
                         "outcome": "pass",
                         "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
                         "evidence": "evidence/fake.log",
                     }
                 ]
@@ -11352,6 +11364,402 @@ def validate_protocol_gates() -> None:
         )
     finally:
         shutil.rmtree(g57_root, ignore_errors=True)
+
+    # -------------------------------------------------------------------
+    # G58: `frozen_system` (the eval-ledger field naming which declared
+    # external system, if any, produced an entry's result) plus the two
+    # interface-shape `kind`s this same task added to `EXTERNAL_SYSTEM_KINDS`
+    # (`ssh`, `process`) and the design decision that `kind` gained NO
+    # pipeline-role axis alongside them. Reuses `_rae_project`/
+    # `_rae_round_dir`/`_rae_write_ledger`/`_rae_write_decision`/
+    # `_write_ext_systems`/`_g38_write_evidence_file` from the G25/G37/G38
+    # sections above; every letter below is a paired mutation, same
+    # discipline as every other lettered group in this file.
+    # -------------------------------------------------------------------
+
+    def _g58_write_neutral_decision(project: Path) -> None:
+        # `Feedback: neutral` (never `positive`) plus every other
+        # gated field declared, so no acceptance-eval-* or B2a violation
+        # is ever in play alongside the frozen_system-specific one each
+        # G58a-f assertion targets -- same trick G38 uses for the same
+        # reason.
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: neutral\n"
+            "- Review: none — G58 exercises the eval-ledger frozen_system field, not "
+            "review declaration\n- Reviewer: fixture\n- Review verdict: not-applicable\n"
+            "- Acceptance evals: ran\n",
+        )
+
+    print("  G58a: 'frozen_system' key entirely absent from the entry -> eval-ledger-frozen-system-missing")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58a-"))
+    try:
+        project = _rae_project(g58_root)
+        _g58_write_neutral_decision(project)
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"eval-ledger-frozen-system-missing"},
+            f"G58a: no 'frozen_system' key at all -> eval-ledger-frozen-system-missing, and "
+            f"nothing else (got {kinds})",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": None,
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G58a mutation control: adding ONLY `\"frozen_system\": null` (the key's mere "
+            "presence, no other change) clears the violation -- proves the rule is 'key "
+            f"present, value may be null', the same shape `evidence` already uses (got {violations})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58b: 'frozen_system' a non-string, or a string not matching EXTERNAL_SYSTEM_ID_RE -> eval-ledger-frozen-system-invalid")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58b-"))
+    try:
+        project = _rae_project(g58_root)
+        _g58_write_neutral_decision(project)
+        for bad_value, label in ((42, "a JSON number"), ("Not_Valid!", "a string outside EXTERNAL_SYSTEM_ID_RE")):
+            _rae_write_ledger(
+                project,
+                {
+                    "entries": [
+                        {
+                            "eval_id": "RAE-0001",
+                            "attempt_id": "0001-a1",
+                            "outcome": "skipped",
+                            "frozen_due_set": ["RAE-0001"],
+                            "frozen_system": bad_value,
+                            "evidence": None,
+                        }
+                    ]
+                },
+            )
+            violations, _coverage = verify_protocol.verify_project(project)
+            kinds = {v["kind"] for v in violations}
+            check(
+                kinds == {"eval-ledger-frozen-system-invalid"},
+                f"G58b: frozen_system == {bad_value!r} ({label}) -> "
+                f"eval-ledger-frozen-system-invalid, and nothing else (got {kinds})",
+            )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": "staging-api",
+                        "evidence": None,
+                    }
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G58b mutation control: changing frozen_system to a legal id ('staging-api', "
+            f"matching EXTERNAL_SYSTEM_ID_RE -- note this id need not be declared anywhere; "
+            f"`frozen_system` never joins against external-systems.json) clears the violation "
+            f"(got {violations})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58c: two entries sharing the SAME eval_id disagreeing on frozen_system -> eval-ledger-frozen-system-inconsistent")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58c-"))
+    try:
+        project = _rae_project(g58_root)
+        _g58_write_neutral_decision(project)
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": "sys-a",
+                        "evidence": None,
+                    },
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a2",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": "sys-b",
+                        "evidence": None,
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-system-inconsistent" in kinds,
+            f"G58c: two entries sharing eval_id RAE-0001 (retries '0001-a1'/'0001-a2') disagree "
+            f"on frozen_system ('sys-a' vs 'sys-b') -> eval-ledger-frozen-system-inconsistent "
+            f"(got {kinds})",
+        )
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": "sys-a",
+                        "evidence": None,
+                    },
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a2",
+                        "outcome": "skipped",
+                        "frozen_due_set": ["RAE-0001"],
+                        "frozen_system": "sys-a",
+                        "evidence": None,
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "eval-ledger-frozen-system-inconsistent" not in kinds,
+            "G58c mutation control: aligning both entries' frozen_system to the SAME value "
+            f"('sys-a', same two attempt_ids, same eval_id) clears the violation (got {kinds})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58d: two DIFFERENT eval_ids, each naming a different frozen_system, in the SAME ledger -> green (the ordinary multi-stage-pipeline shape; must never be misfired as inconsistent)")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58d-"))
+    try:
+        project = _rae_project(g58_root)
+        _g58_write_neutral_decision(project)
+        shared_due_set = ["RAE-0001", "RAE-0002"]
+        _rae_write_ledger(
+            project,
+            {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": shared_due_set,
+                        "frozen_system": "sys-a",
+                        "evidence": None,
+                    },
+                    {
+                        "eval_id": "RAE-0002",
+                        "attempt_id": "0001-a1",
+                        "outcome": "skipped",
+                        "frozen_due_set": shared_due_set,
+                        "frozen_system": "sys-b",
+                        "evidence": None,
+                    },
+                ]
+            },
+        )
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G58d: RAE-0001 names frozen_system 'sys-a' and RAE-0002 names 'sys-b' in the SAME "
+            "ledger -- different eval_ids are free to name different systems (the ordinary "
+            "shape of a real multi-stage pipeline where each stage talks to a different "
+            "system); the same-eval_id-scoped consistency check G58c exercises must never "
+            f"be misapplied ledger-wide across DIFFERENT eval_ids -- zero violations "
+            f"(got {violations})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58e: external-systems.json 'kind': 'ssh' / 'process' -> green (the two interface-shape kinds this task added)")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58e-"))
+    try:
+        project = _rae_project(g58_root)
+        for new_kind in ("ssh", "process"):
+            _write_ext_systems(
+                project,
+                {
+                    "version": 1,
+                    "systems": [{"id": "staging-api", "kind": new_kind, "description": "", "params": []}],
+                },
+            )
+            violations, coverage = verify_protocol.verify_project(project)
+            check(
+                not violations and coverage["external_systems_declared"] == 1,
+                f"G58e: 'kind': {new_kind!r} is legal -- zero violations, "
+                f"external_systems_declared == 1 (got violations={violations}, "
+                f"declared={coverage['external_systems_declared']})",
+            )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58f: external-systems.json 'kind': 'ci' -> external-system-invalid -- pins the design decision that `kind` is an interface axis, never a pipeline-role axis")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58f-"))
+    try:
+        project = _rae_project(g58_root)
+        # `ci` reads like an obviously-missing kind to anyone who has not read
+        # EXTERNAL_SYSTEM_KINDS' own docstring -- which is exactly why this
+        # teeth exists. `kind` classifies the INTERFACE SHAPE a system is
+        # reached through (http/grpc/database/queue/filesystem/ssh/process/
+        # other), never the ROLE a system plays in some project's pipeline
+        # (ci/deploy/device/dataplatform/...). A real CI system is,
+        # mechanically, something this project talks to over one of the
+        # interface shapes already in the enum (almost always `http`) -- it
+        # does not need, and must never get, a dedicated `kind` of its own.
+        # Adding one `kind` per pipeline role would make this closed enum grow
+        # without bound as projects invent new named stages (lint/canary/
+        # soak/...); a pipeline's STAGES belong at the eval-ledger layer
+        # instead (see G58g below and `frozen_system`'s own docstring): one
+        # eval per stage, each optionally naming which system produced it,
+        # never a role bolted onto `kind`.
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "ci-runner", "kind": "ci", "description": "", "params": []}]},
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            kinds == {"external-system-invalid"},
+            f"G58f: 'kind': 'ci' is REJECTED as external-system-invalid, not silently accepted "
+            f"as a pipeline-role kind -- `kind` has exactly one axis (interface shape), and "
+            f"'ci' names a role, not a shape (got {kinds})",
+        )
+        check(
+            coverage["external_systems_declared"] == 0,
+            f"G58f: an invalidated file declares zero systems (got {coverage['external_systems_declared']})",
+        )
+        _write_ext_systems(
+            project,
+            {"version": 1, "systems": [{"id": "ci-runner", "kind": "http", "description": "", "params": []}]},
+        )
+        violations, coverage = verify_protocol.verify_project(project)
+        check(
+            not violations and coverage["external_systems_declared"] == 1,
+            "G58f mutation control: the SAME CI system, declared under its REAL interface shape "
+            "('http', since real CI systems are almost always HTTP-reachable) instead of an "
+            f"invented role-kind, is legal (got violations={violations}, "
+            f"declared={coverage['external_systems_declared']})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
+    print("  G58g: a generic four-stage external pipeline -- four evals, four DIFFERENT frozen_system values, one shared frozen_due_set -> stage 3 failing trips the RAE hard rule; fixing it clears")
+    g58_root = Path(tempfile.mkdtemp(prefix="hl-rae-g58g-"))
+    try:
+        project = _rae_project(g58_root)
+        _rae_write_decision(
+            project,
+            "# Decision\n\n- Feedback: positive\n- Review: none — n/a\n- Reviewer: fixture\n"
+            "- Review verdict: not-applicable\n- Acceptance evals: ran\n",
+        )
+        # Role-neutral, vendor-neutral stage names -- this fixture models the
+        # generic shape of ANY multi-stage external pipeline (build a
+        # package, deploy it, run/launch it, assert against a data store),
+        # never one specific vendor's tool.
+        _g38_write_evidence_file(project, "evidence/sys-build.log", "build stage result")
+        _g38_write_evidence_file(project, "evidence/sys-deploy.log", "deploy stage result")
+        _g38_write_evidence_file(project, "evidence/sys-run.log", "run stage result")
+        _g38_write_evidence_file(project, "evidence/sys-data.log", "data stage result")
+        due_set = ["RAE-0001", "RAE-0002", "RAE-0003", "RAE-0004"]
+
+        def _pipeline_entries(stage3_outcome: str) -> dict:
+            return {
+                "entries": [
+                    {
+                        "eval_id": "RAE-0001",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": due_set,
+                        "frozen_system": "sys-build",
+                        "evidence": "evidence/sys-build.log",
+                    },
+                    {
+                        "eval_id": "RAE-0002",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": due_set,
+                        "frozen_system": "sys-deploy",
+                        "evidence": "evidence/sys-deploy.log",
+                    },
+                    {
+                        "eval_id": "RAE-0003",
+                        "attempt_id": "0001-a1",
+                        "outcome": stage3_outcome,
+                        "frozen_due_set": due_set,
+                        "frozen_system": "sys-run",
+                        "evidence": "evidence/sys-run.log" if stage3_outcome == "pass" else None,
+                    },
+                    {
+                        "eval_id": "RAE-0004",
+                        "attempt_id": "0001-a1",
+                        "outcome": "pass",
+                        "frozen_due_set": due_set,
+                        "frozen_system": "sys-data",
+                        "evidence": "evidence/sys-data.log",
+                    },
+                ]
+            }
+
+        _rae_write_ledger(project, _pipeline_entries("fail"))
+        violations, _coverage = verify_protocol.verify_project(project)
+        kinds = {v["kind"] for v in violations}
+        check(
+            "acceptance-eval-positive-without-pass" in kinds
+            and "eval-ledger-frozen-system-inconsistent" not in kinds,
+            f"G58g: four due eval_ids, each carrying its OWN frozen_system "
+            f"(sys-build/sys-deploy/sys-run/sys-data) in one ledger -- a real multi-stage "
+            f"pipeline's ordinary shape, never itself flagged inconsistent -- with stage 3 "
+            f"(RAE-0003, sys-run) failing while Feedback: positive -> "
+            f"acceptance-eval-positive-without-pass (got {kinds})",
+        )
+
+        _rae_write_ledger(project, _pipeline_entries("pass"))
+        violations, _coverage = verify_protocol.verify_project(project)
+        check(
+            not violations,
+            "G58g mutation control: flipping ONLY stage 3's outcome to 'pass' (all four "
+            "eval_ids' distinct frozen_system values untouched, evidence now filled in for "
+            f"the newly-passing stage) clears the hard rule -- zero violations (got {violations})",
+        )
+    finally:
+        shutil.rmtree(g58_root, ignore_errors=True)
+
 
 
 def validate_round_cost_smoke() -> None:
