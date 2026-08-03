@@ -1,7 +1,7 @@
 {
   "name": "harnessloop",
-  "version": "0.41.0",
-  "license": "Apache-2.0",
+  "version": "0.42.0",
+  "license": "MIT",
   "description": "Evidence-backed long-task takeover and execution for AI agents.",
   "author": {
     "name": "Harnessloop"

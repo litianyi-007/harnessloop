@@ -244,6 +244,199 @@ def _g28_write_fixture_manifest(root: Path, rel: str, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# G59: LICENSE content vs. declared license. The five `license == "MIT"`
+# manifest-field checks in validate_manifests() only assert that manifests
+# *say* MIT -- they say nothing about what the LICENSE file at the repo root
+# actually contains. Sibling project hopper-plugin shipped a 19-line LICENSE
+# stub (title + copyright line + a bare link out to
+# https://opensource.org/licenses/MIT, missing the entire operative grant and
+# warranty-disclaimer text) while every one of its manifests still claimed
+# MIT -- GitHub's own license detector reports such a repo as "Other", and
+# nothing already in this file would have caught it: `LICENSE exists`
+# (existence-only) and the five manifest-field checks (schema-only) both pass
+# on a stub exactly as readily as on the real thing. This guard closes that
+# gap two ways: (1) the substantive operative clauses must be literally
+# present in LICENSE, not just a title line or a link, and (2) every
+# discovered manifest 'license' value is cross-checked against every other
+# one AND against LICENSE's own title, via the SAME basename-keyed discovery
+# walk G28 uses for versions (_iter_version_manifest_paths), so a newly-added
+# manifest is picked up here automatically too, not just for version numbers.
+# ---------------------------------------------------------------------------
+
+# Deliberately MIT-specific, not license-name-agnostic: this repo has exactly
+# one license in play, and genericizing the substantive-text check across
+# arbitrary SPDX identifiers (each with its own operative-clause wording)
+# would add a pile of speculative machinery for licenses this repo does not
+# use. If that ever changes, this tuple (and MIT_LICENSE_TITLE below) is the
+# one place to touch.
+MIT_LICENSE_REQUIRED_SNIPPETS = (
+    "MIT License",
+    "Permission is hereby granted, free of charge",
+    "without restriction, including without limitation the rights",
+    'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND',
+)
+MIT_LICENSE_TITLE = "MIT License"
+
+
+def _license_has_substantive_mit_text(text: str) -> bool:
+    """True only if every operative MIT clause in MIT_LICENSE_REQUIRED_SNIPPETS
+    is literally present in `text`. Deliberately NOT a non-empty check and
+    NOT a title-only check -- see the G59 comment block above: a stub
+    carrying just the title, a copyright line, and a link out to the license
+    text must fail this, because that is exactly the residual-stub shape
+    hopper-plugin shipped undetected."""
+    return all(snippet in text for snippet in MIT_LICENSE_REQUIRED_SNIPPETS)
+
+
+def _collect_license_key_values(node: object, out: list[object]) -> None:
+    """Recursively walk a parsed JSON value, collecting the raw value of
+    every key literally named "license", any type, any nesting depth --
+    mirrors _collect_version_key_values's approach for the same reason: a
+    manifest's license field may be nested (e.g. a marketplace manifest's
+    `plugins[*].license`, not just a top-level key)."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "license":
+                out.append(value)
+            _collect_license_key_values(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_license_key_values(item, out)
+
+
+def discover_manifest_licenses(root: Path) -> dict[Path, list[str]]:
+    """Discover {manifest_path: [non-empty string 'license' values found in
+    it]} for every package.json / plugin.json / marketplace.json under
+    `root`, reusing the SAME basename walk G28 uses for versions
+    (_iter_version_manifest_paths) so a newly-added manifest is picked up
+    automatically here too. Non-string / empty-string values are silently
+    excluded (mirrors discover_manifest_versions's non-string handling) --
+    this guard is about cross-manifest *identity*, not manifest schema
+    validation, so it does not need its own 'problems' channel the way
+    discover_manifest_versions does for malformed semver strings."""
+    discovered: dict[Path, list[str]] = {}
+    for path in _iter_version_manifest_paths(root):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        raw_values: list[object] = []
+        _collect_license_key_values(data, raw_values)
+        string_values = [v for v in raw_values if isinstance(v, str) and v]
+        if string_values:
+            discovered[path] = string_values
+    return discovered
+
+
+def validate_license_content() -> None:
+    print("  G59: LICENSE carries the actual MIT operative text, and every "
+          "manifest's license field agrees with it and each other")
+
+    license_path = REPO_ROOT / "LICENSE"
+    license_text = license_path.read_text(encoding="utf-8") if license_path.exists() else ""
+    check(
+        _license_has_substantive_mit_text(license_text),
+        "G59: LICENSE contains the substantive MIT operative clauses (the "
+        "grant sentence, 'without restriction', and the warranty-disclaimer "
+        f"sentence), not just a title/copyright/link stub (required snippets: "
+        f"{MIT_LICENSE_REQUIRED_SNIPPETS})",
+    )
+
+    discovered = discover_manifest_licenses(REPO_ROOT)
+    rel_report = ", ".join(
+        f"{path.relative_to(REPO_ROOT)}={values}" for path, values in sorted(discovered.items())
+    )
+    check(
+        len(discovered) >= 5,
+        f"G59: license-value scan discovered at least 5 manifests carrying a "
+        f"'license' field (found {len(discovered)}: {rel_report}) -- guards "
+        "against the discovery walk silently matching nothing",
+    )
+    all_license_values = sorted({v for values in discovered.values() for v in values})
+    check(
+        all_license_values == ["MIT"],
+        f"G59: every discovered manifest 'license' value is identical across "
+        f"the repo AND equals 'MIT' (discovered: {rel_report})",
+    )
+    check(
+        MIT_LICENSE_TITLE in license_text and all_license_values == ["MIT"],
+        "G59: LICENSE's own title ('MIT License') agrees with what every "
+        "manifest declares -- the cross-check tying LICENSE content to "
+        "manifest metadata, not just to itself",
+    )
+
+    # ---- Teeth: every assertion above must be provably load-bearing, not
+    # vacuously true. Run against disposable temp fixtures only -- never the
+    # real repo files -- mirroring G28b's mutate -> red -> restore -> green
+    # shape. ----
+
+    print("    G59b: a title-only LICENSE stub (hopper-plugin's actual shape) must fail "
+          "the substantive-text check; the real repo's LICENSE must pass it")
+    stub_text = (
+        "MIT License\n\n"
+        "Copyright (c) 2026 litianyi-007\n\n"
+        "Full license text: https://opensource.org/licenses/MIT\n"
+    )
+    check(
+        not _license_has_substantive_mit_text(stub_text),
+        "G59b: a hopper-style stub (title + copyright + a link out, no "
+        "operative clauses) is rejected by the substantive-text check",
+    )
+    check(
+        _license_has_substantive_mit_text(license_text),
+        "G59b: the real repo's current LICENSE (full operative text) passes "
+        "the same check the stub above just failed",
+    )
+
+    print("    G59c: mutating one fixture manifest's license away from MIT must turn "
+          "the cross-manifest check red; restoring it must turn it back green")
+    fixture_root = Path(tempfile.mkdtemp(prefix="harnessloop-g59c-"))
+    try:
+        _g28_write_fixture_manifest(fixture_root, "package.json", {"name": "x", "license": "MIT"})
+        _g28_write_fixture_manifest(
+            fixture_root, ".claude-plugin/marketplace.json", {"plugins": [{"name": "x", "license": "MIT"}]}
+        )
+        _g28_write_fixture_manifest(
+            fixture_root,
+            "plugins/harnessloop/.claude-plugin/plugin.json",
+            {"name": "harnessloop", "license": "MIT"},
+        )
+        mutated_rel = "plugins/harnessloop/.codex-plugin/plugin.json"
+        _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "license": "MIT"})
+
+        baseline = discover_manifest_licenses(fixture_root)
+        baseline_values = sorted({v for values in baseline.values() for v in values})
+        check(
+            baseline_values == ["MIT"],
+            f"G59c baseline: freshly-built 4-manifest fixture (all MIT) is internally "
+            f"consistent before mutation (found {baseline_values})",
+        )
+
+        _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "license": "Apache-2.0"})
+        mutated = discover_manifest_licenses(fixture_root)
+        mutated_values = sorted({v for values in mutated.values() for v in values})
+        mutated_path = fixture_root / Path(mutated_rel)
+        check(
+            mutated_values != ["MIT"] and mutated.get(mutated_path) == ["Apache-2.0"],
+            f"G59c: changing ONLY the fixture's .codex-plugin/plugin.json license to "
+            f"Apache-2.0 (three other manifests untouched at MIT) makes the "
+            f"cross-manifest check red AND the offending file is nameable from the "
+            f"discovery result (values found: {mutated_values})",
+        )
+
+        _g28_write_fixture_manifest(fixture_root, mutated_rel, {"name": "harnessloop", "license": "MIT"})
+        restored = discover_manifest_licenses(fixture_root)
+        restored_values = sorted({v for values in restored.values() for v in values})
+        check(
+            restored_values == ["MIT"],
+            f"G59c restore: reverting that same file back to MIT clears the "
+            f"inconsistency and restores the fixture to all-MIT (found {restored_values})",
+        )
+    finally:
+        shutil.rmtree(fixture_root, ignore_errors=True)
+
+
 def validate_manifests() -> None:
     print("[1/9] Manifests and marketplace entries")
     codex_manifest = read_json(PLUGIN_ROOT / ".codex-plugin" / "plugin.json")
@@ -278,16 +471,18 @@ def validate_manifests() -> None:
 
     check((REPO_ROOT / "LICENSE").exists(), "LICENSE exists at repository root")
     package = read_json(REPO_ROOT / "package.json")
-    check(package.get("license") == "Apache-2.0", "package.json declares Apache-2.0 license")
+    check(package.get("license") == "MIT", "package.json declares MIT license")
     scripts_blob = json.dumps(package.get("scripts", {}))
     check("powershell" not in scripts_blob.lower(), "npm scripts do not shell out to powershell")
 
-    check(claude_manifest.get("license") == "Apache-2.0", "Claude plugin manifest declares Apache-2.0")
-    check(codex_manifest.get("license") == "Apache-2.0", "Codex plugin manifest declares Apache-2.0")
+    check(claude_manifest.get("license") == "MIT", "Claude plugin manifest declares MIT")
+    check(codex_manifest.get("license") == "MIT", "Codex plugin manifest declares MIT")
     if claude_entry:
-        check(claude_entry.get("license") == "Apache-2.0", "Claude marketplace entry declares Apache-2.0")
+        check(claude_entry.get("license") == "MIT", "Claude marketplace entry declares MIT")
     if codex_entry:
-        check(codex_entry.get("license") == "Apache-2.0", "Codex marketplace entry declares Apache-2.0")
+        check(codex_entry.get("license") == "MIT", "Codex marketplace entry declares MIT")
+
+    validate_license_content()
 
 
 def validate_version_consistency() -> None:
