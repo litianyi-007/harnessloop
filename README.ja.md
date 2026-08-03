@@ -4,89 +4,108 @@
 
 [![validate](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml/badge.svg)](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml)
 
-> 🇨🇳 [中文](README.md) ・ 🇬🇧 [English](README.en.md)
+> 🇨🇳 [中文](README.md)（デフォルト） ・ 🇬🇧 [English](README.en.md)
 
-長時間のエージェントセッションはドリフトする。コンテキストは圧縮され、エビデンスは古くなり、
-ラウンドは裏付けのないまま成功を主張し、気づいたときには、その主張を生んだ推論はもう
-残っていない。
+## 長時間タスクでは、外部検証が loop の外にある
 
-Harnessloop はその作業を**ラウンド（round）**単位に変換する。各ラウンドは、自分が変更して
-よい範囲、生成するエビデンス、そして到達した判定（verdict）を宣言する。そのうえで機械的な
-ゲート（gate）が、小規模で特定の一群の**自己矛盾（self-contradictions）**を拒否する
-（refuses）——そして、自分が*チェックしないもの*をすべて文書として伝える。
+agent がコードを書き終えたあと、「この変更がうまくいっているかどうか」を実際に語るものは、
+たいていそのプロセスの中にはない——再パッケージが必要で、対象環境へのデプロイが必要で、
+リモートで起動して走らせる必要があり、結果は別のデータ基盤に落ちる。
 
-## 実際に行うこと
+標準的な agent loop はこれらを——**ログとして読む**ことで処理する。
+agent は出力をひと目見て、自分で信じるかどうかを決め、そのまま続行する。その結果:
 
-| | |
-|---|---|
-| **ラウンド単位のスコープロック（Scope-lock）** | 各ラウンドは自分が触ってよいパスを宣言する。宣言外の変更は報告される。 |
-| **エビデンス契約（Evidence contracts）** | 主張は成果物（artifact）を引用する。解決できない引用パスは報告される。 |
-| **ランタイム受け入れ評価（Runtime acceptance evals）** | 外部システムを宣言し、評価（eval）をそれに紐付け、実行をラウンドごとの台帳（ledger）に記録する。**due な eval が pass しなかったラウンドは `positive` としてマークされてはならない。** |
-| **拒否であって強制ではない（Refusal, not enforcement）** | ゲートには**66 種類の違反（violation kinds）**がある。ゲートは、ラウンドが自分のファイルと矛盾する何かを*主張する*ことをブロックする。 |
-| **登録された制限（Registered limits）** | すべての機構は、自分にできることと同じ文書の中に、自分にできないことも同梱して出荷される。 |
+- 判定は**無視され得る**、しかも無視した痕跡は残らない。
+- 判定は**リモート側にある**ため、今日それが上書きされるか再実行されれば、昨日のラウンドの
+  結論はもう再現できなくなる。
+- あるラウンドが成功を宣言するとき、**機械的な何か**が「待て、お前自身の記録には fail と
+  書いてあるぞ」と言ってくれることはない。
 
-## ほとんどのツールが省いている部分
+Harnessloop が扱うのは、まさにこの部分である。
 
-Harnessloop の機械的ゲートは、エージェントが書いたファイルを読む。**それは動機（motive）を
-検証できない——そして、そのことを自分で明言している。**
+## 中核となる仕組み：判定をラウンドに凍結する
 
-- ラウンドの eval 台帳とその判定（verdict）が一致しているかはチェックできる。**しかし eval
-  が実際に実行されたことは証明できない**——でっち上げた成果物の横に手書きで
-  `"outcome": "pass"` と書けば、それは通ってしまう。
-- レビューが行われたこと、そしてそれがどのファイルに収められているかは記録する。**レビュー
-  の本文（prose）を読むことは一切ない。**
-- 出荷されているドキュメント自身が、境界（boundary）についてのセクションをこう書き出して
-  いる: **"The mechanical gate's exit code decides less than it looks like it decides."**
-  （機械的ゲートの終了コードが決めていることは、見た目ほど多くない）
-  そして eval 台帳については: **"does not prove the mechanical gate was ever actually
-  run."**（機械的ゲートが実際に実行されたことを証明するものではない）
+Harnessloop は作業を**ラウンド（round）**単位に切り分け、各ラウンドは自分が変更してよい
+パス、生成するエビデンス、そして到達する結論を宣言する。外部システムの判定は、**ラウンド内
+台帳（ledger）**を通じてそのラウンドの受け入れ条件に組み込まれる。これは 3 つの動作が
+重なって初めて成立する:
 
-これらの文はどれも、ここだけでなく出荷されている skill のドキュメントの中にも存在する。ある
-機構が実際に提供する以上のことを主張していたと判明したときは、その主張は撤回され、撤回した
-事実も記録された——Harnessloop を使っているプロジェクトの
-`.harnessloop/meta/evolution-issues/` を参照。
+**① eval は安定した ID を持つ第一級オブジェクトである。** `RAE-0001` はラウンドをまたいで
+追跡できる——その場限りの呼び出しではない。
 
-## クイックスタート
+**② 到達すべき集合は、書き込まれた瞬間に台帳へ凍結される。** これが要である——この一手が
+判定を**純粋にラウンド内で完結するもの**に変える。そのため「このラウンドを受け入れるべきか」
+は、今日の時点で外部システムがどんな状態かに依存しなくなる。この一手がなければ、あらゆる
+外部判定は時間をまたいだ突き合わせになってしまい、その道筋は過去のラウンドをリモート側の
+変化とともに漂流させる。
 
-```bash
-# 1. Install (Claude Code)
-/plugin marketplace add litianyi-007/harnessloop
-/plugin install harnessloop@harnessloop
+**③ ゲートが拒否するのは「自己矛盾」であって「結果が悪いこと」ではない。** 外部システムの
+判定が正しいかどうかは評価しない。「お前の台帳には fail と書いてあるのに、お前の結論には
+positive と書いてある」ということだけを拒否する。
 
-# 2. In your project
-$harnessloop-init      # scaffold .harnessloop/
-$harnessloop-setup     # 5-step wizard; three files gate continuation until filled
-$harnessloop-goal propose "<one-line goal>"
-$harnessloop-loop      # run the loop
-```
+> **標準的な loop では、外部の判定は無視してもよいひと言にすぎない。
+> ここでは、それは明示的に却下しない限り回避できない記録である。**
 
-`$harnessloop-continue` は再開用の経路（resume path）である。現在の状態を読み込み、
-continuation gate を実行し、コントロール契約（control contract）が許可する次のアクション
-だけを許可する。
+## 多段パイプラインの実際の形
 
-## ランタイム eval をひと目で
+重量級のプロダクト（クライアント、組み込み、実デプロイを要するサービス）の検証は、たいてい
+1 回の呼び出しではなく**一連のシステム**である: パッケージング → デプロイ → 起動 →
+アサーション、各段が別のシステムで、しかも非同期に進む。
+
+**これに特別な仕組みは要らない: 1 本のパイプライン = N 個の eval、1 段につき 1 個。**
 
 ```jsonc
-// .harnessloop/setup/external-systems.json   — no URLs, no secrets, parameter names only
-{"version": 1, "systems": [
-  {"id": "staging-api", "kind": "http", "description": "...", "params": ["STAGING_API_BASE"]}]}
+// <goal>/evals.json —— 4 段それぞれに 1 件
+{"evals": [
+  {"eval_id": "RAE-0001", "activation_round": 1, "system": "sys-build"},
+  {"eval_id": "RAE-0002", "activation_round": 1, "system": "sys-deploy"},
+  {"eval_id": "RAE-0003", "activation_round": 1, "system": "sys-run"},
+  {"eval_id": "RAE-0004", "activation_round": 1, "system": "sys-assert"}]}
 
-// <goal>/evals.json
-{"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "staging-api"}]}
-
-// <round>/evidence/runtime/acceptance-evals.json
-{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0007-a1", "outcome": "fail",
-              "frozen_due_set": ["RAE-0001"], "evidence": "evidence/runtime/rae-0001.log"}]}
+// <round>/evidence/runtime/acceptance-evals.json —— このラウンドで実際に何が起きたか
+{"entries": [
+  {"eval_id": "RAE-0001", "outcome": "pass", "frozen_system": "sys-build",  "…": "…"},
+  {"eval_id": "RAE-0002", "outcome": "pass", "frozen_system": "sys-deploy", "…": "…"},
+  {"eval_id": "RAE-0003", "outcome": "fail", "frozen_system": "sys-run",    "…": "…"},
+  {"eval_id": "RAE-0004", "outcome": "skipped", "frozen_system": "sys-assert", "…": "…"}]}
 ```
 
-この台帳がある状態で、`Feedback: positive` を宣言する `decision.md` は**拒否される**。
-`outcome` を `pass` に変えれば受理される。**Harnessloop は eval を実行しない**——実行する
-のはあなたのセッション、CI、あるいはランナーである。Harnessloop が持っているのは台帳と拒否
-そのものだけである。
+この台帳がある状態では、`Feedback: positive` と書かれた `decision.md` は**拒否される**——
+3 段目が通っていないからである。**実行漏れも同様に食い止められる**: `frozen_due_set` に
+含まれる eval なのに台帳に対応するエントリが見つからない場合も、同じく拒否される。
 
-この宣言ファイルには、構造上**URL・ホスト・パスのフィールドが存在しない**——存在するのは
-`^[A-Z][A-Z0-9_]{0,63}$` に一致するパラメータの*名前*だけである。書き込む場所がそもそも
-ないので、認証情報（credential）をそこに書き込むことはできない。
+`frozen_system` は各段がどのシステムに対して実行されたかを記録する——4 段が連なっている
+とき、**どのシステムかを記録しなければ、どの一環が壊れたのか分からなくなる。**
+
+**判定結果は取得され、そのラウンドの `evidence/` に書き込まれなければならない。** リモート
+側の記録は上書きされ、消去され、再実行される。ラウンドの判定がリモートを指したままだと、
+そのラウンドの結論はリモート側の変化とともに漂流してしまう。**取得は手間ではなく、ラウンドが
+再生可能であるための前提条件である。**
+
+## できないこと
+
+このセクションは免責事項ではなく、このプロジェクトの設計上の立場である。**機械的なゲートが
+読むのは agent 自身が書いたファイルであり、動機（motive）を検証することはできない——そして、
+そのことを自分で明言している。**
+
+- **eval が実際に実行されたことは証明できない。** `"outcome": "pass"` を手書きし、偽造した
+  成果物を添えれば、それも通ってしまう。それが買っているのは「引用可能で、対抗的レビューに
+  問い質せる」ということであって、実行力ではない。
+- **レビューの本文は読まない。** レビューが行われたこと、そしてその成果物がどのファイルに
+  あるかだけを記録する。
+- **外部システムを一切トリガーせず、実行もしない。** パッケージング、デプロイ、起動、データ
+  取得はすべてあなたのセッション、CI、あるいは runner が行う。**審判はコートに立たない**
+  ——これも、「実行されたことを証明できない」のと同じ境界の裏側にすぎない。
+- 出荷されているドキュメント自身が、境界（boundary）についてのセクションの冒頭でこう書いて
+  いる:
+  **"The mechanical gate's exit code decides less than it looks like it decides."**
+  （機械的ゲートの終了コードが決めていることは、見た目ほど多くない。）
+  そして eval 台帳については、こう書いている: **"does not prove the mechanical gate was
+  ever actually run."**（機械的ゲートが実際に実行されたことを証明するものではない。）
+
+上記の一文一文はすべて**プラグインと一緒に配布される skill のドキュメントの中にも**存在し、
+この README だけに書かれているわけではない。ある機構が実装以上のことを主張していると判明した
+場合、その主張は撤回され、撤回した事実自体も記録される。
 
 ## こういうときに使う
 
@@ -233,39 +252,99 @@ Transfer packet には、タスクの識別情報（task identity）、goal cont
 の要件、ローカルのチャネルパラメータキー、決定事項、リスク、そして次のハンドオフ推奨事項が
 含まれていなければならない。完全なプロンプトは [docs/usage.md](docs/usage.md) を参照。
 
-## エビデンスモデル
+## 外部システムと認証情報の接続
 
-Harnessloop は、エビデンス成果物そのものの健全性（health）と、そのエビデンスが受け入れ
-（acceptance）を裏付けるかどうかを分けて扱う。失敗したランタイムテストは、有効なエビデンス
-成果物でありながら、なお negative なフィードバックを生むことがある。
+### channel の棚卸しと接続性チェックは別物である
 
-![Harnessloop の evidence スタック](docs/assets/evidence-stack.svg)
-
-エビデンスの分類（classes）:
-
-- `static`: 実データセット、ドキュメント、レポート、正本記録（source-of-truth records）。
-- `dynamic`: 生成されたデータ、サンプリングされた出力、モデル／ツールの出力。
-- `runtime`: テスト、CI、リモート自動化、プローブ（probes）、カナリア（canaries）、
-  モニタリング。
-- `source`: リポジトリのソース、スキーマファイル、ソースデータファイル。
-
-## 外部チャネル
-
-Harnessloop は、チャネルの棚卸し（inventory）と接続性チェック（connectivity checks）を
-分けて扱う:
+Harnessloop は「channel の棚卸し（inventory）」と「接続性チェック（connectivity check）」を
+別の 2 つの事柄として扱う:
 
 - `$harnessloop-channels`: 宣言済みの外部システム、ツール、MCP サーバー、CLI、API、CI
-  システム、データベース、ブローカー、認証情報の参照先を、プローブすることなく列挙する。
+  システム、データベース、ブローカー、そして認証情報の参照先を列挙する——列挙するだけで、
+  プローブはしない。
 - `$harnessloop-connectivity`: 必要なツール、エンドポイント／リソース、認証情報の参照先、
-  権限スコープ、パラメータ、書き込みの安全性ルールが明示された後にのみ、宣言済みの接続性
-  チェック手法を実行する。
-- `$harnessloop-secrets`: `.harnessloop/local/channel-params.json` にあるローカル限定の
-  チャネルパラメータキーを作成・チェックする。値がコミットされたりエビデンスにコピーされ
-  たりすることは決してない。
+  権限スコープ、パラメータ、書き込みの安全性ルールがすべて明示されている場合に限り、宣言済み
+  の接続性チェック手法を実行する。
+- `$harnessloop-secrets`: `.harnessloop/local/channel-params.json` にローカル限定の
+  channel パラメータキーを作成・チェックする。値がコミットされることも、エビデンスに書き
+  写されることもない。
 
-チャネルのセルフチェックが失敗する、ブロックされる、スキップされる、あるいは情報が不足して
-いてユーザーの確認が必要になる場合、Harnessloop は代替手段を試したり続行したりする前に、
+あるチャネルのセルフチェックが失敗する、ブロックされる、スキップされる、あるいは情報不足で
+ユーザーの確認が必要になる場合、Harnessloop は他の方法を試したり無理に続行したりする前に、
 不足している事実を正確に尋ねなければならない。
+
+### 3 つのファイル、3 つの役割
+
+「外部システムをこのプロトコルにどう接続するか」という 1 つの事柄は、実際には 3 つのファイル
+に分かれて、それぞれが 1 つの役割を担っている（この 3 ファイルの分担については
+`plugins/harnessloop/skills/harnessloop-loop/SKILL.md` により完全な説明がある）:
+
+- `.harnessloop/setup/data-sources.md` の `## Runtime Validation Systems` テーブル:
+  **どう検証するか、合格条件は何か**を散文で記述する——この記述はここにしか存在せず、
+  どの機械的ゲートもこれを読みには行かない。
+- `.harnessloop/setup/external-systems.json`: 純粋にメタデータとして**システム id、
+  インターフェース種別（`kind`）、必要なパラメータ名**を宣言する——結果をどう判定するかには
+  一切触れない。
+- 各ラウンド自身の `evidence/runtime/acceptance-evals.json` 台帳: **そのラウンドで実際に
+  何が起きたか**を記録する——段階ごとに 1 件、`outcome` を含み、その eval がどの宣言済み
+  システムに対して実行されたか（`frozen_system`）も記録する。
+
+3 つのファイルはそれぞれの役割に専念する——散文によるどう検証するかの説明、静的な宣言、
+ラウンドごとの実際の記録。このプロトコルはこれらを混ぜたことは一度もない。
+
+### なぜ認証情報は構造上書き込めないのか
+
+`.harnessloop/setup/external-systems.json` では、各システムは `id`、`kind`、
+`description`、`params` の 4 つのフィールドしか持たない——URL フィールドも、host
+フィールドも、path フィールドもない。`params` が受け取るのも値ではなく、パラメータの
+**名前**であり、しかも `^[A-Z][A-Z0-9_]{0,63}$` に一致する文字列しか受け付けない——この
+文字集合には `/` も `:` も `.` も、小文字も含まれていないため、どう組み立てても URL、
+host、path がこの形にマッチすることはあり得ない。
+
+実際の値は `$harnessloop-secrets` が管理する channel-params
+（`.harnessloop/local/channel-params.json`、gitignore 済み）経由でのみ扱われる。
+
+これは**構造上の制約**である——認証情報はこの宣言ファイルの中にそもそも置き場所がない
+のであって、「注意して書かないようにしている」わけではない。
+
+### `kind` が表すのはインターフェース種別であって役割ではない
+
+`kind` が現在取り得る値は `http` / `grpc` / `database` / `queue` / `filesystem` / `ssh` /
+`process` / `other` である。これは単一の軸——**呼び出す側がどのインターフェースの形で
+このシステムと話すか**——であって、そのシステムが特定のパイプラインの中でどんな役割を
+果たすかではない。CI システムであれ、デバイスラボであれ、データ基盤であれ、それぞれが実際に
+アクセスされるインターフェースの形に従って `kind` を宣言しなければならない（多くの場合は
+`http`、あるいはリモート／ローカルでコマンドを実行する場合の `ssh`/`process`）。役割に
+ちなんで名付けた `kind` を宣言するのではない——列挙型には `ci` や `dataplatform` のような
+メンバーは存在しないし、今後も追加されない。これは最近下された、意図的な設計判断である——
+直感的には逆に考えがちで、`kind` を「これは何のシステムか」だと捉えてしまい、「どうやって
+それと話すか」だとは捉えにくい。
+
+## Skills
+
+- `$harnessloop-init`: `.harnessloop/` のプロジェクトファイルを初期化する。
+- `$harnessloop-setup`: 5 ステップのセットアップウィザードを通じて、環境検出、データ
+  ソース、コスト／コンテキストポリシー、control-contract プロファイルを完成させる、または
+  チェックする。
+- `$harnessloop-intake`: transfer packet をレビューし、intake gate を実行する。
+- `$harnessloop-goal`: goal の検査、交渉、更新、分割、アーカイブ、キャンセル、置き換え
+  （supersede）、削除影響の評価を行う。
+- `$harnessloop-evidence`: エビデンス契約の追加、チェック、修正、却下、差分（diff）比較を
+  行う。
+- `$harnessloop-channels`: 宣言済みの外部システム、チャネル、ツールを、プローブすることなく
+  列挙する。
+- `$harnessloop-connectivity`: 宣言済みの外部システム／ツールの接続性をチェックし、不足して
+  いるアクセス情報を尋ねる。
+- `$harnessloop-secrets`: ローカルのチャネルパラメータキー、シークレット参照、存在チェック、
+  redaction ルールを管理する。
+- `$harnessloop-delegation`: サブエージェント／スウォームの準備状況、スコープ制御、出力
+  パス、エビデンス引用の挙動、モデル／エフォートの一致を確認する。
+- `$harnessloop-status`: 現在の Harnessloop の状態を読み取る。
+- `$harnessloop-continue`: 実行前に continuation gate を実行する。
+- `$harnessloop-loop`: インストール済みのプロジェクトで goal 駆動の Harnessloop を実行、
+  または引き継ぐ。
+- `$harnessloop-issue`: Harnessloop の evolution issue を記録、分析、あるいは修正案を
+  提示する。
 
 ## 主要な概念
 
@@ -285,6 +364,22 @@ Harnessloop は、チャネルの棚卸し（inventory）と接続性チェッ�
 - `self-audit`: デッドループ、矛盾、ドリフト、暴走したコンテキストについてのループ健全性
   チェック。
 - `evolution issue`: Harnessloop 自身の改善に役立つ、機密情報を除去した（redacted）issue。
+
+## エビデンスモデル
+
+Harnessloop は、エビデンス成果物そのものの健全性（health）と、そのエビデンスが受け入れ
+（acceptance）を裏付けるかどうかを分けて扱う。失敗したランタイムテストは、有効なエビデンス
+成果物でありながら、なお negative なフィードバックを生むことがある。
+
+![Harnessloop の evidence スタック](docs/assets/evidence-stack.svg)
+
+エビデンスの分類（classes）:
+
+- `static`: 実データセット、ドキュメント、レポート、正本記録（source-of-truth records）。
+- `dynamic`: 生成されたデータ、サンプリングされた出力、モデル／ツールの出力。
+- `runtime`: テスト、CI、リモート自動化、プローブ（probes）、カナリア（canaries）、
+  モニタリング。
+- `source`: リポジトリのソース、スキーマファイル、ソースデータファイル。
 
 ## 実行の委任（Execution Delegation）
 
@@ -321,33 +416,7 @@ Harnessloop は、そのオーバーヘッドが元を取れる（pays for itsel
 そのものはあなた自身のプロジェクトのデータに委ねる。詳細は
 [docs/cost-model.md](docs/cost-model.md) を参照。
 
-## Skills
-
-- `$harnessloop-init`: `.harnessloop/` のプロジェクトファイルを初期化する。
-- `$harnessloop-setup`: 5 ステップのセットアップウィザードを通じて、環境検出、データ
-  ソース、コスト／コンテキストポリシー、control-contract プロファイルを完成させる、または
-  チェックする。
-- `$harnessloop-intake`: transfer packet をレビューし、intake gate を実行する。
-- `$harnessloop-goal`: goal の検査、交渉、更新、分割、アーカイブ、キャンセル、置き換え
-  （supersede）、削除影響の評価を行う。
-- `$harnessloop-evidence`: エビデンス契約の追加、チェック、修正、却下、差分（diff）比較を
-  行う。
-- `$harnessloop-channels`: 宣言済みの外部システム、チャネル、ツールを、プローブすることなく
-  列挙する。
-- `$harnessloop-connectivity`: 宣言済みの外部システム／ツールの接続性をチェックし、不足して
-  いるアクセス情報を尋ねる。
-- `$harnessloop-secrets`: ローカルのチャネルパラメータキー、シークレット参照、存在チェック、
-  redaction ルールを管理する。
-- `$harnessloop-delegation`: サブエージェント／スウォームの準備状況、スコープ制御、出力
-  パス、エビデンス引用の挙動、モデル／エフォートの一致を確認する。
-- `$harnessloop-status`: 現在の Harnessloop の状態を読み取る。
-- `$harnessloop-continue`: 実行前に continuation gate を実行する。
-- `$harnessloop-loop`: インストール済みのプロジェクトで goal 駆動の Harnessloop を実行、
-  または引き継ぐ。
-- `$harnessloop-issue`: Harnessloop の evolution issue を記録、分析、あるいは修正案を
-  提示する。
-
-## リポジトリマップ
+## リポジトリ構成と検証
 
 - `docs/usage.md`: プロダクトレベルの利用ガイドと transfer packet のプロンプト。
 - `docs/harnessloop-framework.md`: フレームワークの設計と詳細なプロトコル。
@@ -361,7 +430,7 @@ Harnessloop は、そのオーバーヘッドが元を取れる（pays for itsel
 - `examples/mock-project/`: setup、intake、evidence、review、decision、self-audit、
   evolution issue の各ファイルを示す、人工的な参照プロジェクト。
 
-## Validate（検証）
+### Validate（検証）
 
 ```bash
 npm run validate

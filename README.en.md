@@ -4,80 +4,104 @@
 
 [![validate](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml/badge.svg)](https://github.com/litianyi-007/harnessloop/actions/workflows/validate.yml)
 
-> 🇨🇳 [中文](README.md) ・ 🇯🇵 [日本語](README.ja.md)
+> 🇨🇳 [中文](README.md) (default) ・ 🇯🇵 [日本語](README.ja.md)
 
-Long agent sessions drift. Context is compressed, evidence goes stale, a round claims success
-without anything backing it, and by the time you notice, the reasoning that produced the claim
-is gone.
+## Why external validation sits outside the loop
 
-Harnessloop turns that work into **rounds**. Each round declares what it may change, what
-evidence it will produce, and what verdict it reached. A mechanical gate then refuses a small,
-specific set of **self-contradictions** — and tells you, in writing, everything it does *not* check.
+After an agent finishes changing code, the thing that actually tells you whether the change
+worked usually isn't in-process: it needs to be repackaged, deployed to a target environment,
+brought up remotely, and the result lands on a separate data platform.
 
-## What it actually does
+The standard agent loop handles this by **reading it as a log**. The agent glances at the
+output, decides for itself whether to believe it, and moves on. The consequences:
 
-| | |
-|---|---|
-| **Scope-lock per round** | Each round declares the paths it may touch. Changes outside the declaration are reported. |
-| **Evidence contracts** | Claims cite artifacts. A cited path that does not resolve is reported. |
-| **Runtime acceptance evals** | Declare an external system, bind an eval to it, record the run in a per-round ledger. **A round whose due eval did not pass may not be marked `positive`.** |
-| **Refusal, not enforcement** | The gate has **66 violation kinds**. It blocks a round from *claiming* something its own files contradict. |
-| **Registered limits** | Every mechanism ships with what it cannot do, in the same document as what it can. |
+- The verdict **can be ignored**, and the ignoring leaves no trace;
+- The verdict **lives on the remote system** — once it's overwritten or rerun today, yesterday's
+  round's conclusion can no longer be reproduced;
+- When a round declares success, **nothing mechanical** can say "wait, your own record says fail."
 
-## The part most tools leave out
+This is the part Harnessloop handles.
 
-Harnessloop's mechanical gate reads files an agent wrote. **It cannot verify motive, and it says so.**
+## The core move: freeze the verdict into the round
 
-- It can check that a round's eval ledger and its verdict agree. **It cannot prove the eval ran** —
-  a hand-written `"outcome": "pass"` beside a fabricated artifact passes.
-- It records that a review happened and which file holds it. **It never reads the review's prose.**
-- Its own shipped documentation opens the boundary section with:
-  **"The mechanical gate's exit code decides less than it looks like it decides."**
-  And on the eval ledger: it **"does not prove the mechanical gate was ever actually run."**
+It cuts work into **rounds**, and each round declares which paths it may change, what evidence
+it will produce, and what verdict it reaches. An external system's verdict enters that round's
+acceptance condition through a **round-local ledger**. Three moves have to stack together for
+this to hold:
 
-Every one of those sentences is in the shipped skill documentation, not just here. When a
-mechanism turned out to claim more than it delivered, the claim was retracted and the retraction
-recorded — see `.harnessloop/meta/evolution-issues/` in a project using it.
+**① An eval is a first-class object with a stable ID.** `RAE-0001` is traceable across rounds,
+not a one-off ad-hoc call.
 
-## Quick start
+**② The due set is frozen into the ledger at the moment it is written.** This step is the
+hinge — it makes the verdict **purely round-local**, so whether a round should be accepted no
+longer depends on whatever state the external system happens to be in today. Without this
+step, any external verdict turns into a comparison across time layers, and that path lets
+historical rounds drift with the remote system.
 
-```bash
-# 1. Install (Claude Code)
-/plugin marketplace add litianyi-007/harnessloop
-/plugin install harnessloop@harnessloop
+**③ The gate refuses "self-contradiction," not "a bad result."** It does not judge whether the
+external system was right — it only refuses when your ledger says fail and your verdict says
+positive.
 
-# 2. In your project
-$harnessloop-init      # scaffold .harnessloop/
-$harnessloop-setup     # 5-step wizard; three files gate continuation until filled
-$harnessloop-goal propose "<one-line goal>"
-$harnessloop-loop      # run the loop
-```
+> **In a standard loop, an external verdict is a sentence that can be ignored. Here, it is a
+> record that can only be bypassed by an explicit override.**
 
-`$harnessloop-continue` is the resume path: it reads current state, runs the continuation gate,
-and permits only the next action the control contract allows.
+## What a multi-stage pipeline looks like
 
-## Runtime evals in one screen
+Validating a heavyweight product (a client, an embedded target, a service that needs a real
+deployment) is usually **a chain of systems**, not one call: package → deploy → bring up →
+assert, one system per stage, and asynchronous.
+
+**This needs no special support: one pipeline = N evals, one per stage.**
 
 ```jsonc
-// .harnessloop/setup/external-systems.json   — no URLs, no secrets, parameter names only
-{"version": 1, "systems": [
-  {"id": "staging-api", "kind": "http", "description": "...", "params": ["STAGING_API_BASE"]}]}
+// <goal>/evals.json — one per stage, four stages
+{"evals": [
+  {"eval_id": "RAE-0001", "activation_round": 1, "system": "sys-build"},
+  {"eval_id": "RAE-0002", "activation_round": 1, "system": "sys-deploy"},
+  {"eval_id": "RAE-0003", "activation_round": 1, "system": "sys-run"},
+  {"eval_id": "RAE-0004", "activation_round": 1, "system": "sys-assert"}]}
 
-// <goal>/evals.json
-{"evals": [{"eval_id": "RAE-0001", "activation_round": 1, "system": "staging-api"}]}
-
-// <round>/evidence/runtime/acceptance-evals.json
-{"entries": [{"eval_id": "RAE-0001", "attempt_id": "0007-a1", "outcome": "fail",
-              "frozen_due_set": ["RAE-0001"], "evidence": "evidence/runtime/rae-0001.log"}]}
+// <round>/evidence/runtime/acceptance-evals.json — what this round actually ran
+{"entries": [
+  {"eval_id": "RAE-0001", "outcome": "pass", "frozen_system": "sys-build",  "…": "…"},
+  {"eval_id": "RAE-0002", "outcome": "pass", "frozen_system": "sys-deploy", "…": "…"},
+  {"eval_id": "RAE-0003", "outcome": "fail", "frozen_system": "sys-run",    "…": "…"},
+  {"eval_id": "RAE-0004", "outcome": "skipped", "frozen_system": "sys-assert", "…": "…"}]}
 ```
 
-With that ledger, a `decision.md` declaring `Feedback: positive` is **refused**. Flip `outcome`
-to `pass` and it is accepted. **Harnessloop does not run the eval** — your session, CI, or
-runner does. Harnessloop holds the ledger and the refusal.
+Under this ledger, a `decision.md` declaring `Feedback: positive` is **refused** — the third
+stage failed. **A missed run is caught the same way**: an eval listed in `frozen_due_set` with
+no matching entry in the ledger is refused too.
 
-The declaration file has **no URL, host, or path field by construction** — only parameter *names*
-matching `^[A-Z][A-Z0-9_]{0,63}$`. A credential cannot be written into it, because there is
-nowhere to put one.
+`frozen_system` records which system each stage actually ran against — once four stages are
+chained together, **not recording the system means you can't tell which link broke.**
+
+**Verdicts must be pulled back and written into this round's `evidence/`.** Remote records get
+overwritten, cleaned up, rerun; if a round's verdict still points at the remote, that round's
+conclusion drifts with it. **Pulling it back isn't overhead — it's the precondition for a round
+being replayable.**
+
+## What it cannot do
+
+This section is not a disclaimer — it is the project's design stance. **The mechanical gate
+reads files the agent wrote itself. It cannot verify motive, and it says so.**
+
+- **It cannot prove an eval actually ran.** A hand-written `"outcome": "pass"` beside a
+  fabricated artifact passes the same gate. What it buys is "citable, contestable under
+  adversarial review" — not enforcement.
+- **It does not read the review's prose.** It only records that a review happened and which
+  file holds it.
+- **It does not trigger or run any external system.** Packaging, deployment, bring-up, and
+  data pulls are all done by your session, your CI, or your runner. **The referee never takes
+  the field** — this is the other face of the same boundary that keeps it from proving
+  anything "ran."
+- Its own shipped documentation opens the boundary section with:
+  **"The mechanical gate's exit code decides less than it looks like it decides."**
+  And on the eval ledger, it says it **"does not prove the mechanical gate was ever actually run."**
+
+Every one of those sentences lives in **the skill documentation shipped with the plugin**, not
+only in this README. When a mechanism is found to claim more than it implements, that claim is
+retracted, and the retraction itself is recorded.
 
 ## When To Use
 
@@ -207,28 +231,55 @@ If the packet is incomplete, Harnessloop writes `gap-review.md` and asks only fo
 
 The transfer packet must include task identity, goal contract, progress state, change state, documentation inventory, process artifacts, evidence, external tools, credential requirements without secret values, local channel parameter keys, decisions, risks, and next handoff recommendation. See [docs/usage.md](docs/usage.md) for the full prompt.
 
-## Evidence Model
+## Connecting External Systems And Credentials
 
-Harnessloop separates evidence artifact health from whether that evidence supports acceptance. A failed runtime test can be a valid evidence artifact and still produce negative feedback.
+### Channel inventory and connectivity checks are two different things
 
-![Harnessloop evidence stack](docs/assets/evidence-stack.svg)
+Harnessloop treats "channel inventory" and "connectivity checks" as two separate things:
 
-Evidence classes:
+- `$harnessloop-channels`: lists declared external systems, tools, MCP servers, CLIs, APIs, CI systems, databases, brokers, and credential references — listing only, never probing.
+- `$harnessloop-connectivity`: runs only declared connectivity methods, and only once the required tool, endpoint/resource, credential reference, permission scope, parameters, and write-safety rules are all explicit.
+- `$harnessloop-secrets`: creates and checks local-only channel parameter keys in `.harnessloop/local/channel-params.json`; values are never committed and never copied into evidence.
 
-- `static`: real datasets, docs, reports, source-of-truth records.
-- `dynamic`: generated data, sampled outputs, model/tool outputs.
-- `runtime`: tests, CI, remote automation, probes, canaries, monitoring.
-- `source`: repository source, schema files, source-data files.
+When a channel's self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, Harnessloop must ask for the exact missing facts first — not try something else or push through regardless.
 
-## External Channels
+### Three files, three jobs
 
-Harnessloop separates channel inventory from connectivity checks:
+The single job of "how an external system plugs into this protocol" is actually split across three files, each owning one slice (`plugins/harnessloop/skills/harnessloop-loop/SKILL.md` has the fuller account of how these three divide the work):
 
-- `$harnessloop-channels`: lists declared external systems, tools, MCP servers, CLIs, APIs, CI systems, databases, brokers, and credential references without probing.
-- `$harnessloop-connectivity`: runs only declared connectivity methods after the required tool, endpoint/resource, credential reference, permission scope, parameters, and write-safety rules are explicit.
-- `$harnessloop-secrets`: creates and checks local-only channel parameter keys in `.harnessloop/local/channel-params.json`; values are never committed or copied into evidence.
+- The `## Runtime Validation Systems` table in `.harnessloop/setup/data-sources.md`: prose describing **how to validate and what counts as passing** — this description exists only here; no mechanical gate ever reads it.
+- `.harnessloop/setup/external-systems.json`: pure metadata declaring the **system id, interface class (`kind`), and the parameter names it needs** — nothing about how to judge the result.
+- A round's own `evidence/runtime/acceptance-evals.json` ledger: records **what this round actually ran** — one entry per stage, with an `outcome`, and which declared system that eval ran against (`frozen_system`).
 
-If a channel self-check fails, is blocked, is skipped, or needs user confirmation because information is missing, Harnessloop must ask for the exact missing facts before trying alternatives or continuing.
+Each of the three files does its own job — prose for how-to-validate, static declaration, per-round actual record — and the protocol has never let them blur together.
+
+### Why credentials cannot be written into it, by construction
+
+In `.harnessloop/setup/external-systems.json`, each system has exactly four fields: `id`, `kind`, `description`, `params` — no URL field, no host field, no path field. `params` doesn't take values either, only parameter **names**, and only strings matching `^[A-Z][A-Z0-9_]{0,63}$` are accepted — that character set has no `/`, no `:`, no `.`, and no lowercase letters, so no matter how you assemble it, a URL, host, or path can never match that shape.
+
+The actual values go through the channel-params that `$harnessloop-secrets` manages (`.harnessloop/local/channel-params.json`, already gitignored).
+
+This is a **structural constraint** — there is simply nowhere in this declaration file for a credential to go. It is not "we're careful not to write it in."
+
+### What `kind` describes: interface class, not role
+
+`kind` currently takes the values `http` / `grpc` / `database` / `queue` / `filesystem` / `ssh` / `process` / `other`. This is a single axis — **what interface shape the caller uses to talk to the system** — not what role that system plays in some pipeline. A CI system, a device lab, a data platform each still declare `kind` by the interface shape they are actually accessed through (usually `http`, or `ssh`/`process` when executing commands remotely or locally), not by a role-named `kind` — the enum has no `ci` or `dataplatform` member, and never will. This is a recent, deliberate design decision — it is easy to get backwards on instinct, treating `kind` as "what this system is" rather than "how you talk to it."
+
+## Skills
+
+- `$harnessloop-init`: initialize `.harnessloop/` project files.
+- `$harnessloop-setup`: complete or check environment detection, data sources, cost/context policy, and control-contract profile via the five-step setup wizard.
+- `$harnessloop-intake`: review transfer packets and run intake gates.
+- `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, supersede, or assess deletion impact for goals.
+- `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.
+- `$harnessloop-channels`: list declared external systems, channels, and tools without probing.
+- `$harnessloop-connectivity`: check declared external system/tool connectivity and ask for missing access facts.
+- `$harnessloop-secrets`: manage local channel parameter keys, secret references, presence checks, and redaction rules.
+- `$harnessloop-delegation`: check subagent/swarm readiness, scope control, output paths, evidence citation behavior, and model/effort match.
+- `$harnessloop-status`: read current Harnessloop state.
+- `$harnessloop-continue`: run continuation gates before execution.
+- `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
+- `$harnessloop-issue`: record, analyze, or propose fixes for Harnessloop evolution issues.
 
 ## Key Concepts
 
@@ -244,6 +295,19 @@ If a channel self-check fails, is blocked, is skipped, or needs user confirmatio
 - `blocker type`: classification that decides whether a blocked round can continue into read-only recovery or must ask the user.
 - `self-audit`: loop health check for dead loops, contradictions, drift, and runaway context.
 - `evolution issue`: a redacted issue that helps improve Harnessloop itself.
+
+## Evidence Model
+
+Harnessloop separates evidence artifact health from whether that evidence supports acceptance. A failed runtime test can be a valid evidence artifact and still produce negative feedback.
+
+![Harnessloop evidence stack](docs/assets/evidence-stack.svg)
+
+Evidence classes:
+
+- `static`: real datasets, docs, reports, source-of-truth records.
+- `dynamic`: generated data, sampled outputs, model/tool outputs.
+- `runtime`: tests, CI, remote automation, probes, canaries, monitoring.
+- `source`: repository source, schema files, source-data files.
 
 ## Execution Delegation
 
@@ -276,22 +340,6 @@ Harnessloop does not claim the overhead pays for itself; it gives you the
 bill, the interception record, and a judgment framework, and lets your own
 project's data decide. See [docs/cost-model.md](docs/cost-model.md).
 
-## Skills
-
-- `$harnessloop-init`: initialize `.harnessloop/` project files.
-- `$harnessloop-setup`: complete or check environment detection, data sources, cost/context policy, and control-contract profile via the five-step setup wizard.
-- `$harnessloop-intake`: review transfer packets and run intake gates.
-- `$harnessloop-goal`: inspect, negotiate, update, split, archive, cancel, supersede, or assess deletion impact for goals.
-- `$harnessloop-evidence`: add, check, revise, reject, or diff evidence contracts.
-- `$harnessloop-channels`: list declared external systems, channels, and tools without probing.
-- `$harnessloop-connectivity`: check declared external system/tool connectivity and ask for missing access facts.
-- `$harnessloop-secrets`: manage local channel parameter keys, secret references, presence checks, and redaction rules.
-- `$harnessloop-delegation`: check subagent/swarm readiness, scope control, output paths, evidence citation behavior, and model/effort match.
-- `$harnessloop-status`: read current Harnessloop state.
-- `$harnessloop-continue`: run continuation gates before execution.
-- `$harnessloop-loop`: run or take over a goal-driven Harnessloop in an installed project.
-- `$harnessloop-issue`: record, analyze, or propose fixes for Harnessloop evolution issues.
-
 ## Repository Map
 
 - `docs/usage.md`: product-level usage guide and transfer packet prompt.
@@ -304,7 +352,7 @@ project's data decide. See [docs/cost-model.md](docs/cost-model.md).
 - `plugins/harnessloop/skills/`: installable skills and templates.
 - `examples/mock-project/`: artificial reference project showing setup, intake, evidence, review, decision, self-audit, and evolution issue files.
 
-## Validate
+### Validate
 
 ```bash
 npm run validate
